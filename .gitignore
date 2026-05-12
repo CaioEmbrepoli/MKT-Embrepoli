@@ -1,0 +1,11 @@
+.next
+.next-dev.*.log
+node_modules
+.tools
+.npm-cache
+.env
+.env*.local
+dist
+coverage
+*.tsbuildinfo
+node-v*-win-x64.zip

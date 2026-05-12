@@ -1,0 +1,505 @@
+﻿import type { SupabaseClient } from "@supabase/supabase-js";
+import type {
+  Campaign,
+  Channel,
+  ChecklistItem,
+  ContentType,
+  EditorialPost,
+  FunnelStage,
+  Idea,
+  Notification,
+  PostReviewAsset,
+  PostReviewComment,
+  PostMetric,
+  ProductLine,
+  Profile,
+  Task,
+  TaskAttachment,
+  TaskBoard,
+  TaskColumn,
+  TaskComment,
+  VehicleType
+} from "./types";
+
+export type AppData = {
+  profiles: Profile[];
+  channels: Channel[];
+  productLines: ProductLine[];
+  vehicleTypes: VehicleType[];
+  contentTypes: ContentType[];
+  funnelStages: FunnelStage[];
+  taskBoards: TaskBoard[];
+  taskColumns: TaskColumn[];
+  campaigns: Campaign[];
+  posts: EditorialPost[];
+  postReviewAssets: PostReviewAsset[];
+  ideas: Idea[];
+  tasks: Task[];
+  metrics: PostMetric[];
+  notifications: Notification[];
+};
+
+const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
+
+export async function ensureCurrentProfile(client: SupabaseClient): Promise<Profile | null> {
+  const { data } = await client.auth.getUser();
+  const user = data.user;
+  if (!user) return null;
+
+  const existing = await client.from("profiles").select("*").eq("id", user.id).maybeSingle();
+  if (existing.data) return mapProfile(existing.data);
+
+  const profile = {
+    id: user.id,
+    organization_id: EMBREPOLI_ORG_ID,
+    name: user.user_metadata?.name ?? user.email?.split("@")[0] ?? "Novo usuário",
+    email: user.email ?? "",
+    phone: "",
+    bio: "",
+    role: "colaborador",
+    avatar_url: "",
+    active: false,
+    notification_sound: true
+  };
+  const created = await client.from("profiles").insert(profile).select("*").single();
+  return created.data ? mapProfile(created.data) : null;
+}
+
+export async function loadAppData(client: SupabaseClient): Promise<AppData> {
+  const profile = await ensureCurrentProfile(client);
+  const organizationId = profile?.id ? await getOrganizationId(client, profile.id) : EMBREPOLI_ORG_ID;
+
+  const [
+    profiles,
+    channels,
+    productLines,
+    vehicleTypes,
+    contentTypes,
+    funnelStages,
+    taskBoards,
+    taskColumns,
+    campaigns,
+    campaignAssignees,
+    posts,
+    postAssignees,
+    reviewAssets,
+    reviewComments,
+    ideas,
+    tasks,
+    taskAssignees,
+    checklist,
+    comments,
+    attachments,
+    metrics,
+    notifications
+  ] = await Promise.all([
+    client.from("profiles").select("*").eq("organization_id", organizationId),
+    client.from("channels").select("*").eq("organization_id", organizationId),
+    client.from("product_lines").select("*").eq("organization_id", organizationId),
+    client.from("vehicle_types").select("*").eq("organization_id", organizationId),
+    client.from("content_types").select("*").eq("organization_id", organizationId),
+    client.from("funnel_stages").select("*").eq("organization_id", organizationId),
+    client.from("task_boards").select("*").eq("organization_id", organizationId),
+    client.from("task_columns").select("*").eq("organization_id", organizationId),
+    client.from("campaigns").select("*").eq("organization_id", organizationId),
+    client.from("campaign_assignees").select("*").eq("organization_id", organizationId),
+    client.from("posts").select("*").eq("organization_id", organizationId),
+    client.from("post_assignees").select("*").eq("organization_id", organizationId),
+    client.from("post_review_assets").select("*").eq("organization_id", organizationId),
+    client.from("post_review_comments").select("*").eq("organization_id", organizationId),
+    client.from("ideas").select("*").eq("organization_id", organizationId),
+    client.from("tasks").select("*").eq("organization_id", organizationId),
+    client.from("task_assignees").select("*").eq("organization_id", organizationId),
+    client.from("task_checklist_items").select("*").eq("organization_id", organizationId),
+    client.from("task_comments").select("*").eq("organization_id", organizationId),
+    client.from("task_attachments").select("*").eq("organization_id", organizationId),
+    client.from("post_metrics").select("*").eq("organization_id", organizationId),
+    client.from("notifications").select("*").eq("organization_id", organizationId)
+  ]);
+
+  const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
+  const postAssigneeMap = groupByParent(postAssignees.data ?? [], "post_id");
+  const reviewCommentMap = groupByParent(reviewComments.data ?? [], "asset_id");
+  const taskAssigneeMap = groupByParent(taskAssignees.data ?? [], "task_id");
+  const checklistMap = groupByParent(checklist.data ?? [], "task_id");
+  const commentsMap = groupByParent(comments.data ?? [], "task_id");
+  const attachmentsMap = groupByParent(attachments.data ?? [], "task_id");
+
+  return {
+    profiles: (profiles.data ?? []).map(mapProfile),
+    channels: (channels.data ?? []).map(mapChannel),
+    productLines: (productLines.data ?? []).map(mapProductLine),
+    vehicleTypes: (vehicleTypes.data ?? []).map(mapVehicleType),
+    contentTypes: (contentTypes.data ?? []).map(mapContentType),
+    funnelStages: (funnelStages.data ?? []).map(mapFunnelStage),
+    taskBoards: (taskBoards.data ?? []).map(mapTaskBoard),
+    taskColumns: (taskColumns.data ?? []).map(mapTaskColumn),
+    campaigns: (campaigns.data ?? []).map((item) => mapCampaign(item, campaignAssigneeMap.get(item.id) ?? [])),
+    posts: (posts.data ?? []).map((item) => mapPost(item, postAssigneeMap.get(item.id) ?? [])),
+    postReviewAssets: (reviewAssets.data ?? []).map((item) => mapReviewAsset(item, reviewCommentMap.get(item.id) ?? [])),
+    ideas: (ideas.data ?? []).map(mapIdea),
+    tasks: (tasks.data ?? []).map((item) => mapTask(item, taskAssigneeMap.get(item.id) ?? [], checklistMap.get(item.id) ?? [], commentsMap.get(item.id) ?? [], attachmentsMap.get(item.id) ?? [])),
+    metrics: (metrics.data ?? []).map(mapMetric),
+    notifications: (notifications.data ?? []).map(mapNotification)
+  };
+}
+
+export async function replaceProfiles(client: SupabaseClient, profiles: Profile[], previous: Profile[] = []) {
+  const organizationId = await currentOrganizationId(client);
+  await deleteRemovedRows(client, "profiles", organizationId, previous, profiles);
+  await client.from("profiles").upsert(profiles.map((profile) => ({
+    id: profile.id,
+    organization_id: organizationId,
+    name: profile.name,
+    email: profile.email,
+    phone: profile.phone,
+    bio: profile.bio,
+    role: profile.role,
+    avatar_url: profile.avatarUrl,
+    active: profile.active,
+    notification_sound: profile.notificationSound
+  })));
+}
+
+export async function replaceChannels(client: SupabaseClient, channels: Channel[], previous: Channel[] = []) {
+  await replaceSimple(client, "channels", channels, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name, color: item.color }));
+}
+
+export async function replaceProductLines(client: SupabaseClient, productLines: ProductLine[], previous: ProductLine[] = []) {
+  await replaceSimple(client, "product_lines", productLines, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
+}
+
+export async function replaceVehicleTypes(client: SupabaseClient, vehicleTypes: VehicleType[], previous: VehicleType[] = []) {
+  await replaceSimple(client, "vehicle_types", vehicleTypes, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
+}
+
+export async function replaceContentTypes(client: SupabaseClient, contentTypes: ContentType[], previous: ContentType[] = []) {
+  await replaceSimple(client, "content_types", contentTypes, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
+}
+
+export async function replaceFunnelStages(client: SupabaseClient, stages: FunnelStage[], previous: FunnelStage[] = []) {
+  await replaceSimple(client, "funnel_stages", stages, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name, color: item.color, sort_order: item.order }));
+}
+
+export async function replaceTaskBoards(client: SupabaseClient, boards: TaskBoard[], previous: TaskBoard[] = []) {
+  await replaceSimple(client, "task_boards", boards, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name, sort_order: item.order, is_fixed: item.isFixed }));
+}
+
+export async function replaceTaskColumns(client: SupabaseClient, columns: TaskColumn[], previous: TaskColumn[] = []) {
+  await replaceSimple(client, "task_columns", columns, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, task_board_id: item.boardId, name: item.name, color: item.color, sort_order: item.order }));
+}
+
+export async function replaceIdeas(client: SupabaseClient, ideas: Idea[], previous: Idea[] = []) {
+  await replaceSimple(client, "ideas", ideas, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    channel_id: item.channelId,
+    product_line_id: item.productLineId,
+    vehicle_type_id: item.vehicleTypeId,
+    content_type_id: item.contentTypeId,
+    funnel_stage_id: item.funnelStageId || null,
+    created_by: item.createdBy,
+    title: item.title,
+    type: item.type,
+    priority: item.priority,
+    sort_order: item.order
+  }));
+}
+
+export async function replaceCampaigns(client: SupabaseClient, campaigns: Campaign[], previous: Campaign[] = []) {
+  const organizationId = await currentOrganizationId(client);
+  await replaceSimpleWithOrg(client, "campaigns", organizationId, campaigns, previous, (item) => ({
+    id: item.id,
+    organization_id: organizationId,
+    product_line_id: item.productLineId || null,
+    vehicle_type_id: item.vehicleTypeId || null,
+    funnel_stage_id: item.funnelStageId || null,
+    created_by: item.createdBy,
+    name: item.name,
+    objective: item.objective,
+    audience: item.audience,
+    message: item.message,
+    start_date: item.startDate || null,
+    end_date: item.endDate || null,
+    status: item.status
+  }));
+  await replaceAssignees(client, "campaign_assignees", "campaign_id", organizationId, campaigns.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
+}
+
+export async function replacePosts(client: SupabaseClient, posts: EditorialPost[], previous: EditorialPost[] = []) {
+  const organizationId = await currentOrganizationId(client);
+  await replaceSimpleWithOrg(client, "posts", organizationId, posts, previous, (item) => ({
+    id: item.id,
+    organization_id: organizationId,
+    channel_id: item.channelId || null,
+    campaign_id: item.campaignId || null,
+    product_line_id: item.productLineId || null,
+    vehicle_type_id: item.vehicleTypeId || null,
+    content_type_id: item.contentTypeId || null,
+    funnel_stage_id: item.funnelStageId || null,
+    created_by: item.createdBy,
+    title: item.title,
+    status: item.status,
+    format: item.format,
+    sort_order: item.order ?? 1,
+    publish_at: item.publishAt,
+    description: item.description
+  }));
+  await replaceAssignees(client, "post_assignees", "post_id", organizationId, posts.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
+}
+
+export async function replacePostReviewAssets(client: SupabaseClient, assets: PostReviewAsset[], previous: PostReviewAsset[] = []) {
+  const organizationId = await currentOrganizationId(client);
+  await replaceSimpleWithOrg(client, "post_review_assets", organizationId, assets, previous, (item) => ({
+    id: item.id,
+    organization_id: organizationId,
+    post_id: item.postId,
+    uploaded_by: item.uploadedBy,
+    reviewed_by: item.reviewedBy || null,
+    name: item.name,
+    file_type: item.type,
+    storage_path: item.url,
+    public_url: item.url,
+    status: item.status,
+    uploaded_at: item.uploadedAt,
+    reviewed_at: item.reviewedAt || null
+  }));
+  await replaceChildRows(client, "post_review_comments", "asset_id", organizationId, assets.map((asset) => asset.id), assets.flatMap((asset) => asset.comments.map((comment) => ({
+    id: comment.id,
+    organization_id: organizationId,
+    asset_id: asset.id,
+    post_id: asset.postId,
+    author_id: comment.authorId,
+    message: comment.message,
+    created_at: comment.createdAt
+  }))));
+}
+
+export async function replaceTasks(client: SupabaseClient, tasks: Task[], previous: Task[] = []) {
+  const organizationId = await currentOrganizationId(client);
+  await replaceSimpleWithOrg(client, "tasks", organizationId, tasks, previous, (item) => ({
+    id: item.id,
+    organization_id: organizationId,
+    parent_task_id: item.parentTaskId ?? null,
+    task_column_id: item.columnId,
+    funnel_stage_id: item.funnelStageId,
+    created_by: item.createdBy,
+    title: item.title,
+    priority: item.priority,
+    progress: item.progress,
+    related_to: item.relatedTo,
+    description: item.description,
+    due_date: item.dueDate,
+    sort_order: item.order
+  }));
+  await replaceAssignees(client, "task_assignees", "task_id", organizationId, tasks.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
+  await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.checklist.map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
+  await replaceChildRows(client, "task_comments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.comments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, author_id: item.authorId, message: item.message, created_at: item.createdAt }))));
+  await replaceChildRows(client, "task_attachments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.attachments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, uploaded_by: task.createdBy, name: item.name, file_type: item.type, storage_path: item.url, public_url: item.url }))));
+}
+
+export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric[], previous: PostMetric[] = []) {
+  await replaceSimple(client, "post_metrics", metrics, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    post_id: item.postId || null,
+    post_title: item.postTitle,
+    channel_id: item.channelId,
+    campaign_id: item.campaignId || null,
+    product_line_id: item.productLineId,
+    vehicle_type_id: item.vehicleTypeId || null,
+    content_type_id: item.contentTypeId || null,
+    funnel_stage_id: item.funnelStageId,
+    metric_date: item.date,
+    reach: item.reach,
+    likes: item.likes,
+    comments: item.comments,
+    shares: item.shares,
+    clicks: item.clicks,
+    leads: item.leads,
+    notes: item.notes,
+    learning: item.learning
+  }));
+}
+
+export async function replaceNotifications(client: SupabaseClient, notifications: Notification[], previous: Notification[] = []) {
+  await replaceSimple(client, "notifications", notifications, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    user_id: item.userId,
+    title: item.title,
+    description: item.description,
+    created_at: item.createdAt,
+    read: item.read,
+    target_kind: item.targetKind,
+    target_id: item.targetId
+  }));
+}
+
+async function replaceSimple<T extends { id: string }>(client: SupabaseClient, table: string, rows: T[], previous: T[], mapper: (row: T, organizationId: string) => Record<string, unknown>) {
+  const organizationId = await currentOrganizationId(client);
+  await replaceSimpleWithOrg(client, table, organizationId, rows, previous, (row) => mapper(row, organizationId));
+}
+
+async function replaceSimpleWithOrg<T extends { id: string }>(client: SupabaseClient, table: string, organizationId: string, rows: T[], previous: T[], mapper: (row: T) => Record<string, unknown>) {
+  await deleteRemovedRows(client, table, organizationId, previous, rows);
+  if (rows.length) await client.from(table).upsert(rows.map(mapper));
+}
+
+async function replaceAssignees(client: SupabaseClient, table: string, parentColumn: string, organizationId: string, rows: { parentId: string; assignees: string[] }[]) {
+  const parentIds = rows.map((row) => row.parentId);
+  if (parentIds.length) await client.from(table).delete().eq("organization_id", organizationId).in(parentColumn, parentIds);
+  const payload = rows.flatMap((row) => row.assignees.map((profileId) => ({ organization_id: organizationId, [parentColumn]: row.parentId, profile_id: profileId })));
+  if (payload.length) await client.from(table).insert(payload);
+}
+
+async function replaceChildRows(client: SupabaseClient, table: string, parentColumn: string, organizationId: string, parentIds: string[], rows: Record<string, unknown>[]) {
+  parentIds = Array.from(new Set(parentIds.filter(Boolean)));
+  if (parentIds.length) await client.from(table).delete().eq("organization_id", organizationId).in(parentColumn, parentIds);
+  if (rows.length) await client.from(table).upsert(rows);
+}
+
+async function deleteRemovedRows<T extends { id: string }>(client: SupabaseClient, table: string, organizationId: string, previous: T[], next: T[]) {
+  const nextIds = new Set(next.map((row) => row.id));
+  const removedIds = previous.map((row) => row.id).filter((id) => !nextIds.has(id));
+  if (removedIds.length) await client.from(table).delete().eq("organization_id", organizationId).in("id", removedIds);
+}
+
+async function currentOrganizationId(client: SupabaseClient) {
+  const { data } = await client.auth.getUser();
+  if (!data.user) return EMBREPOLI_ORG_ID;
+  return getOrganizationId(client, data.user.id);
+}
+
+async function getOrganizationId(client: SupabaseClient, profileId: string) {
+  const { data } = await client.from("profiles").select("organization_id").eq("id", profileId).maybeSingle();
+  return data?.organization_id ?? EMBREPOLI_ORG_ID;
+}
+
+function groupByParent(rows: Record<string, any>[], parentKey: string) {
+  const map = new Map<string, Record<string, any>[]>();
+  for (const row of rows) {
+    const key = String(row[parentKey]);
+    map.set(key, [...(map.get(key) ?? []), row]);
+  }
+  return map;
+}
+
+function quote(value: string) {
+  return `"${value.replace(/"/g, '\\"')}"`;
+}
+
+function mapProfile(row: any): Profile {
+  return { id: row.id, name: row.name, email: row.email, phone: row.phone ?? "", bio: row.bio ?? "", role: row.role, avatarUrl: row.avatar_url ?? "", active: row.active ?? true, notificationSound: row.notification_sound ?? true };
+}
+
+function mapChannel(row: any): Channel {
+  return { id: row.id, name: row.name, color: row.color };
+}
+
+function mapProductLine(row: any): ProductLine {
+  return { id: row.id, name: row.name };
+}
+
+function mapVehicleType(row: any): VehicleType {
+  return { id: row.id, name: row.name };
+}
+
+function mapContentType(row: any): ContentType {
+  return { id: row.id, name: row.name };
+}
+
+function mapFunnelStage(row: any): FunnelStage {
+  return { id: row.id, name: row.name, color: row.color, order: row.sort_order };
+}
+
+function mapTaskBoard(row: any): TaskBoard {
+  return { id: row.id, name: row.name, order: row.sort_order, isFixed: row.is_fixed };
+}
+
+function mapTaskColumn(row: any): TaskColumn {
+  return { id: row.id, boardId: row.task_board_id, name: row.name, color: row.color, order: row.sort_order };
+}
+
+function mapCampaign(row: any, assignees: any[]): Campaign {
+  return { id: row.id, name: row.name, objective: row.objective, audience: row.audience, message: row.message, productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), startDate: row.start_date ?? "", endDate: row.end_date ?? "", status: row.status };
+}
+
+function mapPost(row: any, assignees: any[]): EditorialPost {
+  return { id: row.id, title: row.title, channelId: row.channel_id ?? "", campaignId: row.campaign_id ?? "", productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), status: row.status, format: row.format ?? "Post", order: row.sort_order ?? 1, publishAt: String(row.publish_at ?? "").slice(0, 16), description: row.description ?? "" };
+}
+
+function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {
+  return {
+    id: row.id,
+    postId: row.post_id,
+    name: row.name,
+    type: row.file_type,
+    url: row.public_url || row.storage_path,
+    status: row.status,
+    uploadedBy: row.uploaded_by ?? "",
+    reviewedBy: row.reviewed_by ?? "",
+    uploadedAt: row.uploaded_at ?? row.created_at,
+    reviewedAt: row.reviewed_at ?? "",
+    comments: comments.map((item): PostReviewComment => ({
+      id: item.id,
+      assetId: item.asset_id,
+      authorId: item.author_id,
+      message: item.message,
+      createdAt: item.created_at
+    }))
+  };
+}
+
+function mapIdea(row: any): Idea {
+  return { id: row.id, title: row.title, productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", type: row.type, channelId: row.channel_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", priority: row.priority, order: row.sort_order ?? 1 };
+}
+
+function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], attachments: any[]): Task {
+  return {
+    id: row.id,
+    title: row.title,
+    columnId: row.task_column_id ?? "",
+    order: row.sort_order,
+    priority: row.priority,
+    progress: row.progress,
+    createdBy: row.created_by ?? "",
+    assignedTo: assignees.map((item) => item.profile_id),
+    relatedTo: row.related_to ?? "",
+    funnelStageId: row.funnel_stage_id ?? "",
+    parentTaskId: row.parent_task_id ?? undefined,
+    dueDate: row.due_date ?? "",
+    description: row.description ?? "",
+    checklist: checklist.sort((a, b) => a.sort_order - b.sort_order).map((item): ChecklistItem => ({ id: item.id, label: item.label, done: item.done })),
+    comments: comments.map((item): TaskComment => ({ id: item.id, authorId: item.author_id, message: item.message, createdAt: item.created_at })),
+    attachments: attachments.map((item): TaskAttachment => ({ id: item.id, name: item.name, type: item.file_type, url: item.public_url || item.storage_path }))
+  };
+}
+
+function mapMetric(row: any): PostMetric {
+  return {
+    id: row.id,
+    postId: row.post_id ?? undefined,
+    postTitle: row.post_title,
+    channelId: row.channel_id ?? "",
+    campaignId: row.campaign_id ?? "",
+    productLineId: row.product_line_id ?? "",
+    vehicleTypeId: row.vehicle_type_id ?? "",
+    contentTypeId: row.content_type_id ?? "",
+    funnelStageId: row.funnel_stage_id ?? "",
+    date: row.metric_date ?? row.created_at?.slice(0, 10) ?? "",
+    reach: row.reach,
+    likes: row.likes,
+    comments: row.comments,
+    shares: row.shares,
+    clicks: row.clicks,
+    leads: row.leads,
+    notes: row.notes ?? "",
+    learning: row.learning ?? ""
+  };
+}
+
+function mapNotification(row: any): Notification {
+  return { id: row.id, userId: row.user_id, title: row.title, description: row.description, createdAt: row.created_at, read: row.read, targetKind: row.target_kind, targetId: row.target_id };
+}
+

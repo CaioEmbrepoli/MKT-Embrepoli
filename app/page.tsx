@@ -1,0 +1,3673 @@
+﻿"use client";
+
+import {
+  closestCorners,
+  DndContext,
+  DragEndEvent,
+  PointerSensor,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  horizontalListSortingStrategy,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import Image from "next/image";
+import {
+  BarChart3,
+  CalendarDays,
+  Camera,
+  CheckCircle2,
+  ChevronDown,
+  ClipboardList,
+  FileUp,
+  GripVertical,
+  Bell,
+  Eye,
+  EyeOff,
+  KanbanSquare,
+  Lightbulb,
+  LogOut,
+  Megaphone,
+  MessageSquare,
+  Plus,
+  Search,
+  Settings,
+  Trash2,
+  UserRound,
+  Users,
+  X,
+  type LucideIcon
+} from "lucide-react";
+import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  campaigns as seedCampaigns,
+  channels as seedChannels,
+  contentTypes as seedContentTypes,
+  funnelStages as seedFunnelStages,
+  ideas as seedIdeas,
+  metrics as seedMetrics,
+  notifications as seedNotifications,
+  postReviewAssets as seedPostReviewAssets,
+  posts as seedPosts,
+  productLines as seedProductLines,
+  profiles as seedProfiles,
+  taskBoards as seedTaskBoards,
+  taskColumns as seedTaskColumns,
+  tasks as seedTasks,
+  vehicleTypes as seedVehicleTypes
+} from "@/lib/seed-data";
+import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import {
+  type AppData,
+  ensureCurrentProfile,
+  loadAppData,
+  replaceCampaigns,
+  replaceChannels,
+  replaceContentTypes,
+  replaceFunnelStages,
+  replaceIdeas,
+  replaceMetrics,
+  replaceNotifications,
+  replacePostReviewAssets,
+  replacePosts,
+  replaceProductLines,
+  replaceProfiles,
+  replaceTaskBoards,
+  replaceTaskColumns,
+  replaceTasks,
+  replaceVehicleTypes
+} from "@/lib/supabase-data";
+import type {
+  Campaign,
+  Channel,
+  ContentType,
+  EditorialPost,
+  FunnelStage,
+  Idea,
+  Notification,
+  PostReviewAsset,
+  PostReviewComment,
+  ReviewAssetStatus,
+  PostMetric,
+  PostStatus,
+  ProductLine,
+  Profile,
+  Role,
+  Task,
+  TaskAttachment,
+  TaskBoard,
+  TaskColumn,
+  TaskPriority,
+  TaskProgress,
+  VehicleType
+} from "@/lib/types";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis
+} from "recharts";
+
+type ModalState =
+  | { kind: "post"; id?: string; date?: Date }
+  | { kind: "idea"; id?: string }
+  | { kind: "campaign"; id?: string }
+  | { kind: "metric"; id?: string }
+  | { kind: "task"; id: string }
+  | { kind: "profile" }
+  | { kind: "teamMember"; id: string }
+  | null;
+
+type AuthMode = "login" | "signup" | "forgot" | "reset" | "pending";
+
+const menu = [
+  { id: "painel", label: "Painel", icon: BarChart3 },
+  { id: "calendario", label: "Calendário", icon: CalendarDays },
+  { id: "ideias", label: "Ideias", icon: Lightbulb },
+  { id: "tarefas", label: "Tarefas", icon: KanbanSquare },
+  { id: "campanhas", label: "Campanhas", icon: Megaphone },
+  { id: "metricas", label: "Métricas", icon: ClipboardList },
+  { id: "configuracoes", label: "Configurações", icon: Settings }
+];
+
+const postStatuses: PostStatus[] = ["Ideia", "Produção", "Revisão", "Aprovado", "Agendado", "Publicado"];
+const campaignAudienceOptions = ["Geral", "Clientes atuais", "Leads", "Equipe interna", "Outros"];
+const fallbackPostFormats = ["Post", "Vídeo", "Story"];
+const priorities: TaskPriority[] = ["Alta", "Média", "Baixa"];
+const progresses: TaskProgress[] = ["Bloqueada", "No prazo", "Atenção", "Finalizando"];
+const roles: Role[] = ["admin", "gestor", "colaborador"];
+const ideaTypes: Idea["type"][] = ["Postagem", "Melhoria", "Sistema", "Outros"];
+const configTabs = ["Equipe", "Funil", "Filtros", "Conta e Permissões"] as const;
+const calendarTaskBoardId = "__calendar_posts__";
+const localDataKey = "embrepoli-marketing:v1";
+type SaveStatus = "idle" | "saving" | "saved" | "error";
+
+function postFormatOptionsForChannel(channel?: Channel) {
+  const normalized = normalizeText(channel?.name ?? "");
+  if (normalized.includes("instagram") || normalized.includes("facebook")) return ["Feed", "Story", "Reels"];
+  if (normalized.includes("youtube")) return ["Vídeo", "Shorts"];
+  if (normalized.includes("tiktok")) return ["Vídeo", "Story", "Live"];
+  return fallbackPostFormats;
+}
+
+function defaultPostFormatForChannel(channel?: Channel) {
+  return postFormatOptionsForChannel(channel)[0] ?? "Post";
+}
+
+class AnyButtonPointerSensor extends PointerSensor {
+  static activators = [
+    {
+      eventName: "onPointerDown" as const,
+      handler: ({ nativeEvent: event }: any, { onActivation }: any) => {
+        if (!event.isPrimary || (event.button !== 0 && event.button !== 2)) return false;
+        onActivation?.({ event });
+        return true;
+      }
+    }
+  ];
+}
+
+const roleLabel: Record<Role, string> = {
+  admin: "Administrador",
+  gestor: "Gestor",
+  colaborador: "Colaborador"
+};
+
+const formatDate = (value: string) =>
+  new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "short",
+    hour: value.includes("T") ? "2-digit" : undefined,
+    minute: value.includes("T") ? "2-digit" : undefined
+  }).format(new Date(value.includes("T") ? value : `${value}T12:00:00`));
+
+const formatNumber = (value: number) => new Intl.NumberFormat("pt-BR").format(value);
+
+const formatPercent = (value: number) => `${value.toFixed(1).replace(".", ",")}%`;
+
+const metricEngagement = (metric: PostMetric) => metric.likes + metric.comments + metric.shares;
+
+const metricEngagementRate = (metric: PostMetric) => metric.reach ? (metricEngagement(metric) / metric.reach) * 100 : 0;
+
+const metricConversionRate = (metric: PostMetric) => metric.clicks ? (metric.leads / metric.clicks) * 100 : 0;
+
+const slug = (value: string) =>
+  value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+function initials(name: string) {
+  return name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
+}
+
+function canSeeItem(user: Profile, createdBy: string, assignedTo: string[]) {
+  return user.role !== "colaborador" || user.id === createdBy || assignedTo.includes(user.id);
+}
+
+function sameDay(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
+}
+
+function formatDateOnly(value: Date) {
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(value);
+}
+
+function toDateTimeLocalValue(value: Date) {
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
+function playNotificationSound() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = 880;
+    oscillator.type = "sine";
+    gain.gain.value = 0.05;
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start();
+    oscillator.stop(context.currentTime + 0.12);
+  } catch {
+    // Navegadores podem bloquear áudio até alguma interação do usuário.
+  }
+}
+
+export default function Home() {
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [activeSection, setActiveSection] = useState("painel");
+  const [profiles, setProfiles] = useState<Profile[]>(seedProfiles);
+  const [currentUserId, setCurrentUserId] = useState(seedProfiles[0].id);
+  const [channels, setChannels] = useState<Channel[]>(seedChannels);
+  const [productLines, setProductLines] = useState<ProductLine[]>(seedProductLines);
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>(seedVehicleTypes);
+  const [contentTypes, setContentTypes] = useState<ContentType[]>(seedContentTypes);
+  const [funnelStages, setFunnelStages] = useState<FunnelStage[]>(seedFunnelStages);
+  const [taskBoards, setTaskBoards] = useState<TaskBoard[]>(seedTaskBoards);
+  const [activeTaskBoardId, setActiveTaskBoardId] = useState(seedTaskBoards[0]?.id ?? "tarefas");
+  const [taskColumns, setTaskColumns] = useState<TaskColumn[]>(seedTaskColumns);
+  const [campaigns, setCampaigns] = useState<Campaign[]>(seedCampaigns);
+  const [posts, setPosts] = useState<EditorialPost[]>(seedPosts);
+  const [postReviewAssets, setPostReviewAssets] = useState<PostReviewAsset[]>(seedPostReviewAssets);
+  const [ideas, setIdeas] = useState<Idea[]>(seedIdeas);
+  const [tasks, setTasks] = useState<Task[]>(seedTasks);
+  const [metrics, setMetrics] = useState<PostMetric[]>(seedMetrics);
+  const [notifications, setNotifications] = useState<Notification[]>(seedNotifications);
+  const [modal, setModal] = useState<ModalState>(null);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authMessage, setAuthMessage] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [saveError, setSaveError] = useState("");
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [calendarMode, setCalendarMode] = useState<"Semana" | "Mês" | "Ano">("Mês");
+  const [visibleMonth, setVisibleMonth] = useState(new Date(2026, 4, 1));
+  const [configTab, setConfigTab] = useState<(typeof configTabs)[number]>("Equipe");
+  const [ideasView, setIdeasView] = useState<"Quadro" | "Lista">("Quadro");
+  const [ideasTab, setIdeasTab] = useState<"Todos" | Idea["type"]>("Todos");
+  const realtimeReloading = useRef(false);
+  const remoteReady = useRef(!isSupabaseConfigured);
+  const localReady = useRef(isSupabaseConfigured);
+
+  const currentUser = profiles.find((profile) => profile.id === currentUserId) ?? profiles[0];
+  const profileById = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile])), [profiles]);
+  const channelById = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
+  const lineById = useMemo(() => new Map(productLines.map((line) => [line.id, line])), [productLines]);
+  const vehicleTypeById = useMemo(() => new Map(vehicleTypes.map((item) => [item.id, item])), [vehicleTypes]);
+  const contentTypeById = useMemo(() => new Map(contentTypes.map((item) => [item.id, item])), [contentTypes]);
+  const funnelById = useMemo(() => new Map(funnelStages.map((stage) => [stage.id, stage])), [funnelStages]);
+  const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns]);
+  const columnById = useMemo(() => new Map(taskColumns.map((column) => [column.id, column])), [taskColumns]);
+
+  const visiblePosts = posts.filter((post) => canSeeItem(currentUser, post.createdBy, post.assignedTo));
+  const visibleTasks = tasks.filter((task) => canSeeItem(currentUser, task.createdBy, task.assignedTo) && !task.parentTaskId);
+  const visibleIdeas = ideas.filter((idea) => currentUser.role !== "colaborador" || idea.createdBy === currentUser.id);
+  const visibleCampaigns = campaigns.filter((campaign) => canSeeItem(currentUser, campaign.createdBy, campaign.assignedTo));
+  const derivedTaskNotifications = useMemo(
+    () =>
+      visibleTasks
+        .filter((task) => task.assignedTo.includes(currentUser.id))
+        .map((task): Notification => ({
+          id: `task-assigned:${task.id}:${currentUser.id}`,
+          userId: currentUser.id,
+          title: "Tarefa atribuída",
+          description: task.title,
+          createdAt: task.dueDate ? `${task.dueDate}T12:00:00` : new Date().toISOString(),
+          read: false,
+          targetKind: "task",
+          targetId: task.id
+        })),
+    [visibleTasks, currentUser.id]
+  );
+  const currentNotifications = useMemo(
+    () => [...notifications.filter((item) => item.userId === currentUser.id), ...derivedTaskNotifications].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [notifications, derivedTaskNotifications, currentUser.id]
+  );
+  const seenNotificationIds = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const unreadIds = currentNotifications.filter((item) => !item.read).map((item) => item.id);
+    const fresh = unreadIds.some((id) => !seenNotificationIds.current.has(id));
+    if (seenNotificationIds.current.size && fresh && currentUser.notificationSound) {
+      playNotificationSound();
+    }
+    seenNotificationIds.current = new Set(unreadIds);
+  }, [currentNotifications, currentUser.notificationSound]);
+
+  function readLocalData(): Partial<AppData> {
+    if (typeof window === "undefined") return {};
+    try {
+      return JSON.parse(window.localStorage.getItem(localDataKey) || "{}") as Partial<AppData>;
+    } catch (error) {
+      console.error("Erro ao carregar dados locais do Embrepoli Marketing", error);
+      return {};
+    }
+  }
+
+  function writeLocalDataPatch<K extends keyof AppData>(key: K, value: AppData[K]) {
+    if (typeof window === "undefined") return;
+    const current = readLocalData();
+    window.localStorage.setItem(localDataKey, JSON.stringify({ ...current, [key]: value }));
+  }
+
+  useEffect(() => {
+    if (isSupabaseConfigured) return;
+    const data = readLocalData();
+    if (data.profiles?.length) setProfiles(data.profiles);
+    if (data.channels?.length) setChannels(data.channels);
+    if (data.productLines?.length) setProductLines(data.productLines);
+    if (data.vehicleTypes?.length) setVehicleTypes(data.vehicleTypes);
+    if (data.contentTypes?.length) setContentTypes(data.contentTypes);
+    if (data.funnelStages?.length) setFunnelStages(data.funnelStages);
+    if (data.taskBoards?.length) {
+      setTaskBoards(data.taskBoards);
+      setActiveTaskBoardId(data.taskBoards[0]?.id ?? "tarefas");
+    }
+    if (data.taskColumns?.length) setTaskColumns(data.taskColumns);
+    if (data.campaigns) setCampaigns(data.campaigns);
+    if (data.posts) setPosts(data.posts);
+    if (data.postReviewAssets) setPostReviewAssets(data.postReviewAssets);
+    if (data.ideas) setIdeas(data.ideas);
+    if (data.tasks) setTasks(data.tasks);
+    if (data.metrics) setMetrics(data.metrics);
+    if (data.notifications) setNotifications(data.notifications);
+    localReady.current = true;
+  }, []);
+
+  async function reloadFromSupabase() {
+    if (!supabase || !isSupabaseConfigured) return;
+    realtimeReloading.current = true;
+    const data = await loadAppData(supabase);
+    setProfiles(data.profiles.length ? data.profiles : seedProfiles);
+    setChannels(data.channels);
+    setProductLines(data.productLines);
+    setVehicleTypes(data.vehicleTypes);
+    setContentTypes(data.contentTypes);
+    setFunnelStages(data.funnelStages);
+    setTaskBoards(data.taskBoards);
+    setTaskColumns(data.taskColumns);
+    setCampaigns(data.campaigns);
+    setPosts(data.posts);
+    setPostReviewAssets(data.postReviewAssets);
+    setIdeas(data.ideas);
+    setTasks(data.tasks);
+    setMetrics(data.metrics);
+    setNotifications(data.notifications);
+    const current = data.profiles.find((profile) => profile.email === currentUser.email) ?? data.profiles[0];
+    if (current) setCurrentUserId(current.id);
+    remoteReady.current = true;
+    window.setTimeout(() => {
+      realtimeReloading.current = false;
+    }, 0);
+  }
+
+  useEffect(() => {
+    if (!loggedIn || !supabase || !isSupabaseConfigured) return;
+    void reloadFromSupabase();
+    const tables = [
+      "profiles",
+      "channels",
+      "product_lines",
+      "vehicle_types",
+      "content_types",
+      "funnel_stages",
+      "task_boards",
+      "task_columns",
+      "campaigns",
+      "campaign_assignees",
+      "posts",
+      "post_assignees",
+      "post_review_assets",
+      "post_review_comments",
+      "ideas",
+      "tasks",
+      "task_assignees",
+      "task_checklist_items",
+      "task_comments",
+      "task_attachments",
+      "post_metrics",
+      "notifications"
+    ];
+    const channel = supabase.channel("embrepoli-marketing-realtime");
+    tables.forEach((table) => {
+      channel.on("postgres_changes", { event: "*", schema: "public", table }, () => {
+        void reloadFromSupabase();
+      });
+    });
+    channel.subscribe();
+    return () => {
+      void supabase?.removeChannel(channel);
+    };
+  }, [loggedIn]);
+
+  function syncState<K extends keyof AppData>(key: K, setter: Dispatch<SetStateAction<AppData[K]>>, persist: (previous: AppData[K], next: AppData[K]) => Promise<void>) {
+    return (action: SetStateAction<AppData[K]>) => {
+      setter((current) => {
+        const next = typeof action === "function" ? (action as (value: AppData[K]) => AppData[K])(current) : action as AppData[K];
+        if (supabase && isSupabaseConfigured && remoteReady.current && !realtimeReloading.current) {
+          setSaveStatus("saving");
+          setSaveError("");
+          void persist(current, next)
+            .then(() => setSaveStatus("saved"))
+            .catch((error) => {
+              console.error(`Erro ao salvar ${String(key)} no Supabase`, error);
+              setSaveStatus("error");
+              setSaveError("Erro ao salvar. Verifique a conexão e tente novamente.");
+            });
+        } else if (!isSupabaseConfigured && localReady.current) {
+          try {
+            writeLocalDataPatch(key, next);
+            setSaveStatus("saved");
+            setSaveError("");
+          } catch (error) {
+            console.error(`Erro ao salvar ${String(key)} localmente`, error);
+            setSaveStatus("error");
+            setSaveError("Erro ao salvar localmente.");
+          }
+        }
+        return next;
+      });
+    };
+  }
+
+  const syncProfiles = syncState("profiles", setProfiles, (previous, next) => replaceProfiles(supabase!, next, previous));
+  const syncChannels = syncState("channels", setChannels, (previous, next) => replaceChannels(supabase!, next, previous));
+  const syncProductLines = syncState("productLines", setProductLines, (previous, next) => replaceProductLines(supabase!, next, previous));
+  const syncVehicleTypes = syncState("vehicleTypes", setVehicleTypes, (previous, next) => replaceVehicleTypes(supabase!, next, previous));
+  const syncContentTypes = syncState("contentTypes", setContentTypes, (previous, next) => replaceContentTypes(supabase!, next, previous));
+  const syncFunnelStages = syncState("funnelStages", setFunnelStages, (previous, next) => replaceFunnelStages(supabase!, next, previous));
+  const syncTaskBoards = syncState("taskBoards", setTaskBoards, (previous, next) => replaceTaskBoards(supabase!, next, previous));
+  const syncTaskColumns = syncState("taskColumns", setTaskColumns, (previous, next) => replaceTaskColumns(supabase!, next, previous));
+  const syncCampaigns = syncState("campaigns", setCampaigns, (previous, next) => replaceCampaigns(supabase!, next, previous));
+  const syncPosts = syncState("posts", setPosts, (previous, next) => replacePosts(supabase!, next, previous));
+  const syncPostReviewAssets = syncState("postReviewAssets", setPostReviewAssets, (previous, next) => replacePostReviewAssets(supabase!, next, previous));
+  const syncIdeas = syncState("ideas", setIdeas, (previous, next) => replaceIdeas(supabase!, next, previous));
+  const syncTasks = syncState("tasks", setTasks, (previous, next) => replaceTasks(supabase!, next, previous));
+  const syncMetrics = syncState("metrics", setMetrics, (previous, next) => replaceMetrics(supabase!, next, previous));
+  const syncNotifications = syncState("notifications", setNotifications, (previous, next) => replaceNotifications(supabase!, next, previous));
+
+  async function loadCurrentSession() {
+    if (!supabase || !isSupabaseConfigured) return;
+    const recoveryUrl = `${window.location.search}${window.location.hash}`;
+    if (recoveryUrl.includes("type=recovery")) {
+      setAuthMode("reset");
+      return;
+    }
+    const { data } = await supabase.auth.getSession();
+    if (!data.session?.user) return;
+    const profile = await ensureCurrentProfile(supabase);
+    if (!profile) return;
+    setCurrentUserId(profile.id);
+    if (profile.active) {
+      setLoggedIn(true);
+      setAuthMode("login");
+    } else {
+      setLoggedIn(false);
+      setAuthMode("pending");
+      setAuthMessage("Sua conta foi criada e está aguardando aprovação de um Gestor ou Administrador.");
+    }
+  }
+
+  useEffect(() => {
+    if (!supabase || !isSupabaseConfigured) return;
+    void loadCurrentSession();
+    const { data } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setLoggedIn(false);
+        setAuthMode("reset");
+        setAuthMessage("Digite sua nova senha para concluir a recuperação.");
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  async function handleLogin(email: string, password: string) {
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthMessage("");
+    if (supabase && isSupabaseConfigured) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error || !data.user) {
+        setAuthError("Email ou senha incorretos. Verifique os dados e tente novamente.");
+        setAuthLoading(false);
+        return;
+      }
+      const profile = await ensureCurrentProfile(supabase);
+      if (!profile?.active) {
+        setCurrentUserId(profile?.id ?? data.user.id);
+        setAuthMode("pending");
+        setAuthMessage("Sua conta está aguardando aprovação de um Gestor ou Administrador.");
+        setAuthLoading(false);
+        return;
+      }
+      setCurrentUserId(profile.id);
+      setAuthLoading(false);
+      setAuthMode("login");
+      setLoggedIn(true);
+      return;
+    }
+
+    const fallback = profiles.find((profile) => profile.email.toLowerCase() === email.toLowerCase());
+    if (fallback) {
+      setCurrentUserId(fallback.id);
+      setAuthLoading(false);
+      setLoggedIn(true);
+      return;
+    }
+    setAuthError("Conta não encontrada no modo local de demonstração.");
+    setAuthLoading(false);
+  }
+
+  async function handleSignup(name: string, email: string, password: string) {
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthMessage("");
+    if (supabase && isSupabaseConfigured) {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: { name },
+          emailRedirectTo: `${window.location.origin}/`
+        }
+      });
+      if (error) {
+        setAuthError(error.message.includes("already") ? "Este email já está cadastrado. Tente entrar ou recuperar a senha." : error.message);
+        setAuthLoading(false);
+        return;
+      }
+      if (data.user) {
+        await supabase.from("profiles").upsert({
+          id: data.user.id,
+          organization_id: "00000000-0000-0000-0000-000000000001",
+          name,
+          email,
+          phone: "",
+          bio: "",
+          role: "colaborador",
+          avatar_url: "",
+          active: false,
+          notification_sound: true
+        });
+      }
+      setAuthMode("pending");
+      setAuthMessage("Conta criada. Agora aguarde um Gestor ou Administrador aprovar seu acesso.");
+      setAuthLoading(false);
+      return;
+    }
+
+    setProfiles((current) => [{ id: crypto.randomUUID(), name, email, phone: "", bio: "", role: "colaborador", avatarUrl: "", active: false, notificationSound: true }, ...current]);
+    setAuthMode("pending");
+    setAuthMessage("Conta criada no modo local. Ela aparece como pendente para simular aprovação.");
+    setAuthLoading(false);
+  }
+
+  async function handleForgotPassword(email: string) {
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthMessage("");
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/`
+      });
+      if (error) {
+        setAuthError("Não foi possível enviar o email de recuperação. Verifique o endereço informado.");
+        setAuthLoading(false);
+        return;
+      }
+      setAuthMessage("Enviamos um link de recuperação de senha para seu email.");
+      setAuthLoading(false);
+      return;
+    }
+    setAuthMessage("No modo local, a recuperação de senha fica disponível quando o Supabase estiver configurado.");
+    setAuthLoading(false);
+  }
+
+  async function handleResetPassword(password: string) {
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthMessage("");
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) {
+        setAuthError("Não foi possível redefinir a senha. Abra novamente o link de recuperação.");
+        setAuthLoading(false);
+        return;
+      }
+      setAuthMode("login");
+      setAuthMessage("Senha redefinida. Entre novamente com a nova senha.");
+      window.history.replaceState({}, document.title, window.location.pathname);
+      await supabase.auth.signOut();
+      setAuthLoading(false);
+      return;
+    }
+    setAuthMode("login");
+    setAuthMessage("Senha redefinida no modo local.");
+    setAuthLoading(false);
+  }
+
+  async function handleLogout() {
+    if (supabase && isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
+    setLoggedIn(false);
+    setProfileOpen(false);
+    setAuthMode("login");
+  }
+
+  async function handleRetryApproval() {
+    setAuthLoading(true);
+    setAuthError("");
+    await loadCurrentSession();
+    setAuthLoading(false);
+  }
+
+  function changeAuthMode(mode: AuthMode) {
+    setAuthMode(mode);
+    setAuthError("");
+    setAuthMessage("");
+  }
+
+  /*
+  async function handleLegacyLogin(email: string, password: string) {
+    if (supabase && isSupabaseConfigured) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (!error && data.user) {
+        setLoggedIn(true);
+        return;
+      }
+    }
+
+    const fallback = profiles.find((profile) => profile.email.toLowerCase() === email.toLowerCase()) ?? profiles[0];
+    setCurrentUserId(fallback.id);
+    setLoggedIn(true);
+  }
+  */
+
+  async function uploadProfilePhoto(profileId: string, file: File) {
+    let avatarUrl = URL.createObjectURL(file);
+    if (supabase) {
+      const path = `avatars/${profileId}-${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from("profile-avatars").upload(path, file, { upsert: true });
+      if (!error) {
+        avatarUrl = supabase.storage.from("profile-avatars").getPublicUrl(path).data.publicUrl;
+      }
+    }
+    syncProfiles((current) => current.map((profile) => (profile.id === profileId ? { ...profile, avatarUrl } : profile)));
+  }
+
+  function updateTask(taskId: string, updater: (task: Task) => Task) {
+    syncTasks((current) => current.map((task) => (task.id === taskId ? updater(task) : task)));
+  }
+
+  async function addTaskAttachment(taskId: string, file: File) {
+    const type = file.type.startsWith("image/") ? "foto" : file.type.startsWith("video/") ? "video" : "arquivo";
+    let url = URL.createObjectURL(file);
+    if (supabase) {
+      const path = `${taskId}/${Date.now()}-${file.name}`;
+      const { error } = await supabase.storage.from("task-attachments").upload(path, file);
+      if (!error) url = supabase.storage.from("task-attachments").getPublicUrl(path).data.publicUrl;
+    }
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: file.name, type, url };
+    updateTask(taskId, (task) => ({ ...task, attachments: [attachment, ...task.attachments] }));
+  }
+
+  function createNotifications(userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) {
+    const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
+    if (!uniqueUserIds.length) return;
+    const createdAt = new Date().toISOString();
+    const newNotifications = uniqueUserIds.map((userId): Notification => ({
+      id: crypto.randomUUID(),
+      userId,
+      title,
+      description,
+      createdAt,
+      read: false,
+      targetKind,
+      targetId
+    }));
+    syncNotifications((current) => [...newNotifications, ...current]);
+  }
+
+  function reviewRecipients(post: EditorialPost) {
+    const assignedManagers = post.assignedTo.filter((profileId) => {
+      const role = profileById.get(profileId)?.role;
+      return role === "admin" || role === "gestor";
+    });
+    const fallbackManagers = profiles.filter((profile) => profile.role === "admin" || profile.role === "gestor").map((profile) => profile.id);
+    return (assignedManagers.length ? assignedManagers : fallbackManagers).filter((profileId) => profileId !== currentUser.id);
+  }
+
+  async function addPostReviewAssets(post: EditorialPost, files: FileList | File[]) {
+    const uploaded: PostReviewAsset[] = [];
+    for (const file of Array.from(files)) {
+      const type = file.type.startsWith("image/") ? "foto" : file.type.startsWith("video/") ? "video" : "arquivo";
+      let url = URL.createObjectURL(file);
+      if (supabase) {
+        const path = `${post.id}/${Date.now()}-${file.name}`;
+        const { error } = await supabase.storage.from("post-review-assets").upload(path, file);
+        if (!error) url = supabase.storage.from("post-review-assets").getPublicUrl(path).data.publicUrl;
+      }
+      uploaded.push({
+        id: crypto.randomUUID(),
+        postId: post.id,
+        name: file.name,
+        type,
+        url,
+        status: "Aguardando revisão",
+        uploadedBy: currentUser.id,
+        reviewedBy: "",
+        uploadedAt: new Date().toISOString(),
+        reviewedAt: "",
+        comments: []
+      });
+    }
+    if (!uploaded.length) return;
+    syncPostReviewAssets((current) => [...uploaded, ...current]);
+    createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
+  }
+
+  function updatePostReviewAsset(assetId: string, updater: (asset: PostReviewAsset) => PostReviewAsset) {
+    syncPostReviewAssets((current) => current.map((asset) => (asset.id === assetId ? updater(asset) : asset)));
+  }
+
+  function setReviewAssetStatus(assetId: string, status: ReviewAssetStatus, message = "") {
+    const asset = postReviewAssets.find((item) => item.id === assetId);
+    const post = asset ? posts.find((item) => item.id === asset.postId) : undefined;
+    if (!asset || !post) return;
+    updatePostReviewAsset(assetId, (current) => ({
+      ...current,
+      status,
+      reviewedBy: currentUser.id,
+      reviewedAt: new Date().toISOString(),
+      comments: message
+        ? [{ id: crypto.randomUUID(), assetId, authorId: currentUser.id, message, createdAt: new Date().toISOString() }, ...current.comments]
+        : current.comments
+    }));
+    createNotifications([asset.uploadedBy].filter((id) => id !== currentUser.id), status === "Aprovado" ? "Arte aprovada" : "Ajustes solicitados", post.title, "review", asset.id);
+  }
+
+  function addReviewComment(assetId: string, message: string) {
+    if (!message.trim()) return;
+    updatePostReviewAsset(assetId, (asset) => ({
+      ...asset,
+      comments: [{ id: crypto.randomUUID(), assetId, authorId: currentUser.id, message: message.trim(), createdAt: new Date().toISOString() }, ...asset.comments]
+    }));
+  }
+
+  function addQuickTask(columnId: string, title: string) {
+    syncTasks((current) => [
+      ...current,
+      {
+        id: crypto.randomUUID(),
+        title,
+        columnId,
+        order: current.filter((task) => task.columnId === columnId).length + 1,
+        priority: "Média",
+        progress: "No prazo",
+        createdBy: currentUser.id,
+        assignedTo: [currentUser.id],
+        relatedTo: "",
+        funnelStageId: funnelStages[0]?.id ?? "",
+        dueDate: todayIso(),
+        description: "",
+        checklist: [],
+        comments: [],
+        attachments: []
+      }
+    ]);
+  }
+
+  function addSubtask(parentTask: Task, title = "Novo subtópico") {
+    const cleanTitle = title.trim();
+    if (!cleanTitle) return;
+    const subtask: Task = {
+      id: crypto.randomUUID(),
+      title: cleanTitle,
+      columnId: parentTask.columnId,
+      order: tasks.filter((task) => task.parentTaskId === parentTask.id).length + 1,
+      priority: "Média",
+      progress: "No prazo",
+      createdBy: currentUser.id,
+      assignedTo: [currentUser.id],
+      relatedTo: parentTask.title,
+      funnelStageId: parentTask.funnelStageId,
+      parentTaskId: parentTask.id,
+      dueDate: todayIso(),
+      description: "",
+      checklist: [],
+      comments: [],
+      attachments: []
+    };
+    syncTasks((current) => [...current, subtask]);
+  }
+
+  if (!loggedIn) {
+    return (
+      <LoginScreen
+        profiles={profiles}
+        mode={authMode}
+        setMode={changeAuthMode}
+        loading={authLoading}
+        message={authMessage}
+        error={authError}
+        onLogin={handleLogin}
+        onSignup={handleSignup}
+        onForgotPassword={handleForgotPassword}
+        onResetPassword={handleResetPassword}
+        onRetryApproval={handleRetryApproval}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  return (
+    <main className="min-h-screen bg-slate-100 text-slate-950">
+      <div className="grid min-h-screen lg:grid-cols-[276px_1fr]">
+        <aside className="border-r border-slate-200 bg-white px-5 py-5">
+          <div className="flex items-center gap-3">
+            <Image src="/embrepoli-logo.png" alt="Logo Embrepoli" width={58} height={58} className="h-14 w-14 object-contain" priority />
+            <div>
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-700">Embrepoli</p>
+              <h1 className="text-xl font-black">Marketing</h1>
+            </div>
+          </div>
+          <nav className="mt-8 space-y-2">
+            {menu.map((item) => {
+              const Icon = item.icon;
+              const selected = activeSection === item.id;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveSection(item.id)}
+                  className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-black transition ${
+                    selected ? "bg-blue-700 text-white shadow-lg shadow-blue-700/20" : "text-slate-600 hover:bg-blue-50 hover:text-blue-800"
+                  }`}
+                >
+                  <Icon size={18} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+
+        <section className="min-w-0 px-4 py-5 md:px-8">
+          <Header
+            activeSection={activeSection}
+            currentUser={currentUser}
+            profileOpen={profileOpen}
+            setProfileOpen={setProfileOpen}
+            uploadProfilePhoto={uploadProfilePhoto}
+            setModal={setModal}
+            notifications={currentNotifications}
+            notificationsOpen={notificationsOpen}
+            setNotificationsOpen={setNotificationsOpen}
+            setNotifications={syncNotifications}
+            postReviewAssets={postReviewAssets}
+            saveStatus={saveStatus}
+            saveError={saveError}
+            logout={handleLogout}
+          />
+
+          {activeSection === "painel" && (
+            <Dashboard posts={visiblePosts} tasks={visibleTasks} campaigns={visibleCampaigns} metrics={metrics} funnelStages={funnelStages} channelById={channelById} />
+          )}
+          {activeSection === "calendario" && (
+            <EditorialCalendar
+              posts={visiblePosts}
+              setPosts={syncPosts}
+              channels={channels}
+              campaigns={campaigns}
+              productLines={productLines}
+              vehicleTypes={vehicleTypes}
+              contentTypes={contentTypes}
+              funnelStages={funnelStages}
+              profiles={profiles}
+              channelById={channelById}
+              funnelById={funnelById}
+              calendarMode={calendarMode}
+              setCalendarMode={setCalendarMode}
+              visibleMonth={visibleMonth}
+              setVisibleMonth={setVisibleMonth}
+              setModal={setModal}
+            />
+          )}
+          {activeSection === "ideias" && (
+            <Ideas ideas={visibleIdeas} setIdeas={syncIdeas} view={ideasView} setView={setIdeasView} activeTab={ideasTab} setActiveTab={setIdeasTab} channelById={channelById} lineById={lineById} vehicleTypeById={vehicleTypeById} contentTypeById={contentTypeById} funnelById={funnelById} profileById={profileById} setModal={setModal} />
+          )}
+          {activeSection === "tarefas" && (
+            <Tasks
+              tasks={visibleTasks}
+              allTasks={tasks}
+              setTasks={syncTasks}
+              taskBoards={taskBoards}
+              setTaskBoards={syncTaskBoards}
+              posts={posts}
+              setPosts={syncPosts}
+              activeTaskBoardId={activeTaskBoardId}
+              setActiveTaskBoardId={setActiveTaskBoardId}
+              taskColumns={taskColumns}
+              setTaskColumns={syncTaskColumns}
+              profileById={profileById}
+              channelById={channelById}
+              funnelById={funnelById}
+              setModal={setModal}
+              addQuickTask={addQuickTask}
+            />
+          )}
+          {activeSection === "campanhas" && (
+            <Campaigns campaigns={visibleCampaigns} lineById={lineById} vehicleTypeById={vehicleTypeById} funnelById={funnelById} profileById={profileById} setModal={setModal} />
+          )}
+          {activeSection === "metricas" && (
+            <Metrics
+              metrics={metrics}
+              posts={posts}
+              campaigns={campaigns}
+              channels={channels}
+              productLines={productLines}
+              vehicleTypes={vehicleTypes}
+              contentTypes={contentTypes}
+              funnelStages={funnelStages}
+              currentUser={currentUser}
+              taskColumns={taskColumns}
+              setTasks={syncTasks}
+              setIdeas={syncIdeas}
+              channelById={channelById}
+              lineById={lineById}
+              vehicleTypeById={vehicleTypeById}
+              contentTypeById={contentTypeById}
+              funnelById={funnelById}
+              setModal={setModal}
+            />
+          )}
+          {activeSection === "configuracoes" && (
+            <SettingsPanel
+              currentUser={currentUser}
+              profiles={profiles}
+              channels={channels}
+              productLines={productLines}
+              vehicleTypes={vehicleTypes}
+              contentTypes={contentTypes}
+              funnelStages={funnelStages}
+              configTab={configTab}
+              setConfigTab={setConfigTab}
+              setProfiles={syncProfiles}
+              setChannels={syncChannels}
+              setProductLines={syncProductLines}
+              setVehicleTypes={syncVehicleTypes}
+              setContentTypes={syncContentTypes}
+              setFunnelStages={syncFunnelStages}
+              uploadProfilePhoto={uploadProfilePhoto}
+              setModal={setModal}
+            />
+          )}
+        </section>
+      </div>
+
+      <EntityModal
+        modal={modal}
+        setModal={setModal}
+        currentUser={currentUser}
+        profiles={profiles}
+        profileById={profileById}
+        channels={channels}
+        productLines={productLines}
+        vehicleTypes={vehicleTypes}
+        contentTypes={contentTypes}
+        funnelStages={funnelStages}
+        campaigns={campaigns}
+        posts={posts}
+        setPosts={syncPosts}
+        postReviewAssets={postReviewAssets}
+        addPostReviewAssets={addPostReviewAssets}
+        setReviewAssetStatus={setReviewAssetStatus}
+        addReviewComment={addReviewComment}
+        ideas={ideas}
+        setIdeas={syncIdeas}
+        setCampaigns={syncCampaigns}
+        metrics={metrics}
+        setMetrics={syncMetrics}
+        setProfiles={syncProfiles}
+        uploadProfilePhoto={uploadProfilePhoto}
+        tasks={tasks}
+        setTasks={syncTasks}
+        taskColumns={taskColumns}
+        updateTask={updateTask}
+        addTaskAttachment={addTaskAttachment}
+        addSubtask={addSubtask}
+      />
+    </main>
+  );
+}
+
+function LoginScreen({
+  profiles,
+  mode,
+  setMode,
+  loading,
+  message,
+  error,
+  onLogin,
+  onSignup,
+  onForgotPassword,
+  onResetPassword,
+  onRetryApproval,
+  onLogout
+}: {
+  profiles: Profile[];
+  mode: AuthMode;
+  setMode: (mode: AuthMode) => void;
+  loading: boolean;
+  message: string;
+  error: string;
+  onLogin: (email: string, password: string) => void;
+  onSignup: (name: string, email: string, password: string) => void;
+  onForgotPassword: (email: string) => void;
+  onResetPassword: (password: string) => void;
+  onRetryApproval: () => void;
+  onLogout: () => void;
+}) {
+  const [localError, setLocalError] = useState("");
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLocalError("");
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "");
+    const password = String(form.get("password") ?? "");
+    const confirmPassword = String(form.get("confirmPassword") ?? "");
+    const name = String(form.get("name") ?? "");
+    if (mode === "signup" && password !== confirmPassword) {
+      setLocalError("As senhas não conferem.");
+      return;
+    }
+    if (mode === "login") onLogin(email, password);
+    if (mode === "signup") onSignup(name, email, password);
+    if (mode === "forgot") onForgotPassword(email);
+    if (mode === "reset") onResetPassword(password);
+  }
+
+  const title = mode === "signup" ? "Criar conta" : mode === "forgot" ? "Recuperar senha" : mode === "reset" ? "Nova senha" : mode === "pending" ? "Aguardando aprovação" : "Entrar";
+  const subtitle = mode === "pending"
+    ? "Sua conta já existe, mas precisa ser aprovada por um Gestor ou Administrador."
+    : mode === "signup"
+      ? "Crie sua conta. O acesso completo será liberado após aprovação."
+      : mode === "forgot"
+        ? "Informe seu email para receber o link de recuperação."
+        : mode === "reset"
+          ? "Digite uma nova senha para sua conta."
+          : "Entre com sua conta da equipe para acessar o sistema.";
+
+  return (
+    <main className="grid min-h-screen place-items-center bg-slate-100 px-4">
+      <section className="w-full max-w-md rounded-[34px] bg-white p-8 shadow-2xl shadow-blue-950/10">
+        <Image src="/embrepoli-logo.png" alt="Logo Embrepoli" width={110} height={110} className="mx-auto h-28 w-28 object-contain" priority />
+        <h1 className="mt-5 text-center text-3xl font-black">Embrepoli Marketing</h1>
+        <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1">
+          <button type="button" onClick={() => setMode("login")} className={`rounded-xl px-3 py-2 text-sm font-black ${mode === "login" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Entrar</button>
+          <button type="button" onClick={() => setMode("signup")} className={`rounded-xl px-3 py-2 text-sm font-black ${mode === "signup" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Criar conta</button>
+        </div>
+        <h2 className="mt-6 text-xl font-black">{title}</h2>
+        <p className="mt-2 text-sm text-slate-500">{subtitle}</p>
+        {message && <p className="mt-4 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700">{message}</p>}
+        {(error || localError) && <p className="mt-4 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error || localError}</p>}
+
+        {mode === "pending" ? (
+          <div className="mt-6 space-y-3">
+            <button type="button" onClick={onRetryApproval} disabled={loading} className="w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950 disabled:opacity-60">
+              {loading ? "Verificando..." : "Verificar aprovação"}
+            </button>
+            <button type="button" onClick={onLogout} className="w-full rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600">Sair desta conta</button>
+          </div>
+        ) : (
+          <form onSubmit={submit} className="mt-6 space-y-3">
+            {mode === "signup" && <TextInput name="name" label="Nome" required />}
+            {mode !== "reset" && <TextInput name="email" label="Email" type="email" required defaultValue={!isSupabaseConfigured && mode === "login" ? profiles[0]?.email : ""} />}
+            {mode !== "forgot" && <PasswordInput name="password" label={mode === "reset" ? "Nova senha" : "Senha"} required defaultValue={!isSupabaseConfigured && mode === "login" ? "embrepoli" : ""} />}
+            {mode === "signup" && <PasswordInput name="confirmPassword" label="Confirmar senha" required />}
+            <SubmitButton full>{loading ? "Aguarde..." : mode === "signup" ? "Criar conta" : mode === "forgot" ? "Enviar link" : mode === "reset" ? "Salvar nova senha" : "Entrar"}</SubmitButton>
+          </form>
+        )}
+
+        {mode === "login" && <button type="button" onClick={() => setMode("forgot")} className="mt-4 w-full text-center text-sm font-black text-blue-700">Esqueci minha senha</button>}
+        {(mode === "forgot" || mode === "reset") && <button type="button" onClick={() => setMode("login")} className="mt-4 w-full text-center text-sm font-black text-blue-700">Voltar para entrar</button>}
+        {!isSupabaseConfigured && <p className="mt-4 text-center text-xs text-slate-400">Sem Supabase configurado, o login usa as contas locais de demonstração.</p>}
+      </section>
+    </main>
+  );
+}
+
+function PasswordInput({ name, label, required, defaultValue = "" }: { name: string; label: string; required?: boolean; defaultValue?: string }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label className="block text-sm font-bold text-slate-600">
+      {label}
+      <span className="mt-1 flex rounded-2xl border border-slate-200 bg-white focus-within:border-blue-500">
+        <input name={name} type={visible ? "text" : "password"} required={required} defaultValue={defaultValue} className="min-w-0 flex-1 rounded-2xl px-3 py-2 text-slate-950 outline-none" />
+        <button type="button" onClick={() => setVisible((value) => !value)} className="px-3 text-slate-500" aria-label={visible ? "Ocultar senha" : "Mostrar senha"}>
+          {visible ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </span>
+    </label>
+  );
+}
+function Header({
+  activeSection,
+  currentUser,
+  profileOpen,
+  setProfileOpen,
+  uploadProfilePhoto,
+  setModal,
+  notifications,
+  notificationsOpen,
+  setNotificationsOpen,
+  setNotifications,
+  postReviewAssets,
+  saveStatus,
+  saveError,
+  logout
+}: {
+  activeSection: string;
+  currentUser: Profile;
+  profileOpen: boolean;
+  setProfileOpen: Dispatch<SetStateAction<boolean>>;
+  uploadProfilePhoto: (profileId: string, file: File) => void;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+  notifications: Notification[];
+  notificationsOpen: boolean;
+  setNotificationsOpen: Dispatch<SetStateAction<boolean>>;
+  setNotifications: Dispatch<SetStateAction<Notification[]>>;
+  postReviewAssets: PostReviewAsset[];
+  saveStatus: SaveStatus;
+  saveError: string;
+  logout: () => void;
+}) {
+  const title = menu.find((item) => item.id === activeSection)?.label ?? "Painel";
+  const unreadCount = notifications.filter((item) => !item.read && !item.id.startsWith("task-assigned:")).length;
+  function openNotification(notification: Notification) {
+    if (!notification.id.startsWith("task-assigned:")) {
+      setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, read: true } : item));
+    }
+    setNotificationsOpen(false);
+    if (notification.targetKind === "task") {
+      setModal({ kind: "task", id: notification.targetId });
+      return;
+    }
+    if (notification.targetKind === "review") {
+      const asset = postReviewAssets.find((item) => item.id === notification.targetId);
+      if (asset) setModal({ kind: "post", id: asset.postId });
+      return;
+    }
+    setModal({ kind: "post", id: notification.targetId });
+  }
+  return (
+    <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+      <div>
+        <p className="text-sm font-bold text-blue-700">Embrepoli Kits Turbo e Intercooler</p>
+        <h2 className="mt-1 text-3xl font-black">{title}</h2>
+      </div>
+      <div className="flex items-start gap-3">
+        {saveStatus !== "idle" && (
+          <div className={`hidden rounded-2xl px-3 py-2 text-xs font-black md:block ${saveStatus === "error" ? "bg-rose-100 text-rose-700" : saveStatus === "saving" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`} title={saveError || undefined}>
+            {saveStatus === "saving" ? "Salvando..." : saveStatus === "error" ? "Erro ao salvar" : "Salvo"}
+          </div>
+        )}
+        <div className="relative">
+          <button onClick={() => setNotificationsOpen((value) => !value)} className="relative rounded-3xl border border-slate-200 bg-white p-3 shadow-sm" title="Notificações">
+            <Bell size={20} className="text-slate-600" />
+            {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-rose-600 px-1 text-[10px] font-black text-white">{unreadCount}</span>}
+          </button>
+          {notificationsOpen && (
+            <div className="absolute right-0 z-30 mt-3 w-96 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl animate-fade-in-up">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="font-black">Notificações</h3>
+                <button onClick={() => setNotifications((current) => current.map((item) => item.userId === currentUser.id ? { ...item, read: true } : item))} className="text-xs font-black text-blue-700">Marcar lidas</button>
+              </div>
+              <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+                {notifications.map((notification) => (
+                  <button key={notification.id} onClick={() => openNotification(notification)} className={`w-full rounded-2xl p-3 text-left transition hover:bg-blue-50 ${notification.read ? "bg-white" : "bg-blue-50"}`}>
+                    <p className="text-sm font-black">{notification.title}</p>
+                    <p className="mt-1 line-clamp-2 text-xs font-bold text-slate-500">{notification.description}</p>
+                    <p className="mt-2 text-[11px] font-bold text-slate-400">{formatDate(notification.createdAt)}</p>
+                  </button>
+                ))}
+                {!notifications.length && <p className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">Nenhuma notificação por enquanto.</p>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="relative">
+        <button onClick={() => setProfileOpen((value) => !value)} className="flex items-center gap-3 rounded-3xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
+          <Avatar profile={currentUser} size="sm" />
+          <div className="hidden text-left sm:block">
+            <p className="text-sm font-black">{currentUser.name}</p>
+            <p className="text-xs text-slate-500">{roleLabel[currentUser.role]}</p>
+          </div>
+          <ChevronDown size={17} className="text-slate-500" />
+        </button>
+        {profileOpen && (
+          <div className="absolute right-0 z-30 mt-3 w-80 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl animate-fade-in-up">
+            <div className="flex items-center gap-3">
+              <Avatar profile={currentUser} size="lg" />
+              <div className="min-w-0">
+                <p className="truncate font-black">{currentUser.name}</p>
+                <p className="truncate text-sm text-slate-500">{currentUser.email}</p>
+                <Badge tone="blue">{roleLabel[currentUser.role]}</Badge>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                setModal({ kind: "profile" });
+                setProfileOpen(false);
+              }}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700"
+            >
+              Editar perfil
+            </button>
+            <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700">
+              <Camera size={16} />
+              Trocar foto
+              <input type="file" accept="image/*" className="hidden" onChange={(event) => event.target.files?.[0] && uploadProfilePhoto(currentUser.id, event.target.files[0])} />
+            </label>
+            <button onClick={logout} className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-3 py-2 text-sm font-black text-white">
+              <LogOut size={16} />
+              Sair
+            </button>
+          </div>
+        )}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function Dashboard({
+  posts,
+  tasks,
+  campaigns,
+  metrics,
+  funnelStages,
+  channelById
+}: {
+  posts: EditorialPost[];
+  tasks: Task[];
+  campaigns: Campaign[];
+  metrics: PostMetric[];
+  funnelStages: FunnelStage[];
+  channelById: Map<string, Channel>;
+}) {
+  const reach = metrics.reduce((sum, metric) => sum + metric.reach, 0);
+  const leads = metrics.reduce((sum, metric) => sum + metric.leads, 0);
+  const week = makeWeek(new Date(2026, 4, 11));
+  const chartData = metrics.map((metric) => ({ name: metric.postTitle.slice(0, 14), alcance: metric.reach, leads: metric.leads }));
+  const bestMetric = metrics.slice().sort((a, b) => b.leads - a.leads || metricEngagement(b) - metricEngagement(a))[0];
+  const postsWithoutMetric = posts.filter((post) => !metrics.some((metric) => metric.postId === post.id || metric.postTitle === post.title));
+  const bestChannelId = Object.entries(metrics.reduce<Record<string, number>>((acc, metric) => {
+    acc[metric.channelId] = (acc[metric.channelId] ?? 0) + metric.leads;
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1])[0]?.[0];
+  const funnelData = funnelStages.map((stage) => ({
+    name: stage.name,
+    value: posts.filter((post) => post.funnelStageId === stage.id).length + campaigns.filter((campaign) => campaign.funnelStageId === stage.id).length,
+    color: stage.color
+  }));
+
+  return (
+    <div className="space-y-6 animate-task-switch">
+      <div className="grid gap-4 md:grid-cols-4">
+        <Stat label="Alcance" value={formatNumber(reach)} icon={BarChart3} />
+        <Stat label="Leads" value={formatNumber(leads)} icon={CheckCircle2} />
+        <Stat label="Posts" value={posts.length} icon={CalendarDays} />
+        <Stat label="Tarefas" value={tasks.length} icon={KanbanSquare} />
+      </div>
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="rounded-[28px] border border-blue-100 bg-blue-50 p-4">
+          <p className="text-sm font-black text-blue-700">Melhor conteúdo</p>
+          <h3 className="mt-2 line-clamp-2 font-black">{bestMetric?.postTitle ?? "Sem métricas ainda"}</h3>
+          <p className="mt-2 text-sm font-bold text-slate-600">{bestMetric ? `${bestMetric.leads} leads · ${formatPercent(metricEngagementRate(bestMetric))} engajamento` : "Cadastre métricas para comparar resultados."}</p>
+        </div>
+        <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
+          <p className="text-sm font-black text-slate-500">Canal com melhor resultado</p>
+          <h3 className="mt-2 font-black">{channelById.get(bestChannelId ?? "")?.name ?? "Sem dados"}</h3>
+          <p className="mt-2 text-sm font-bold text-slate-500">Baseado em leads registrados.</p>
+        </div>
+        <div className="rounded-[28px] border border-amber-100 bg-amber-50 p-4">
+          <p className="text-sm font-black text-amber-700">Posts sem métrica</p>
+          <h3 className="mt-2 text-2xl font-black">{postsWithoutMetric.length}</h3>
+          <p className="mt-2 text-sm font-bold text-slate-600">Itens que ainda precisam de acompanhamento.</p>
+        </div>
+      </div>
+      <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
+        <Panel title="Desempenho">
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip />
+                <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe" />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </Panel>
+        <Panel title="Funil">
+          <div className="h-72">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={funnelData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={94}>
+                  {funnelData.map((item) => <Cell key={item.name} fill={item.color} />)}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </Panel>
+      </div>
+      <Panel title="Mini calendário da semana">
+        <div className="grid grid-cols-7 gap-2">
+          {week.map((day) => (
+            <div key={day.toISOString()} className="min-h-32 rounded-3xl bg-slate-50 p-3">
+              <p className="text-xs font-black uppercase text-slate-500">{day.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit" })}</p>
+              {posts.filter((post) => sameDay(new Date(post.publishAt), day)).map((post) => (
+                <div key={post.id} className="mt-2 rounded-2xl bg-blue-700 p-2 text-xs font-black text-white">
+                  {new Date(post.publishAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })} {channelById.get(post.channelId)?.name}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function EditorialCalendar(props: {
+  posts: EditorialPost[];
+  setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
+  channels: Channel[];
+  campaigns: Campaign[];
+  productLines: ProductLine[];
+  vehicleTypes: VehicleType[];
+  contentTypes: ContentType[];
+  funnelStages: FunnelStage[];
+  profiles: Profile[];
+  channelById: Map<string, Channel>;
+  funnelById: Map<string, FunnelStage>;
+  calendarMode: "Semana" | "Mês" | "Ano";
+  setCalendarMode: Dispatch<SetStateAction<"Semana" | "Mês" | "Ano">>;
+  visibleMonth: Date;
+  setVisibleMonth: Dispatch<SetStateAction<Date>>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  const days = props.calendarMode === "Semana" ? makeWeek(props.visibleMonth) : makeMonth(props.visibleMonth);
+  const periodLabel = props.calendarMode === "Semana"
+    ? `${formatDateOnly(days[0])} - ${formatDateOnly(days[6])}`
+    : props.calendarMode === "Mês"
+      ? new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(props.visibleMonth)
+      : String(props.visibleMonth.getFullYear());
+
+  function movePeriod(direction: -1 | 1) {
+    props.setVisibleMonth((current) => {
+      const next = new Date(current);
+      if (props.calendarMode === "Semana") next.setDate(next.getDate() + direction * 7);
+      if (props.calendarMode === "Mês") next.setMonth(next.getMonth() + direction);
+      if (props.calendarMode === "Ano") next.setFullYear(next.getFullYear() + direction);
+      return next;
+    });
+  }
+
+  function goToToday() {
+    props.setVisibleMonth(new Date());
+    if (props.calendarMode === "Ano") props.setCalendarMode("Mês");
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const postId = String(event.active.id).replace("post:", "");
+    const target = String(event.over?.id ?? "");
+    if (!target.startsWith("day:") && !target.startsWith("hour:")) {
+      return;
+    }
+    const [, dayPart, hourPart] = target.split(":");
+    const day = new Date(dayPart);
+    props.setPosts((current) =>
+      current.map((post) => {
+        if (post.id !== postId) return post;
+        const currentDate = new Date(post.publishAt);
+        day.setHours(hourPart ? Number(hourPart) : currentDate.getHours(), hourPart ? 0 : currentDate.getMinutes(), 0, 0);
+        return { ...post, publishAt: day.toISOString().slice(0, 16) };
+      })
+    );
+  }
+
+  return (
+    <Panel
+      title="Calendário editorial"
+      action={
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="mr-1 flex items-center gap-2 rounded-2xl bg-slate-100 p-1">
+            <button type="button" onClick={() => movePeriod(-1)} className="rounded-xl bg-white px-3 py-2 text-sm font-black text-slate-700 shadow-sm">‹</button>
+            <span className="min-w-36 px-2 text-center text-sm font-black text-slate-700 capitalize">{periodLabel}</span>
+            <button type="button" onClick={() => movePeriod(1)} className="rounded-xl bg-white px-3 py-2 text-sm font-black text-slate-700 shadow-sm">›</button>
+          </div>
+          <button type="button" onClick={goToToday} className="rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 transition hover:bg-blue-100">
+            Hoje
+          </button>
+          <RoundAdd onClick={() => props.setModal({ kind: "post" })} label="Adicionar post" />
+          {(["Semana", "Mês", "Ano"] as const).map((mode) => (
+            <button key={mode} onClick={() => props.setCalendarMode(mode)} className={`rounded-2xl px-3 py-2 text-sm font-black ${props.calendarMode === mode ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+              {mode}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      <div key={`${props.calendarMode}-${props.visibleMonth.toISOString()}`} className="animate-fade-in-up">
+        {props.calendarMode === "Ano" ? (
+          <YearPicker visibleMonth={props.visibleMonth} setVisibleMonth={props.setVisibleMonth} setCalendarMode={props.setCalendarMode} />
+        ) : (
+          <DndContext collisionDetection={pointerWithin} onDragEnd={handleDragEnd}>
+            {props.calendarMode === "Semana" ? (
+              <WeekCalendar days={days} posts={props.posts} channelById={props.channelById} funnelById={props.funnelById} setModal={props.setModal} />
+            ) : (
+              <>
+                <div className="mb-3 grid grid-cols-7 gap-2 text-center text-xs font-black uppercase text-slate-500">
+                  {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((day) => <span key={day}>{day}</span>)}
+                </div>
+                <div className="grid grid-cols-7 gap-2">
+                  {days.map((day) => (
+                    <CalendarDay
+                      key={day.toISOString()}
+                      day={day}
+                      posts={props.posts.filter((post) => sameDay(new Date(post.publishAt), day))}
+                      channelById={props.channelById}
+                      funnelById={props.funnelById}
+                      setModal={props.setModal}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </DndContext>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function CalendarDay({
+  day,
+  posts,
+  channelById,
+  funnelById,
+  setModal
+}: {
+  day: Date;
+  posts: EditorialPost[];
+  channelById: Map<string, Channel>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `day:${day.toISOString()}` });
+  function createPostOnDay() {
+    const date = new Date(day);
+    date.setHours(9, 0, 0, 0);
+    setModal({ kind: "post", date });
+  }
+  return (
+    <div ref={setNodeRef} onClick={createPostOnDay} className={`min-h-36 cursor-pointer rounded-3xl border p-2 text-left motion-smooth ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title="Criar post neste dia">
+      <p className="text-sm font-black text-slate-700">{day.getDate()}</p>
+      <div className="mt-2 space-y-2">
+        {posts.map((post) => (
+          <DraggablePost key={post.id} post={post} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WeekCalendar({
+  days,
+  posts,
+  channelById,
+  funnelById,
+  setModal
+}: {
+  days: Date[];
+  posts: EditorialPost[];
+  channelById: Map<string, Channel>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  const [showEarlyHours, setShowEarlyHours] = useState(false);
+  const [showLateHours, setShowLateHours] = useState(false);
+  const earlyHours = [0, 1, 2, 3, 4, 5];
+  const mainHours = Array.from({ length: 16 }, (_, index) => index + 6);
+  const lateHours = [22, 23];
+  const earlyCount = posts.filter((post) => {
+    const hour = new Date(post.publishAt).getHours();
+    return earlyHours.includes(hour);
+  }).length;
+  const lateCount = posts.filter((post) => {
+    const hour = new Date(post.publishAt).getHours();
+    return lateHours.includes(hour);
+  }).length;
+  const hours = [...(showEarlyHours ? earlyHours : []), ...mainHours, ...(showLateHours ? lateHours : [])];
+
+  return (
+    <div className="overflow-x-auto pb-3">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => setShowEarlyHours((value) => !value)} className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">
+          {showEarlyHours ? "Ocultar madrugada" : "Mostrar 00h-05h"} {earlyCount > 0 && <span className="ml-1 rounded-full bg-blue-700 px-2 py-0.5 text-white">{earlyCount}</span>}
+        </button>
+        <button type="button" onClick={() => setShowLateHours((value) => !value)} className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">
+          {showLateHours ? "Ocultar noite" : "Mostrar 22h-23h"} {lateCount > 0 && <span className="ml-1 rounded-full bg-blue-700 px-2 py-0.5 text-white">{lateCount}</span>}
+        </button>
+      </div>
+      <div className="grid min-w-[980px] grid-cols-[72px_repeat(7,1fr)] gap-2">
+        <div />
+        {days.map((day) => (
+          <div key={day.toISOString()} className="rounded-2xl bg-slate-100 p-2 text-center text-xs font-black uppercase text-slate-600">
+            {day.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit" })}
+          </div>
+        ))}
+        {hours.map((hour) => (
+          <HourRow
+            key={hour}
+            hour={hour}
+            days={days}
+            posts={posts}
+            channelById={channelById}
+            funnelById={funnelById}
+            setModal={setModal}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HourRow({
+  hour,
+  days,
+  posts,
+  channelById,
+  funnelById,
+  setModal
+}: {
+  hour: number;
+  days: Date[];
+  posts: EditorialPost[];
+  channelById: Map<string, Channel>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  return (
+    <>
+      <div className="pt-2 text-right text-xs font-black text-slate-400">{String(hour).padStart(2, "0")}:00</div>
+      {days.map((day) => (
+        <HourCell
+          key={`${day.toISOString()}-${hour}`}
+          day={day}
+          hour={hour}
+          posts={posts.filter((post) => {
+            const date = new Date(post.publishAt);
+            return sameDay(date, day) && date.getHours() === hour;
+          })}
+          channelById={channelById}
+          funnelById={funnelById}
+          setModal={setModal}
+        />
+      ))}
+    </>
+  );
+}
+
+function HourCell({
+  day,
+  hour,
+  posts,
+  channelById,
+  funnelById,
+  setModal
+}: {
+  day: Date;
+  hour: number;
+  posts: EditorialPost[];
+  channelById: Map<string, Channel>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `hour:${day.toISOString()}:${hour}` });
+  function createPostOnHour() {
+    const date = new Date(day);
+    date.setHours(hour, 0, 0, 0);
+    setModal({ kind: "post", date });
+  }
+  return (
+    <div ref={setNodeRef} onClick={createPostOnHour} className={`min-h-24 cursor-pointer rounded-2xl border p-2 text-left motion-smooth ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title={`Criar post às ${String(hour).padStart(2, "0")}:00`}>
+      <div className="space-y-2">
+        {posts.map((post) => (
+          <DraggablePost key={post.id} post={post} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DraggablePost({ post, channel, stage, setModal }: { post: EditorialPost; channel?: Channel; stage?: FunnelStage; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `post:${post.id}` });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Translate.toString(transform), opacity: isDragging ? 0.55 : 1 }}
+      onClick={(event) => event.stopPropagation()}
+      className={`w-full rounded-2xl bg-white p-2 text-left text-xs shadow-sm ${isDragging ? "opacity-60 ring-2 ring-blue-200" : ""}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <button {...attributes} {...listeners} onClick={(event) => event.stopPropagation()} className="rounded-lg bg-slate-100 p-1 text-slate-400 transition hover:bg-blue-100 hover:text-blue-700" title="Arrastar post">
+          <GripVertical size={13} />
+        </button>
+        <button onClick={(event) => { event.stopPropagation(); setModal({ kind: "post", id: post.id }); }} className="min-w-0 flex-1 text-left">
+          <div className="flex items-center gap-1 font-black text-blue-700">
+            <span className="h-2 w-2 rounded-full" style={{ background: channel?.color }} />
+            {new Date(post.publishAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+          </div>
+          <p className="mt-1 line-clamp-2 font-black">{post.title}</p>
+          {stage && <span className="mt-1 inline-flex rounded-xl px-2 py-0.5 text-[10px] font-black text-white" style={{ background: stage.color }}>{stage.name.split(" - ")[0]}</span>}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Tasks(props: {
+  tasks: Task[];
+  allTasks: Task[];
+  setTasks: Dispatch<SetStateAction<Task[]>>;
+  taskBoards: TaskBoard[];
+  setTaskBoards: Dispatch<SetStateAction<TaskBoard[]>>;
+  posts: EditorialPost[];
+  setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
+  activeTaskBoardId: string;
+  setActiveTaskBoardId: Dispatch<SetStateAction<string>>;
+  taskColumns: TaskColumn[];
+  setTaskColumns: Dispatch<SetStateAction<TaskColumn[]>>;
+  profileById: Map<string, Profile>;
+  channelById: Map<string, Channel>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+  addQuickTask: (columnId: string, title: string) => void;
+}) {
+  const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { delay: 120, tolerance: 5 } }));
+  const [taskMenu, setTaskMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
+
+  function addColumn() {
+    const name = window.prompt("Nome da nova coluna");
+    if (!name) return;
+    props.setTaskColumns((current) => [...current, { id: `${props.activeTaskBoardId}-${slug(name)}-${crypto.randomUUID().slice(0, 6)}`, boardId: props.activeTaskBoardId, name, color: "#dbeafe", order: current.filter((column) => column.boardId === props.activeTaskBoardId).length + 1 }]);
+  }
+
+  function addBoard() {
+    const name = window.prompt("Nome do novo quadro");
+    if (!name) return;
+    const boardId = `${slug(name)}-${crypto.randomUUID().slice(0, 6)}`;
+    props.setTaskBoards((current) => [...current, { id: boardId, name, order: current.length + 1, isFixed: false }]);
+    props.setTaskColumns((current) => [
+      ...current,
+      { id: `${boardId}-todo`, boardId, name: "A fazer", color: "#dbeafe", order: 1 },
+      { id: `${boardId}-doing`, boardId, name: "Em andamento", color: "#cffafe", order: 2 },
+      { id: `${boardId}-review`, boardId, name: "Em revisão", color: "#e0e7ff", order: 3 },
+      { id: `${boardId}-done`, boardId, name: "Concluído", color: "#dcfce7", order: 4 }
+    ]);
+    props.setActiveTaskBoardId(boardId);
+  }
+
+  function deleteBoard(board: TaskBoard) {
+    if (board.isFixed) return;
+    if (!window.confirm(`Excluir a aba "${board.name}" e todos os cards dela?`)) return;
+    const columnIds = props.taskColumns.filter((column) => column.boardId === board.id).map((column) => column.id);
+    props.setTasks((current) => current.filter((task) => !columnIds.includes(task.columnId)));
+    props.setTaskColumns((current) => current.filter((column) => column.boardId !== board.id));
+    props.setTaskBoards((current) => current.filter((item) => item.id !== board.id).map((item, index) => ({ ...item, order: index + 1 })));
+    if (props.activeTaskBoardId === board.id) props.setActiveTaskBoardId("tarefas");
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const rawActiveId = String(event.active.id);
+    const overId = String(event.over?.id ?? "");
+    if (!overId) return;
+
+    if (rawActiveId.startsWith("column:") && overId.startsWith("column:")) {
+      const activeColumnId = rawActiveId.replace("column:", "");
+      const overColumnId = overId.replace("column:", "");
+      props.setTaskColumns((current) => {
+        const sorted = current.filter((column) => column.boardId === props.activeTaskBoardId).slice().sort((a, b) => a.order - b.order);
+        const oldIndex = sorted.findIndex((column) => column.id === activeColumnId);
+        const newIndex = sorted.findIndex((column) => column.id === overColumnId);
+        const reordered = arrayMove(sorted, oldIndex, newIndex).map((column, index) => ({
+          ...column,
+          order: index + 1
+        }));
+        return current.map((column) => reordered.find((item) => item.id === column.id) ?? column);
+      });
+      return;
+    }
+
+    if (!rawActiveId.startsWith("task:")) return;
+    const activeId = rawActiveId.replace("task:", "");
+    props.setTasks((current) => {
+      const activeTask = current.find((task) => task.id === activeId);
+      if (!activeTask || activeTask.parentTaskId) return current;
+      const overTask = overId.startsWith("task:") ? current.find((task) => `task:${task.id}` === overId && !task.parentTaskId) : undefined;
+      const targetColumn = overId.startsWith("drop-column:")
+        ? overId.replace("drop-column:", "")
+        : overId.startsWith("column:")
+          ? overId.replace("column:", "")
+        : overId.startsWith("task:")
+          ? overTask?.columnId
+          : undefined;
+      if (!targetColumn) return current;
+      const targetColumnTasks = current.filter((task) => task.columnId === targetColumn && !task.parentTaskId && task.id !== activeId).sort((a, b) => a.order - b.order);
+      const moved = current.map((task) => (task.id === activeId ? { ...task, columnId: targetColumn, order: targetColumnTasks.length + 1 } : task));
+      if (overId.startsWith("task:")) {
+        const overTaskId = overId.replace("task:", "");
+        const columnTasks = moved.filter((task) => task.columnId === targetColumn && !task.parentTaskId);
+        const oldIndex = columnTasks.findIndex((task) => task.id === activeId);
+        const newIndex = columnTasks.findIndex((task) => task.id === overTaskId);
+        if (oldIndex < 0 || newIndex < 0) return moved;
+        const reordered = arrayMove(columnTasks, oldIndex, newIndex).map((task, index) => ({ ...task, order: index + 1 }));
+        return moved.map((task) => reordered.find((item) => item.id === task.id) ?? task);
+      }
+      const reordered = moved
+        .filter((task) => task.columnId === targetColumn && !task.parentTaskId)
+        .sort((a, b) => a.order - b.order)
+        .map((task, index) => ({ ...task, order: index + 1 }));
+      return moved.map((task) => reordered.find((item) => item.id === task.id) ?? task);
+    });
+  }
+
+  const sortedBoards = props.taskBoards.slice().sort((a, b) => a.order - b.order);
+  const activeColumns = props.taskColumns.filter((column) => column.boardId === props.activeTaskBoardId).slice().sort((a, b) => a.order - b.order);
+  const calendarActive = props.activeTaskBoardId === calendarTaskBoardId;
+  const activeTaskMenu = taskMenu ? props.tasks.find((task) => task.id === taskMenu.taskId) : undefined;
+
+  return (
+    <Panel title="Tarefas" action={calendarActive ? <RoundAdd onClick={() => props.setModal({ kind: "post" })} label="Adicionar post" /> : <button onClick={addColumn} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">Nova coluna</button>}>
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        {sortedBoards.map((board) => (
+          <span key={board.id} className={`inline-flex items-center gap-1 rounded-2xl ${props.activeTaskBoardId === board.id ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+            <button
+              type="button"
+              onClick={() => props.setActiveTaskBoardId(board.id)}
+              className="px-4 py-2 text-sm font-black"
+            >
+              {board.name}
+            </button>
+            {!board.isFixed && (
+              <button type="button" onClick={() => deleteBoard(board)} className={`mr-2 rounded-xl p-1 ${props.activeTaskBoardId === board.id ? "hover:bg-blue-800" : "hover:bg-rose-100 hover:text-rose-700"}`} title="Excluir aba">
+                <X size={14} />
+              </button>
+            )}
+          </span>
+        ))}
+        <button
+          type="button"
+          onClick={() => props.setActiveTaskBoardId(calendarTaskBoardId)}
+          className={`rounded-2xl px-4 py-2 text-sm font-black ${calendarActive ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}
+        >
+          Calendário
+        </button>
+        <button type="button" onClick={addBoard} className="grid h-10 w-10 place-items-center rounded-full bg-blue-100 text-blue-700" title="Novo quadro"><Plus size={18} /></button>
+      </div>
+      {calendarActive ? (
+        <CalendarPostsKanban posts={props.posts} setPosts={props.setPosts} channelById={props.channelById} setModal={props.setModal} />
+      ) : (
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+        <div className="overflow-x-auto pb-3">
+          <SortableContext items={activeColumns.map((column) => `column:${column.id}`)} strategy={horizontalListSortingStrategy}>
+            <div className="flex min-w-full gap-4">
+              {activeColumns.map((column) => (
+                <SortableTaskColumn
+                  key={column.id}
+                  column={column}
+                  tasks={props.tasks.filter((task) => task.columnId === column.id && !task.parentTaskId).sort((a, b) => a.order - b.order)}
+                  profileById={props.profileById}
+                  funnelById={props.funnelById}
+                  setModal={props.setModal}
+                  openTaskMenu={(taskId, x, y) => setTaskMenu({ taskId, x, y })}
+                  addQuickTask={props.addQuickTask}
+                  setTaskColumns={props.setTaskColumns}
+                  setTasks={props.setTasks}
+                  allColumns={activeColumns}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </div>
+      </DndContext>
+      )}
+      {taskMenu && activeTaskMenu && (
+        <TaskQuickMenu
+          task={activeTaskMenu}
+          columns={activeColumns}
+          x={taskMenu.x}
+          y={taskMenu.y}
+          close={() => setTaskMenu(null)}
+          setModal={props.setModal}
+          setTasks={props.setTasks}
+        />
+      )}
+    </Panel>
+  );
+}
+
+function SortableTaskColumn(props: {
+  column: TaskColumn;
+  tasks: Task[];
+  profileById: Map<string, Profile>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+  addQuickTask: (columnId: string, title: string) => void;
+  setTaskColumns: Dispatch<SetStateAction<TaskColumn[]>>;
+  setTasks: Dispatch<SetStateAction<Task[]>>;
+  allColumns: TaskColumn[];
+  openTaskMenu: (taskId: string, x: number, y: number) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `column:${props.column.id}` });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.6 : 1 }}
+      className="w-80 shrink-0"
+    >
+      <TaskColumnView {...props} dragHandleProps={{ attributes, listeners }} />
+    </div>
+  );
+}
+
+function TaskColumnView({
+  column,
+  tasks,
+  profileById,
+  funnelById,
+  setModal,
+  addQuickTask,
+  setTaskColumns,
+  setTasks,
+  allColumns,
+  openTaskMenu,
+  dragHandleProps
+}: {
+  column: TaskColumn;
+  tasks: Task[];
+  profileById: Map<string, Profile>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+  addQuickTask: (columnId: string, title: string) => void;
+  setTaskColumns: Dispatch<SetStateAction<TaskColumn[]>>;
+  setTasks: Dispatch<SetStateAction<Task[]>>;
+  allColumns: TaskColumn[];
+  openTaskMenu: (taskId: string, x: number, y: number) => void;
+  dragHandleProps: {
+    attributes: ReturnType<typeof useSortable>["attributes"];
+    listeners: ReturnType<typeof useSortable>["listeners"];
+  };
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `drop-column:${column.id}` });
+  const [quickTitle, setQuickTitle] = useState("");
+  return (
+    <section ref={setNodeRef} className={`min-h-[540px] rounded-[30px] border p-3 motion-smooth ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white"}`}>
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <button {...dragHandleProps.attributes} {...dragHandleProps.listeners} className="rounded-xl bg-slate-100 p-1 text-slate-400" title="Arrastar coluna">
+            <GripVertical size={17} />
+          </button>
+          <input
+            value={column.name}
+            onChange={(event) => setTaskColumns((current) => current.map((item) => item.id === column.id ? { ...item, name: event.target.value } : item))}
+            className="min-w-0 bg-transparent font-black outline-none"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge tone="slate">{tasks.length}</Badge>
+          <button
+            type="button"
+            onClick={() => {
+              if (allColumns.length <= 1) return;
+              if (!window.confirm("Excluir coluna? As tarefas serão movidas para a primeira coluna.")) return;
+              const fallback = allColumns.slice().sort((a, b) => a.order - b.order).find((item) => item.id !== column.id);
+              if (!fallback) return;
+              setTasks((current) => current.map((task) => task.columnId === column.id ? { ...task, columnId: fallback.id } : task));
+              setTaskColumns((current) => current.filter((item) => item.id !== column.id).map((item, index) => ({ ...item, order: index + 1 })));
+            }}
+            className="rounded-xl bg-rose-100 p-1 text-rose-700 motion-smooth hover:bg-rose-200"
+            title="Excluir coluna"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+      </div>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!quickTitle.trim()) return;
+          addQuickTask(column.id, quickTitle);
+          setQuickTitle("");
+        }}
+        className="mb-3 flex gap-2"
+      >
+        <input value={quickTitle} onChange={(event) => setQuickTitle(event.target.value)} placeholder="+ tarefa rápida" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+        <button className="rounded-2xl bg-blue-700 px-3 text-white"><Plus size={16} /></button>
+      </form>
+      <SortableContext items={tasks.map((task) => `task:${task.id}`)} strategy={verticalListSortingStrategy}>
+        <div className={`min-h-80 space-y-3 rounded-[24px] border border-dashed p-2 transition ${isOver ? "border-blue-300 bg-blue-100/50" : "border-transparent"}`}>
+          {tasks.map((task) => (
+            <SortableTaskCard key={task.id} task={task} profileById={profileById} funnelById={funnelById} setModal={setModal} openTaskMenu={openTaskMenu} />
+          ))}
+          {!tasks.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">Solte uma tarefa aqui</div>}
+        </div>
+      </SortableContext>
+    </section>
+  );
+}
+
+function SortableTaskCard({ task, profileById, funnelById, setModal, openTaskMenu }: { task: Task; profileById: Map<string, Profile>; funnelById: Map<string, FunnelStage>; setModal: Dispatch<SetStateAction<ModalState>>; openTaskMenu: (taskId: string, x: number, y: number) => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `task:${task.id}` });
+  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const movedPointer = useRef(false);
+  return (
+    <article
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onPointerDownCapture={(event) => {
+        pointerStart.current = { x: event.clientX, y: event.clientY };
+        movedPointer.current = false;
+      }}
+      onPointerMoveCapture={(event) => {
+        if (!pointerStart.current) return;
+        const distance = Math.hypot(event.clientX - pointerStart.current.x, event.clientY - pointerStart.current.y);
+        if (distance > 6) movedPointer.current = true;
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        if (movedPointer.current) return;
+        openTaskMenu(task.id, event.clientX, event.clientY);
+      }}
+      onClick={() => {
+        if (movedPointer.current) return;
+        setModal({ kind: "task", id: task.id });
+      }}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.55 : 1 }}
+      className={`cursor-grab rounded-3xl border bg-slate-50 p-4 shadow-sm active:cursor-grabbing ${isDragging ? "border-blue-300 opacity-60 ring-2 ring-blue-200" : "border-slate-100 hover:border-blue-200 hover:shadow-md"}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <span className="rounded-xl bg-white p-1 text-slate-400" title="Segure e arraste o card">
+          <GripVertical size={17} />
+        </span>
+        <div className="flex -space-x-2">
+          {task.assignedTo.map((id) => <Avatar key={id} profile={profileById.get(id)} size="xs" />)}
+        </div>
+      </div>
+      <div className="mt-3 w-full text-left">
+        <h4 className="font-black">{task.title}</h4>
+        <p className="mt-2 line-clamp-2 text-sm text-slate-500">{task.description || "Clique para detalhar esta tarefa."}</p>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Badge tone={task.priority === "Alta" ? "red" : task.priority === "Média" ? "blue" : "slate"}>{task.priority}</Badge>
+        <FunnelBadge stage={funnelById.get(task.funnelStageId)} />
+      </div>
+    </article>
+  );
+}
+
+function TaskQuickMenu({ task, columns, x, y, close, setModal, setTasks }: { task: Task; columns: TaskColumn[]; x: number; y: number; close: () => void; setModal: Dispatch<SetStateAction<ModalState>>; setTasks: Dispatch<SetStateAction<Task[]>> }) {
+  return (
+    <div className="fixed z-[70] w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl" style={{ left: x, top: y }} onMouseLeave={close}>
+      <button type="button" onClick={() => { setModal({ kind: "task", id: task.id }); close(); }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black hover:bg-blue-50">Editar</button>
+      <button type="button" onClick={() => { setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id)); close(); }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black text-rose-700 hover:bg-rose-50">Excluir</button>
+      <div className="my-1 border-t border-slate-100" />
+      <p className="px-3 py-1 text-[11px] font-black uppercase text-slate-400">Mover para</p>
+      {columns.map((column) => (
+        <button
+          key={column.id}
+          type="button"
+          onClick={() => {
+            setTasks((current) => current.map((item) => item.id === task.id ? { ...item, columnId: column.id } : item));
+            close();
+          }}
+          className="block w-full rounded-xl px-3 py-2 text-left text-sm font-bold hover:bg-blue-50"
+        >
+          {column.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CalendarPostsKanban({ posts, setPosts, channelById, setModal }: { posts: EditorialPost[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { delay: 120, tolerance: 5 } }));
+  const statuses = [...postStatuses, ...(posts.some((post) => !postStatuses.includes(post.status)) ? ["Outros"] : [])];
+
+  function statusFor(post: EditorialPost) {
+    return postStatuses.includes(post.status) ? post.status : "Outros";
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const activeId = String(event.active.id).replace("calendar-post:", "");
+    const overId = String(event.over?.id ?? "");
+    if (!overId) return;
+    const overPost = overId.startsWith("calendar-post:") ? posts.find((post) => `calendar-post:${post.id}` === overId) : undefined;
+    const targetStatus = overId.startsWith("calendar-status:")
+      ? overId.replace("calendar-status:", "")
+      : overPost
+        ? statusFor(overPost)
+        : "";
+    if (!targetStatus) return;
+
+    setPosts((current) => {
+      const activePost = current.find((post) => post.id === activeId);
+      if (!activePost) return current;
+      const normalizedStatus = targetStatus === "Outros" ? activePost.status : targetStatus;
+      const targetPosts = current.filter((post) => post.id !== activeId && statusFor(post) === targetStatus).sort((a, b) => (a.order ?? 1) - (b.order ?? 1));
+      const moved = current.map((post) => post.id === activeId ? { ...post, status: normalizedStatus, order: targetPosts.length + 1 } : post);
+      if (!overPost) {
+        const reordered = moved.filter((post) => statusFor(post) === targetStatus).sort((a, b) => (a.order ?? 1) - (b.order ?? 1)).map((post, index) => ({ ...post, order: index + 1 }));
+        return moved.map((post) => reordered.find((item) => item.id === post.id) ?? post);
+      }
+      const columnPosts = moved.filter((post) => statusFor(post) === targetStatus).sort((a, b) => (a.order ?? 1) - (b.order ?? 1));
+      const oldIndex = columnPosts.findIndex((post) => post.id === activeId);
+      const newIndex = columnPosts.findIndex((post) => post.id === overPost.id);
+      if (oldIndex < 0 || newIndex < 0) return moved;
+      const reordered = arrayMove(columnPosts, oldIndex, newIndex).map((post, index) => ({ ...post, order: index + 1 }));
+      return moved.map((post) => reordered.find((item) => item.id === post.id) ?? post);
+    });
+  }
+
+  return (
+    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+      <div className="overflow-x-auto pb-3">
+        <div className="flex min-w-full gap-4">
+          {statuses.map((status) => (
+            <CalendarStatusColumn key={status} status={status} posts={posts.filter((post) => statusFor(post) === status).sort((a, b) => (a.order ?? 1) - (b.order ?? 1))} channelById={channelById} setModal={setModal} />
+          ))}
+        </div>
+      </div>
+    </DndContext>
+  );
+}
+
+function CalendarStatusColumn({ status, posts, channelById, setModal }: { status: string; posts: EditorialPost[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `calendar-status:${status}` });
+  return (
+    <section ref={setNodeRef} className={`min-h-[540px] w-80 shrink-0 rounded-[30px] border p-3 transition ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white"}`}>
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="font-black">{status}</h3>
+        <Badge tone="slate">{posts.length}</Badge>
+      </div>
+      <SortableContext items={posts.map((post) => `calendar-post:${post.id}`)} strategy={verticalListSortingStrategy}>
+        <div className={`min-h-80 space-y-3 rounded-[24px] border border-dashed p-2 transition ${isOver ? "border-blue-300 bg-blue-100/50" : "border-transparent"}`}>
+          {posts.map((post) => <SortableCalendarPostCard key={post.id} post={post} channel={channelById.get(post.channelId)} setModal={setModal} />)}
+          {!posts.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">Solte um post aqui</div>}
+        </div>
+      </SortableContext>
+    </section>
+  );
+}
+
+function SortableCalendarPostCard({ post, channel, setModal }: { post: EditorialPost; channel?: Channel; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `calendar-post:${post.id}` });
+  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const movedPointer = useRef(false);
+  return (
+    <article
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onPointerDownCapture={(event) => {
+        pointerStart.current = { x: event.clientX, y: event.clientY };
+        movedPointer.current = false;
+      }}
+      onPointerMoveCapture={(event) => {
+        if (!pointerStart.current) return;
+        if (Math.hypot(event.clientX - pointerStart.current.x, event.clientY - pointerStart.current.y) > 6) movedPointer.current = true;
+      }}
+      onContextMenu={(event) => event.preventDefault()}
+      onClick={() => {
+        if (movedPointer.current) return;
+        setModal({ kind: "post", id: post.id });
+      }}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`cursor-grab rounded-3xl border bg-slate-50 p-4 shadow-sm transition-[border-color,box-shadow,opacity] active:cursor-grabbing ${isDragging ? "border-blue-300 opacity-60 ring-2 ring-blue-200" : "border-slate-100 hover:border-blue-200 hover:shadow-md"}`}
+    >
+      <div className="flex items-center gap-2 text-xs font-black text-blue-700">
+        <span className="h-2 w-2 rounded-full" style={{ background: channel?.color }} />
+        {channel?.name ?? "Canal"} · {new Date(post.publishAt).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}
+      </div>
+      <h4 className="mt-2 line-clamp-2 font-black">{post.title}</h4>
+      <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{post.description || "Clique para editar o post."}</p>
+    </article>
+  );
+}
+
+function Ideas({ ideas, setIdeas, view, setView, activeTab, setActiveTab, channelById, lineById, vehicleTypeById, contentTypeById, funnelById, profileById, setModal }: { ideas: Idea[]; setIdeas: Dispatch<SetStateAction<Idea[]>>; view: "Quadro" | "Lista"; setView: Dispatch<SetStateAction<"Quadro" | "Lista">>; activeTab: "Todos" | Idea["type"]; setActiveTab: Dispatch<SetStateAction<"Todos" | Idea["type"]>>; channelById: Map<string, Channel>; lineById: Map<string, ProductLine>; vehicleTypeById: Map<string, VehicleType>; contentTypeById: Map<string, ContentType>; funnelById: Map<string, FunnelStage>; profileById: Map<string, Profile>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const tabs: ("Todos" | Idea["type"])[] = ["Todos", ...ideaTypes];
+  const sortedIdeas = ideas.slice().sort((a, b) => a.order - b.order);
+  const filteredIdeas = sortedIdeas.filter((idea) => activeTab === "Todos" || idea.type === activeTab);
+
+  function reorderIdeas(event: DragEndEvent) {
+    const activeId = String(event.active.id).replace("idea:", "");
+    const overId = String(event.over?.id ?? "").replace("idea:", "");
+    if (!activeId || !overId || activeId === overId) return;
+    setIdeas((current) => {
+      const ordered = current.slice().sort((a, b) => a.order - b.order);
+      const oldIndex = ordered.findIndex((idea) => idea.id === activeId);
+      const newIndex = ordered.findIndex((idea) => idea.id === overId);
+      if (oldIndex < 0 || newIndex < 0) return current;
+      const reordered = arrayMove(ordered, oldIndex, newIndex).map((idea, index) => ({ ...idea, order: index + 1 }));
+      return current.map((idea) => reordered.find((item) => item.id === idea.id) ?? idea);
+    });
+  }
+
+  function ideaCard(idea: Idea) {
+    return (
+      <button key={idea.id} onClick={() => setModal({ kind: "idea", id: idea.id })} className="rounded-3xl border border-slate-100 bg-white p-4 text-left shadow-sm transition hover:border-blue-200 hover:shadow-md">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone={idea.priority === "Alta" ? "red" : "blue"}>{idea.priority}</Badge>
+          <Badge tone="slate">#{idea.order}</Badge>
+          <Badge tone="cyan">{idea.type}</Badge>
+        </div>
+        <h3 className="mt-3 font-black">{idea.title}</h3>
+        <p className="mt-2 text-sm text-slate-500">{lineById.get(idea.productLineId)?.name} · {vehicleTypeById.get(idea.vehicleTypeId)?.name} · {contentTypeById.get(idea.contentTypeId)?.name} · {channelById.get(idea.channelId)?.name}</p>
+        <p className="mt-2 text-xs font-bold text-slate-400">Criado por {profileById.get(idea.createdBy)?.name}</p>
+        <div className="mt-3"><FunnelBadge stage={funnelById.get(idea.funnelStageId)} /></div>
+      </button>
+    );
+  }
+
+  return (
+    <Panel title="Ideias" action={<RoundAdd onClick={() => setModal({ kind: "idea" })} label="Adicionar ideia" />}>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap gap-2">
+          {tabs.map((tab) => (
+            <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`rounded-2xl px-4 py-2 text-sm font-black ${activeTab === tab ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+              {tab}
+            </button>
+          ))}
+        </div>
+        <div className="flex rounded-2xl bg-slate-100 p-1">
+          {(["Quadro", "Lista"] as const).map((mode) => (
+            <button key={mode} type="button" onClick={() => setView(mode)} className={`rounded-xl px-3 py-2 text-sm font-black ${view === mode ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>
+              {mode}
+            </button>
+          ))}
+        </div>
+      </div>
+      {view === "Lista" ? (
+        <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={reorderIdeas}>
+          <SortableContext items={filteredIdeas.map((idea) => `idea:${idea.id}`)} strategy={verticalListSortingStrategy}>
+            <div className="space-y-3">
+              {filteredIdeas.map((idea) => <SortableIdeaRow key={idea.id} idea={idea} profileById={profileById} setModal={setModal} />)}
+            </div>
+          </SortableContext>
+        </DndContext>
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {filteredIdeas.map(ideaCard)}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function SortableIdeaRow({ idea, profileById, setModal }: { idea: Idea; profileById: Map<string, Profile>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `idea:${idea.id}` });
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+      className={`flex items-center gap-3 rounded-3xl border bg-white p-3 shadow-sm ${isDragging ? "border-blue-300 opacity-60 ring-2 ring-blue-200" : "border-slate-100"}`}
+    >
+      <button {...attributes} {...listeners} className="rounded-2xl bg-slate-100 p-2 text-slate-400" title="Arrastar ideia">
+        <GripVertical size={18} />
+      </button>
+      <button type="button" onClick={() => setModal({ kind: "idea", id: idea.id })} className="min-w-0 flex-1 text-left">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="slate">#{idea.order}</Badge>
+          <Badge tone="cyan">{idea.type}</Badge>
+          <Badge tone={idea.priority === "Alta" ? "red" : "blue"}>{idea.priority}</Badge>
+        </div>
+        <h3 className="mt-2 truncate font-black">{idea.title}</h3>
+        <p className="mt-1 text-xs font-bold text-slate-400">Criado por {profileById.get(idea.createdBy)?.name}</p>
+      </button>
+    </div>
+  );
+}
+
+function Campaigns({ campaigns, lineById, vehicleTypeById, funnelById, profileById, setModal }: { campaigns: Campaign[]; lineById: Map<string, ProductLine>; vehicleTypeById: Map<string, VehicleType>; funnelById: Map<string, FunnelStage>; profileById: Map<string, Profile>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  return (
+    <Panel title="Campanhas" action={<RoundAdd onClick={() => setModal({ kind: "campaign" })} label="Adicionar campanha" />}>
+      <div className="grid gap-4">
+        {campaigns.map((campaign) => (
+          <button key={campaign.id} onClick={() => setModal({ kind: "campaign", id: campaign.id })} className="rounded-3xl border border-slate-100 bg-white p-5 text-left shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-blue-700">{lineById.get(campaign.productLineId)?.name} · {vehicleTypeById.get(campaign.vehicleTypeId)?.name}</p>
+                <h3 className="mt-1 text-xl font-black">{campaign.name}</h3>
+              </div>
+              <Badge tone="blue">{campaign.status}</Badge>
+            </div>
+            <p className="mt-3 text-sm text-slate-500">{campaign.objective}</p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <FunnelBadge stage={funnelById.get(campaign.funnelStageId)} />
+              <Badge tone="slate">{campaign.assignedTo.map((id) => profileById.get(id)?.name).join(", ")}</Badge>
+            </div>
+          </button>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function Metrics({
+  metrics,
+  posts,
+  campaigns,
+  channels,
+  productLines,
+  vehicleTypes,
+  contentTypes,
+  funnelStages,
+  currentUser,
+  taskColumns,
+  setTasks,
+  setIdeas,
+  channelById,
+  lineById,
+  vehicleTypeById,
+  contentTypeById,
+  funnelById,
+  setModal
+}: {
+  metrics: PostMetric[];
+  posts: EditorialPost[];
+  campaigns: Campaign[];
+  channels: Channel[];
+  productLines: ProductLine[];
+  vehicleTypes: VehicleType[];
+  contentTypes: ContentType[];
+  funnelStages: FunnelStage[];
+  currentUser: Profile;
+  taskColumns: TaskColumn[];
+  setTasks: Dispatch<SetStateAction<Task[]>>;
+  setIdeas: Dispatch<SetStateAction<Idea[]>>;
+  channelById: Map<string, Channel>;
+  lineById: Map<string, ProductLine>;
+  vehicleTypeById: Map<string, VehicleType>;
+  contentTypeById: Map<string, ContentType>;
+  funnelById: Map<string, FunnelStage>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  const [period, setPeriod] = useState("30");
+  const [channelFilter, setChannelFilter] = useState("all");
+  const [lineFilter, setLineFilter] = useState("all");
+  const [vehicleFilter, setVehicleFilter] = useState("all");
+  const [contentFilter, setContentFilter] = useState("all");
+  const [campaignFilter, setCampaignFilter] = useState("all");
+  const [funnelFilter, setFunnelFilter] = useState("all");
+  const postById = new Map(posts.map((post) => [post.id, post]));
+  const today = new Date();
+
+  function resolveMetric(metric: PostMetric): PostMetric {
+    const post = metric.postId ? postById.get(metric.postId) : undefined;
+    return {
+      ...metric,
+      postTitle: metric.postTitle || post?.title || "Métrica avulsa",
+      channelId: metric.channelId || post?.channelId || "",
+      campaignId: metric.campaignId || post?.campaignId || "",
+      productLineId: metric.productLineId || post?.productLineId || "",
+      vehicleTypeId: metric.vehicleTypeId || post?.vehicleTypeId || "",
+      contentTypeId: metric.contentTypeId || post?.contentTypeId || "",
+      funnelStageId: metric.funnelStageId || post?.funnelStageId || ""
+    };
+  }
+
+  const filteredMetrics = metrics.map(resolveMetric).filter((metric) => {
+    const date = new Date(`${metric.date || todayIso()}T12:00:00`);
+    const diffDays = Math.floor((today.getTime() - date.getTime()) / 86400000);
+    if (period !== "all" && diffDays > Number(period)) return false;
+    if (channelFilter !== "all" && metric.channelId !== channelFilter) return false;
+    if (lineFilter !== "all" && metric.productLineId !== lineFilter) return false;
+    if (vehicleFilter !== "all" && metric.vehicleTypeId !== vehicleFilter) return false;
+    if (contentFilter !== "all" && metric.contentTypeId !== contentFilter) return false;
+    if (campaignFilter !== "all" && metric.campaignId !== campaignFilter) return false;
+    if (funnelFilter !== "all" && metric.funnelStageId !== funnelFilter) return false;
+    return true;
+  });
+
+  const totals = filteredMetrics.reduce((acc, metric) => ({
+    reach: acc.reach + metric.reach,
+    engagement: acc.engagement + metricEngagement(metric),
+    clicks: acc.clicks + metric.clicks,
+    leads: acc.leads + metric.leads
+  }), { reach: 0, engagement: 0, clicks: 0, leads: 0 });
+  const averageReach = filteredMetrics.length ? totals.reach / filteredMetrics.length : 0;
+  const chartData = filteredMetrics.map((metric) => ({ name: metric.postTitle.slice(0, 16), alcance: metric.reach, leads: metric.leads }));
+  const dailyData = Object.values(filteredMetrics.reduce<Record<string, { date: string; alcance: number; leads: number }>>((acc, metric) => {
+    const key = metric.date || todayIso();
+    acc[key] = acc[key] ?? { date: key.slice(5), alcance: 0, leads: 0 };
+    acc[key].alcance += metric.reach;
+    acc[key].leads += metric.leads;
+    return acc;
+  }, {})).sort((a, b) => a.date.localeCompare(b.date));
+  const topReach = filteredMetrics.slice().sort((a, b) => b.reach - a.reach).slice(0, 3);
+  const topLeads = filteredMetrics.slice().sort((a, b) => b.leads - a.leads).slice(0, 3);
+  const topEngagement = filteredMetrics.slice().sort((a, b) => metricEngagement(b) - metricEngagement(a)).slice(0, 3);
+  const metricPostIds = new Set(metrics.map((metric) => metric.postId).filter(Boolean));
+  const postsWithoutMetric = posts.filter((post) => !metricPostIds.has(post.id) && !metrics.some((metric) => metric.postTitle === post.title)).slice(0, 5);
+  const winners = filteredMetrics.filter((metric) => metric.leads > 0 && metricEngagementRate(metric) >= 5).slice(0, 4);
+  const weakMetrics = filteredMetrics.filter((metric) => metric.reach < averageReach * 0.7 || metric.leads === 0).slice(0, 4);
+
+  function aggregateBy(items: PostMetric[], key: keyof PostMetric, labels: Map<string, { name: string; color?: string }>) {
+    return Object.entries(items.reduce<Record<string, number>>((acc, metric) => {
+      const id = String(metric[key] ?? "");
+      if (!id) return acc;
+      acc[id] = (acc[id] ?? 0) + metric.leads;
+      return acc;
+    }, {})).map(([id, value]) => ({ id, name: labels.get(id)?.name ?? "Sem categoria", value, color: labels.get(id)?.color ?? "#2563eb" }));
+  }
+
+  function createImprovementTask(metric: PostMetric) {
+    const column = taskColumns.slice().sort((a, b) => a.order - b.order)[0];
+    if (!column) return;
+    setTasks((current) => [{
+      id: crypto.randomUUID(),
+      title: `Melhorar resultado: ${metric.postTitle}`,
+      columnId: column.id,
+      order: current.filter((task) => task.columnId === column.id).length + 1,
+      priority: metric.leads === 0 ? "Alta" : "Média",
+      progress: "Atenção",
+      createdBy: currentUser.id,
+      assignedTo: [currentUser.id],
+      relatedTo: "Métricas",
+      funnelStageId: metric.funnelStageId,
+      dueDate: todayIso(),
+      description: `Analisar métrica do post "${metric.postTitle}". Alcance: ${metric.reach}. Leads: ${metric.leads}. Aprendizado registrado: ${metric.learning || "sem aprendizado registrado"}.`,
+      checklist: [
+        { id: crypto.randomUUID(), label: "Identificar hipótese do baixo desempenho", done: false },
+        { id: crypto.randomUUID(), label: "Propor ajuste de conteúdo ou campanha", done: false }
+      ],
+      comments: [],
+      attachments: []
+    }, ...current]);
+  }
+
+  function createPostIdea(metric: PostMetric) {
+    setIdeas((current) => [{
+      id: crypto.randomUUID(),
+      title: `Replicar formato: ${metric.postTitle}`,
+      productLineId: metric.productLineId,
+      vehicleTypeId: metric.vehicleTypeId,
+      contentTypeId: metric.contentTypeId,
+      type: "Postagem",
+      channelId: metric.channelId,
+      funnelStageId: metric.funnelStageId,
+      createdBy: currentUser.id,
+      priority: "Alta",
+      order: current.length + 1
+    }, ...current]);
+  }
+
+  const channelData = aggregateBy(filteredMetrics, "channelId", new Map(channels.map((item) => [item.id, item])));
+  const lineData = aggregateBy(filteredMetrics, "productLineId", new Map(productLines.map((item) => [item.id, item])));
+  const vehicleData = aggregateBy(filteredMetrics, "vehicleTypeId", new Map(vehicleTypes.map((item) => [item.id, item])));
+  const contentData = aggregateBy(filteredMetrics, "contentTypeId", new Map(contentTypes.map((item) => [item.id, item])));
+  const funnelData = aggregateBy(filteredMetrics, "funnelStageId", new Map(funnelStages.map((item) => [item.id, item])));
+
+  return (
+    <Panel title="Métricas" action={<RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />}>
+      <div className="mb-5 grid gap-3 md:grid-cols-4 xl:grid-cols-7">
+        <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["30", "Últimos 30 dias"], ["7", "Últimos 7 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
+        <FilterSelect label="Canal" value={channelFilter} onChange={setChannelFilter} options={[["all", "Todos"], ...channels.map((item) => [item.id, item.name])]} />
+        <FilterSelect label="Linha" value={lineFilter} onChange={setLineFilter} options={[["all", "Todas"], ...productLines.map((item) => [item.id, item.name])]} />
+        <FilterSelect label="Veículo" value={vehicleFilter} onChange={setVehicleFilter} options={[["all", "Todos"], ...vehicleTypes.map((item) => [item.id, item.name])]} />
+        <FilterSelect label="Conteúdo" value={contentFilter} onChange={setContentFilter} options={[["all", "Todos"], ...contentTypes.map((item) => [item.id, item.name])]} />
+        <FilterSelect label="Campanha" value={campaignFilter} onChange={setCampaignFilter} options={[["all", "Todas"], ...campaigns.map((item) => [item.id, item.name])]} />
+        <FilterSelect label="Funil" value={funnelFilter} onChange={setFunnelFilter} options={[["all", "Todos"], ...funnelStages.map((item) => [item.id, item.name])]} />
+      </div>
+
+      <div className="grid gap-5">
+        <section>
+          <h3 className="mb-3 font-black">Resumo</h3>
+          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <MetricSummaryCard label="Alcance" value={formatNumber(totals.reach)} />
+            <MetricSummaryCard label="Engajamento" value={formatNumber(totals.engagement)} />
+            <MetricSummaryCard label="Cliques" value={formatNumber(totals.clicks)} />
+            <MetricSummaryCard label="Leads" value={formatNumber(totals.leads)} />
+            <MetricSummaryCard label="Taxa de engajamento" value={formatPercent(totals.reach ? (totals.engagement / totals.reach) * 100 : 0)} />
+            <MetricSummaryCard label="Taxa de conversão" value={formatPercent(totals.clicks ? (totals.leads / totals.clicks) * 100 : 0)} />
+          </div>
+        </section>
+
+        <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+          <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+            <h3 className="font-black">Evolução diária</h3>
+            <div className="mt-4 h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dailyData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe" />
+                  <Area dataKey="leads" stroke="#0891b2" fill="#cffafe" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+          <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+            <h3 className="font-black">Comparação entre posts</h3>
+            <div className="mt-4 h-64">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="alcance" fill="#2563eb" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="leads" fill="#38bdf8" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </section>
+
+        <section className="grid gap-5 xl:grid-cols-5">
+          <BreakdownChart title="Leads por canal" data={channelData} />
+          <BreakdownChart title="Leads por linha" data={lineData} />
+          <BreakdownChart title="Leads por veículo" data={vehicleData} />
+          <BreakdownChart title="Leads por conteúdo" data={contentData} />
+          <BreakdownChart title="Leads por funil" data={funnelData} />
+        </section>
+
+        <section>
+          <h3 className="mb-3 font-black">Análise</h3>
+          <div className="grid gap-4 lg:grid-cols-3">
+            <RankingCard title="Mais alcance" metrics={topReach} value={(metric) => formatNumber(metric.reach)} />
+            <RankingCard title="Mais leads" metrics={topLeads} value={(metric) => `${metric.leads} leads`} />
+            <RankingCard title="Mais engajamento" metrics={topEngagement} value={(metric) => formatNumber(metricEngagement(metric))} />
+          </div>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-3">
+          <ActionList title="Conteúdos vencedores" empty="Nenhum destaque ainda." items={winners} actionLabel="Criar ideia parecida" onAction={createPostIdea} description={(metric) => `${formatPercent(metricEngagementRate(metric))} engajamento · ${metric.leads} leads`} />
+          <ActionList title="Precisam de ajuste" empty="Nada crítico no filtro atual." items={weakMetrics} actionLabel="Criar tarefa" onAction={createImprovementTask} description={(metric) => `${formatNumber(metric.reach)} alcance · ${metric.leads} leads`} />
+          <div className="rounded-[28px] border border-amber-100 bg-amber-50 p-4">
+            <h3 className="font-black text-amber-900">Posts sem métrica</h3>
+            <div className="mt-3 space-y-2">
+              {postsWithoutMetric.map((post) => (
+                <div key={post.id} className="rounded-2xl bg-white/70 p-3">
+                  <p className="line-clamp-2 text-sm font-black">{post.title}</p>
+                  <p className="mt-1 text-xs font-bold text-amber-700">{channelById.get(post.channelId)?.name} · {new Date(post.publishAt).toLocaleDateString("pt-BR")}</p>
+                </div>
+              ))}
+              {!postsWithoutMetric.length && <p className="text-sm font-bold text-amber-700">Todos os posts têm métrica registrada.</p>}
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="mt-6">
+        <h3 className="mb-3 font-black">Registros</h3>
+        <div className="grid gap-3">
+          {filteredMetrics.map((metric) => (
+            <button key={metric.id} onClick={() => setModal({ kind: "metric", id: metric.id })} className="rounded-3xl bg-white p-4 text-left shadow-sm motion-smooth hover:shadow-md">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-black">{metric.postTitle}</h3>
+                  <p className="mt-2 text-sm text-slate-500">
+                    {channelById.get(metric.channelId)?.name} · {lineById.get(metric.productLineId)?.name} · {vehicleTypeById.get(metric.vehicleTypeId)?.name} · {contentTypeById.get(metric.contentTypeId)?.name} · {funnelById.get(metric.funnelStageId)?.name}
+                  </p>
+                </div>
+                <Badge tone={metricEngagementRate(metric) >= 5 ? "green" : "slate"}>{metricEngagementRate(metric) >= 5 ? "Conteúdo vencedor" : "Em análise"}</Badge>
+              </div>
+              <p className="mt-2 text-sm font-black text-blue-700">{formatNumber(metric.reach)} alcance · {metricEngagement(metric)} engajamentos · {metric.leads} leads · {formatPercent(metricConversionRate(metric))} conversão</p>
+              {(metric.learning || metric.notes) && <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{metric.learning || metric.notes}</p>}
+            </button>
+          ))}
+          {!filteredMetrics.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>}
+        </div>
+      </section>
+    </Panel>
+  );
+}
+
+function FilterSelect({ label, value, options, onChange }: { label: string; value: string; options: string[][]; onChange: (value: string) => void }) {
+  return (
+    <label className="text-xs font-black uppercase text-slate-500">
+      {label}
+      <select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black normal-case text-slate-700 outline-none focus:border-blue-500">
+        {options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function MetricSummaryCard({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-[26px] border border-blue-100 bg-gradient-to-br from-blue-50 to-white p-4"><p className="text-xs font-black uppercase text-blue-600">{label}</p><p className="mt-2 text-2xl font-black text-slate-950">{value}</p></div>;
+}
+
+function BreakdownChart({ title, data }: { title: string; data: { id: string; name: string; value: number; color: string }[] }) {
+  return (
+    <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+      <h3 className="font-black">{title}</h3>
+      <div className="mt-3 h-44">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius={34} outerRadius={62}>
+              {data.map((item, index) => <Cell key={item.id} fill={item.color || ["#2563eb", "#38bdf8", "#64748b", "#22c55e"][index % 4]} />)}
+            </Pie>
+            <Tooltip />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function RankingCard({ title, metrics, value }: { title: string; metrics: PostMetric[]; value: (metric: PostMetric) => string }) {
+  return (
+    <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+      <h3 className="font-black">{title}</h3>
+      <div className="mt-3 space-y-2">
+        {metrics.map((metric, index) => (
+          <div key={metric.id} className="flex items-center justify-between gap-3 rounded-2xl bg-white p-3">
+            <p className="min-w-0 truncate text-sm font-black">{index + 1}. {metric.postTitle}</p>
+            <span className="shrink-0 text-sm font-black text-blue-700">{value(metric)}</span>
+          </div>
+        ))}
+        {!metrics.length && <p className="text-sm font-bold text-slate-400">Sem dados.</p>}
+      </div>
+    </div>
+  );
+}
+
+function ActionList({ title, empty, items, actionLabel, onAction, description }: { title: string; empty: string; items: PostMetric[]; actionLabel: string; onAction: (metric: PostMetric) => void; description: (metric: PostMetric) => string }) {
+  return (
+    <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+      <h3 className="font-black">{title}</h3>
+      <div className="mt-3 space-y-2">
+        {items.map((metric) => (
+          <div key={metric.id} className="rounded-2xl bg-slate-50 p-3">
+            <p className="line-clamp-2 text-sm font-black">{metric.postTitle}</p>
+            <p className="mt-1 text-xs font-bold text-slate-500">{description(metric)}</p>
+            <button type="button" onClick={() => onAction(metric)} className="mt-3 rounded-2xl bg-blue-700 px-3 py-2 text-xs font-black text-white motion-smooth hover:bg-blue-800">
+              {actionLabel}
+            </button>
+          </div>
+        ))}
+        {!items.length && <p className="text-sm font-bold text-slate-400">{empty}</p>}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel(props: {
+  currentUser: Profile;
+  profiles: Profile[];
+  channels: Channel[];
+  productLines: ProductLine[];
+  vehicleTypes: VehicleType[];
+  contentTypes: ContentType[];
+  funnelStages: FunnelStage[];
+  configTab: "Equipe" | "Funil" | "Filtros" | "Conta e Permissões";
+  setConfigTab: Dispatch<SetStateAction<"Equipe" | "Funil" | "Filtros" | "Conta e Permissões">>;
+  setProfiles: Dispatch<SetStateAction<Profile[]>>;
+  setChannels: Dispatch<SetStateAction<Channel[]>>;
+  setProductLines: Dispatch<SetStateAction<ProductLine[]>>;
+  setVehicleTypes: Dispatch<SetStateAction<VehicleType[]>>;
+  setContentTypes: Dispatch<SetStateAction<ContentType[]>>;
+  setFunnelStages: Dispatch<SetStateAction<FunnelStage[]>>;
+  uploadProfilePhoto: (profileId: string, file: File) => void;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  return (
+    <div className="space-y-5">
+      <Panel title="Configurações">
+        <div className="flex flex-wrap gap-2">
+          {configTabs.map((tab) => (
+            <button key={tab} onClick={() => props.setConfigTab(tab)} className={`rounded-2xl px-4 py-2 text-sm font-black ${props.configTab === tab ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+              {tab}
+            </button>
+          ))}
+        </div>
+      </Panel>
+      {props.configTab === "Equipe" && <TeamSettings {...props} />}
+      {props.configTab === "Funil" && <FunnelSettings funnelStages={props.funnelStages} setFunnelStages={props.setFunnelStages} />}
+      {props.configTab === "Filtros" && <ChannelsLinesSettings channels={props.channels} productLines={props.productLines} vehicleTypes={props.vehicleTypes} contentTypes={props.contentTypes} setChannels={props.setChannels} setProductLines={props.setProductLines} setVehicleTypes={props.setVehicleTypes} setContentTypes={props.setContentTypes} />}
+      {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} />}
+    </div>
+  );
+}
+
+function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, setModal }: Parameters<typeof SettingsPanel>[0]) {
+  const canManageTeam = currentUser.role === "admin" || currentUser.role === "gestor";
+  function addMember(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canManageTeam) return;
+    const form = new FormData(event.currentTarget);
+    setProfiles((current) => [...current, { id: crypto.randomUUID(), name: String(form.get("name")), email: String(form.get("email")), phone: "", bio: "", role: String(form.get("role")) as Role, avatarUrl: "", active: true, notificationSound: true }]);
+    event.currentTarget.reset();
+  }
+  return (
+    <Panel title="Equipe">
+      {canManageTeam && (
+        <form onSubmit={addMember} className="mb-5 grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto] lg:items-end">
+          <TextInput name="name" label="Nome" required />
+          <TextInput name="email" label="Email" type="email" required />
+          <Select name="role" label="Função" options={roles.map((role) => [role, roleLabel[role]])} />
+          <SubmitButton>Adicionar</SubmitButton>
+        </form>
+      )}
+      <div className="grid gap-3">
+        {profiles.map((profile) => (
+          <div key={profile.id} className="grid gap-3 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm md:grid-cols-[auto_1fr_190px_auto] md:items-center">
+            <label className="cursor-pointer">
+              <Avatar profile={profile} size="md" />
+              {canManageTeam && <input type="file" accept="image/*" className="hidden" onChange={(event) => event.target.files?.[0] && uploadProfilePhoto(profile.id, event.target.files[0])} />}
+            </label>
+            <div>
+              <p className="font-black">{profile.name}</p>
+              <p className="text-sm text-slate-500">{profile.email}</p>
+              <p className="mt-1 text-xs font-bold text-slate-400">{profile.phone || "Sem telefone"} · {profile.active ? "Ativo" : "Inativo"}</p>
+            </div>
+            <Badge tone="blue">{roleLabel[profile.role]}</Badge>
+            {canManageTeam && (
+              <div className="flex gap-2">
+                <button onClick={() => setModal({ kind: "teamMember", id: profile.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">editar</button>
+                <button onClick={() => setProfiles((current) => current.filter((item) => item.id !== profile.id))} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600">excluir</button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function FunnelSettings({ funnelStages, setFunnelStages }: { funnelStages: FunnelStage[]; setFunnelStages: Dispatch<SetStateAction<FunnelStage[]>> }) {
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  function addStage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name"));
+    setFunnelStages((current) => [...current, { id: slug(name), name, color: String(form.get("color")), order: current.length + 1 }]);
+    event.currentTarget.reset();
+  }
+  function reorder(event: DragEndEvent) {
+    const active = String(event.active.id);
+    const over = String(event.over?.id ?? "");
+    if (!over || active === over) return;
+    setFunnelStages((current) => {
+      const sorted = current.slice().sort((a, b) => a.order - b.order);
+      const next = arrayMove(sorted, sorted.findIndex((item) => item.id === active), sorted.findIndex((item) => item.id === over));
+      return next.map((item, index) => ({ ...item, order: index + 1 }));
+    });
+  }
+  const sorted = funnelStages.slice().sort((a, b) => a.order - b.order);
+  return (
+    <Panel title="Funil visual">
+      <form onSubmit={addStage} className="mb-5 grid gap-3 md:grid-cols-[1fr_90px_auto] md:items-end">
+        <TextInput name="name" label="Nova etapa" required />
+        <label className="block text-sm font-bold text-slate-600">Cor<input name="color" type="color" defaultValue="#2563eb" className="mt-1 h-10 w-full rounded-2xl border border-slate-200 bg-white p-1" /></label>
+        <SubmitButton>Adicionar</SubmitButton>
+      </form>
+      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={reorder}>
+        <SortableContext items={sorted.map((stage) => stage.id)} strategy={verticalListSortingStrategy}>
+          <div className="mx-auto max-w-3xl space-y-2">
+            {sorted.map((stage, index) => <FunnelStageRow key={stage.id} stage={stage} index={index} total={sorted.length} setFunnelStages={setFunnelStages} />)}
+          </div>
+        </SortableContext>
+      </DndContext>
+    </Panel>
+  );
+}
+
+function FunnelStageRow({ stage, index, total, setFunnelStages }: { stage: FunnelStage; index: number; total: number; setFunnelStages: Dispatch<SetStateAction<FunnelStage[]>> }) {
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: stage.id });
+  const width = 100 - index * (42 / Math.max(total - 1, 1));
+  return (
+    <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition, width: `${width}%`, backgroundColor: stage.color }} className="mx-auto flex items-center gap-3 rounded-3xl px-4 py-4 text-white shadow-lg">
+      <button {...attributes} {...listeners} className="rounded-xl bg-white/20 p-1"><GripVertical size={18} /></button>
+      <input value={stage.name} onChange={(event) => setFunnelStages((current) => current.map((item) => item.id === stage.id ? { ...item, name: event.target.value } : item))} className="min-w-0 flex-1 bg-transparent font-black outline-none" />
+      <button onClick={() => window.confirm("Excluir etapa do funil?") && setFunnelStages((current) => current.filter((item) => item.id !== stage.id).map((item, nextIndex) => ({ ...item, order: nextIndex + 1 })))} className="rounded-xl bg-white/20 p-1" title="Excluir etapa">
+        <Trash2 size={16} />
+      </button>
+    </div>
+  );
+}
+
+function ChannelsLinesSettings({
+  channels,
+  productLines,
+  vehicleTypes,
+  contentTypes,
+  setChannels,
+  setProductLines,
+  setVehicleTypes,
+  setContentTypes
+}: {
+  channels: Channel[];
+  productLines: ProductLine[];
+  vehicleTypes: VehicleType[];
+  contentTypes: ContentType[];
+  setChannels: Dispatch<SetStateAction<Channel[]>>;
+  setProductLines: Dispatch<SetStateAction<ProductLine[]>>;
+  setVehicleTypes: Dispatch<SetStateAction<VehicleType[]>>;
+  setContentTypes: Dispatch<SetStateAction<ContentType[]>>;
+}) {
+  return (
+    <div className="grid gap-5 xl:grid-cols-2">
+      <Panel title="Canais">
+        <button onClick={() => { const name = window.prompt("Novo canal"); if (name) setChannels((current) => [...current, { id: slug(name), name, color: "#2563eb" }]); }} className="mb-4 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">Adicionar canal</button>
+        <div className="space-y-2">{channels.map((channel) => <div key={channel.id} className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 font-black"><span>{channel.name}</span><button onClick={() => window.confirm("Excluir canal?") && setChannels((current) => current.filter((item) => item.id !== channel.id))} className="text-rose-600"><Trash2 size={16} /></button></div>)}</div>
+      </Panel>
+      <SimpleConfigPanel title="Linhas de produto" addLabel="Adicionar linha" promptLabel="Nova linha de produto" deleteLabel="Excluir linha de produto?" items={productLines} setItems={setProductLines} />
+      <SimpleConfigPanel title="Tipos de veículo" addLabel="Adicionar tipo" promptLabel="Novo tipo de veículo" deleteLabel="Excluir tipo de veículo?" items={vehicleTypes} setItems={setVehicleTypes} />
+      <SimpleConfigPanel title="Tipos de conteúdo" addLabel="Adicionar tipo" promptLabel="Novo tipo de conteúdo" deleteLabel="Excluir tipo de conteúdo?" items={contentTypes} setItems={setContentTypes} />
+    </div>
+  );
+}
+
+function SimpleConfigPanel<T extends { id: string; name: string }>({ title, addLabel, promptLabel, deleteLabel, items, setItems }: { title: string; addLabel: string; promptLabel: string; deleteLabel: string; items: T[]; setItems: Dispatch<SetStateAction<T[]>> }) {
+  return (
+    <Panel title={title}>
+      <button onClick={() => { const name = window.prompt(promptLabel); if (name) setItems((current) => [...current, { id: slug(name), name } as T]); }} className="mb-4 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">{addLabel}</button>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <div key={item.id} className="flex gap-2">
+            <input value={item.name} onChange={(event) => setItems((current) => current.map((currentItem) => currentItem.id === item.id ? { ...currentItem, name: event.target.value } : currentItem))} className="min-w-0 flex-1 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500" />
+            <button onClick={() => window.confirm(deleteLabel) && setItems((current) => current.filter((currentItem) => currentItem.id !== item.id))} className="rounded-2xl bg-rose-100 px-3 text-rose-700"><Trash2 size={16} /></button>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>> }) {
+  return (
+    <Panel title="Conta e permissões">
+      <div className="space-y-4 rounded-3xl bg-slate-50 p-5">
+        <div>
+          <p className="font-black">{currentUser.name}</p>
+          <p className="mt-1 text-sm text-slate-500">{currentUser.email}</p>
+          <p className="mt-4 text-sm font-bold text-blue-700">Função atual: {roleLabel[currentUser.role]}</p>
+        </div>
+        <label className="flex items-center justify-between gap-4 rounded-2xl bg-white p-4">
+          <span>
+            <span className="block font-black">Som de notificações</span>
+            <span className="text-sm font-bold text-slate-500">Tocar um aviso quando chegar algo novo.</span>
+          </span>
+          <input type="checkbox" checked={currentUser.notificationSound} onChange={(event) => setProfiles((current) => current.map((profile) => profile.id === currentUser.id ? { ...profile, notificationSound: event.target.checked } : profile))} className="h-5 w-5" />
+        </label>
+      </div>
+    </Panel>
+  );
+}
+
+function EntityModal(props: {
+  modal: ModalState;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+  currentUser: Profile;
+  profiles: Profile[];
+  profileById: Map<string, Profile>;
+  channels: Channel[];
+  productLines: ProductLine[];
+  vehicleTypes: VehicleType[];
+  contentTypes: ContentType[];
+  funnelStages: FunnelStage[];
+  campaigns: Campaign[];
+  posts: EditorialPost[];
+  setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
+  postReviewAssets: PostReviewAsset[];
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
+  setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
+  addReviewComment: (assetId: string, message: string) => void;
+  ideas: Idea[];
+  setIdeas: Dispatch<SetStateAction<Idea[]>>;
+  setCampaigns: Dispatch<SetStateAction<Campaign[]>>;
+  metrics: PostMetric[];
+  setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
+  setProfiles: Dispatch<SetStateAction<Profile[]>>;
+  uploadProfilePhoto: (profileId: string, file: File) => void;
+  tasks: Task[];
+  setTasks: Dispatch<SetStateAction<Task[]>>;
+  taskColumns: TaskColumn[];
+  updateTask: (taskId: string, updater: (task: Task) => Task) => void;
+  addTaskAttachment: (taskId: string, file: File) => void;
+  addSubtask: (task: Task, title?: string) => void;
+}) {
+  if (!props.modal) return null;
+  const modal = props.modal;
+  const close = () => props.setModal(null);
+  const task = modal.kind === "task" ? props.tasks.find((item) => item.id === modal.id) : undefined;
+  const modalContentRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (modal.kind === "task") {
+      modalContentRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [modal.kind, task?.id]);
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm animate-fade-in-up">
+      <section ref={modalContentRef} className={`max-h-[92vh] w-full overflow-y-auto rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl shadow-slate-950/20 animate-soft-pop ${modal.kind === "task" || modal.kind === "post" ? "max-w-6xl" : "max-w-3xl"}`}>
+        <div className="mb-5 flex items-start justify-between gap-4 rounded-[26px] bg-gradient-to-r from-blue-50 to-slate-50 px-4 py-3">
+          <div>
+            <p className="text-sm font-black text-blue-700">Embrepoli Marketing</p>
+            <h2 className="text-2xl font-black">{modalTitle(modal)}</h2>
+          </div>
+          <button onClick={close} className="rounded-2xl bg-white p-2 text-slate-500 shadow-sm transition hover:text-slate-950"><X size={20} /></button>
+        </div>
+        {modal.kind === "task" && task && <TaskModal key={task.id} task={task} {...props} close={close} />}
+        {modal.kind === "post" && <PostModalV2 {...props} close={close} />}
+        {modal.kind === "idea" && <IdeaModalV2 {...props} close={close} />}
+        {modal.kind === "campaign" && <CampaignModalV2 {...props} close={close} />}
+        {modal.kind === "metric" && <MetricModalV2 {...props} close={close} />}
+        {modal.kind === "profile" && <ProfileModal {...props} close={close} />}
+        {modal.kind === "teamMember" && <TeamMemberModal {...props} close={close} />}
+      </section>
+    </div>
+  );
+}
+
+function modalTitle(modal: NonNullable<ModalState>) {
+  if (modal.kind === "task") return "Editar tarefa";
+  if (modal.kind === "post") return modal.id ? "Editar post" : "Novo post";
+  if (modal.kind === "idea") return modal.id ? "Editar ideia" : "Nova ideia";
+  if (modal.kind === "campaign") return modal.id ? "Editar campanha" : "Nova campanha";
+  if (modal.kind === "profile") return "Editar perfil";
+  if (modal.kind === "teamMember") return "Editar membro";
+  return modal.id ? "Editar métrica" : "Nova métrica";
+}
+
+function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, addSubtask, setModal, setTasks, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
+  const [subtaskTitle, setSubtaskTitle] = useState("");
+  const subtasks = tasks.filter((item) => item.parentTaskId === task.id);
+  const parentTask = task.parentTaskId ? tasks.find((item) => item.id === task.parentTaskId) : undefined;
+  const taskBoardId = taskColumns.find((column) => column.id === task.columnId)?.boardId;
+  const availableColumns = taskBoardId ? taskColumns.filter((column) => column.boardId === taskBoardId) : taskColumns;
+  const isTaskCompleted = isCompletedTask(task);
+  const doneSubtasks = subtasks.filter(isCompletedTask).length;
+
+  function columnsForTask(item: Task) {
+    const boardId = taskColumns.find((column) => column.id === item.columnId)?.boardId;
+    return boardId ? taskColumns.filter((column) => column.boardId === boardId) : taskColumns;
+  }
+
+  function completedColumnFor(item: Task) {
+    return columnsForTask(item).find((column) => normalizeText(column.name).includes("concluido"));
+  }
+
+  function isCompletedTask(item: Task) {
+    const doneColumn = completedColumnFor(item);
+    return item.progress === "Finalizando" || Boolean(doneColumn && item.columnId === doneColumn.id);
+  }
+
+  function toggleTaskCompletedById(taskId: string) {
+    updateTask(taskId, (current) => {
+      const columns = columnsForTask(current);
+      const doneColumn = columns.find((column) => normalizeText(column.name).includes("concluido"));
+      if (isCompletedTask(current)) {
+        return {
+          ...current,
+          columnId: current.previousColumnId || columns.find((column) => column.id !== doneColumn?.id)?.id || current.columnId,
+          previousColumnId: undefined,
+          progress: "No prazo"
+        };
+      }
+      return { ...current, previousColumnId: current.columnId, columnId: doneColumn?.id ?? current.columnId, progress: "Finalizando" };
+    });
+  }
+
+  function toggleTaskCompleted() {
+    toggleTaskCompletedById(task.id);
+  }
+
+  function addChecklist(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    updateTask(task.id, (current) => ({ ...current, checklist: [...current.checklist, { id: crypto.randomUUID(), label: String(form.get("label")), done: false }] }));
+    event.currentTarget.reset();
+  }
+
+  function addNamedSubtask(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const title = subtaskTitle.trim();
+    if (!title) return;
+    addSubtask(task, title);
+    setSubtaskTitle("");
+  }
+
+  function addComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    updateTask(task.id, (current) => ({ ...current, comments: [{ id: crypto.randomUUID(), authorId: currentUser.id, message: String(form.get("message")), createdAt: new Date().toISOString() }, ...current.comments] }));
+    event.currentTarget.reset();
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleTaskCompleted}
+            className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-black transition ${isTaskCompleted ? "border-emerald-200 bg-emerald-100 text-emerald-800" : "border-slate-200 text-slate-700 hover:border-blue-300 hover:bg-blue-50"}`}
+          >
+            <CheckCircle2 size={17} /> {isTaskCompleted ? "Concluída" : "Marcar como concluída"}
+          </button>
+          {parentTask && (
+            <button type="button" onClick={() => setModal({ kind: "task", id: parentTask.id })} className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 transition hover:border-blue-300 hover:bg-blue-100">
+              Voltar para tarefa anterior
+            </button>
+          )}
+        </div>
+        <DeleteButton
+          label="Excluir tarefa"
+          onDelete={() => {
+            setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id));
+            close();
+          }}
+        />
+      </div>
+
+      <input value={task.title} onChange={(event) => updateTask(task.id, (current) => ({ ...current, title: event.target.value }))} className="w-full rounded-2xl border-0 bg-transparent px-0 py-1 text-3xl font-black outline-none focus:ring-0" />
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <DetailRow label="Criado por"><span className="font-bold text-slate-600">{profileById.get(task.createdBy)?.name}</span></DetailRow>
+        <DetailRow label="Responsáveis"><MultiSelect label="" values={task.assignedTo} profiles={profiles} onChange={(values) => updateTask(task.id, (current) => ({ ...current, assignedTo: values }))} /></DetailRow>
+        <DetailRow label="Data de conclusão"><input value={task.dueDate} type="date" onChange={(event) => updateTask(task.id, (current) => ({ ...current, dueDate: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /></DetailRow>
+        <DetailRow label="Prioridade"><SelectControlled label="" value={task.priority} options={priorities.map((item) => [item, item])} onChange={(value) => updateTask(task.id, (current) => ({ ...current, priority: value as TaskPriority }))} /></DetailRow>
+        <DetailRow label="Andamento"><SelectControlled label="" value={task.progress} options={progresses.map((item) => [item, item])} onChange={(value) => updateTask(task.id, (current) => ({ ...current, progress: value as TaskProgress }))} /></DetailRow>
+        <DetailRow label="Funil"><SelectControlled label="" value={task.funnelStageId} options={funnelStages.map((stage) => [stage.id, stage.name])} onChange={(value) => updateTask(task.id, (current) => ({ ...current, funnelStageId: value }))} /></DetailRow>
+      </div>
+
+      <section className="space-y-2">
+        <h3 className="font-black">Descrição</h3>
+        <textarea value={task.description} rows={7} placeholder="Do que se trata esta tarefa?" onChange={(event) => updateTask(task.id, (current) => ({ ...current, description: event.target.value }))} className="w-full resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-blue-500" />
+      </section>
+
+      <section className="space-y-3 border-t border-slate-200 pt-4">
+        <div className="flex items-center gap-2">
+          <h3 className="font-black">Subtarefas</h3>
+          <Badge tone="slate">{doneSubtasks}/{subtasks.length}</Badge>
+        </div>
+        <form onSubmit={addNamedSubtask} className="flex gap-2">
+          <input value={subtaskTitle} onChange={(event) => setSubtaskTitle(event.target.value)} placeholder="Nova subtarefa" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" />
+          <button disabled={!subtaskTitle.trim()} className="rounded-2xl bg-blue-700 px-3 text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"><Plus size={17} /></button>
+        </form>
+        <div className="divide-y divide-slate-200 rounded-2xl border border-slate-100">
+          {subtasks.map((subtask) => {
+            const done = isCompletedTask(subtask);
+            return (
+              <div key={subtask.id} className="flex items-center gap-3 px-3 py-3 hover:bg-blue-50">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleTaskCompletedById(subtask.id);
+                  }}
+                  className={`grid h-7 w-7 shrink-0 place-items-center rounded-full border transition ${done ? "border-emerald-200 bg-emerald-100 text-emerald-700" : "border-slate-300 bg-white text-slate-400 hover:border-emerald-300 hover:text-emerald-600"}`}
+                  title={done ? "Marcar como pendente" : "Marcar como concluída"}
+                >
+                  <CheckCircle2 size={17} />
+                </button>
+                <button type="button" onClick={() => setModal({ kind: "task", id: subtask.id })} className={`min-w-0 flex-1 text-left font-bold ${done ? "text-emerald-800" : "text-slate-950"}`}>
+                  {subtask.title}
+                </button>
+              </div>
+            );
+          })}
+          {!subtasks.length && <p className="px-3 py-3 text-sm font-bold text-slate-400">Nenhuma subtarefa criada.</p>}
+        </div>
+      </section>
+
+      <section className="space-y-3 border-t border-slate-200 pt-4">
+        <div className="flex items-center gap-2">
+          <h3 className="font-black">Checklist</h3>
+          <Badge tone="slate">{task.checklist.filter((item) => item.done).length}/{task.checklist.length}</Badge>
+        </div>
+        <div className="space-y-2">
+          {task.checklist.map((item) => (
+            <div key={item.id} className="flex items-center gap-3 rounded-2xl bg-slate-50 p-3">
+              <input type="checkbox" checked={item.done} onChange={(event) => updateTask(task.id, (current) => ({ ...current, checklist: current.checklist.map((check) => check.id === item.id ? { ...check, done: event.target.checked } : check) }))} />
+              <input value={item.label} onChange={(event) => updateTask(task.id, (current) => ({ ...current, checklist: current.checklist.map((check) => check.id === item.id ? { ...check, label: event.target.value } : check) }))} className="min-w-0 flex-1 bg-transparent font-bold outline-none" />
+              <button type="button" onClick={() => updateTask(task.id, (current) => ({ ...current, checklist: current.checklist.filter((check) => check.id !== item.id) }))} className="rounded-xl bg-rose-100 p-2 text-rose-700" title="Excluir item"><Trash2 size={15} /></button>
+            </div>
+          ))}
+        </div>
+        <form onSubmit={addChecklist} className="flex gap-2"><input name="label" required placeholder="Novo item" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /><button className="rounded-2xl bg-blue-700 px-3 text-white"><Plus size={17} /></button></form>
+      </section>
+
+      <section className="space-y-3 border-t border-slate-200 pt-4">
+        <h3 className="font-black">Anexos</h3>
+        <label className="grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50 px-4 py-8 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-100">
+          <Camera size={34} />
+          <span className="mt-3 text-sm font-black">Adicionar imagem, vídeo ou arquivo</span>
+          <span className="mt-1 text-xs font-bold text-blue-500">Clique para selecionar do computador</span>
+          <input type="file" className="hidden" onChange={(event) => event.target.files?.[0] && addTaskAttachment(task.id, event.target.files[0])} />
+        </label>
+        <div className="space-y-2">{task.attachments.map((attachment) => <a key={attachment.id} href={attachment.url} target="_blank" className="block rounded-2xl bg-slate-50 p-3 text-sm font-black">{attachment.type}: {attachment.name}</a>)}</div>
+      </section>
+
+      <section className="sticky bottom-0 -mx-5 border-t border-slate-200 bg-white px-5 py-4">
+        <form onSubmit={addComment} className="flex gap-3">
+          <Avatar profile={profileById.get(currentUser.id)} size="sm" />
+          <input name="message" required placeholder="Adicionar um comentário" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500" />
+          <button className="rounded-2xl bg-blue-700 px-4 text-white"><MessageSquare size={17} /></button>
+        </form>
+        <div className="mt-3 space-y-2">{task.comments.map((comment) => <div key={comment.id} className="rounded-2xl bg-slate-50 p-3"><p className="font-black">{profileById.get(comment.authorId)?.name}</p><p className="text-sm text-slate-600">{comment.message}</p></div>)}</div>
+      </section>
+    </div>
+  );
+}
+
+function DetailRow({ label, children }: { label: string; children: ReactNode }) {
+  return <div className="grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 px-4 py-3 md:grid-cols-[150px_1fr] md:items-center"><p className="text-sm font-black text-slate-600">{label}</p><div className="min-w-0">{children}</div></div>;
+}
+
+function normalizeText(value: string) {
+  return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, posts, setPosts, postReviewAssets, addPostReviewAssets, setReviewAssetStatus, addReviewComment, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
+  const defaultPublishAt = editing?.publishAt ?? (modal?.kind === "post" && modal.date ? toDateTimeLocalValue(modal.date) : "");
+  const neutralCampaign = campaigns.find((campaign) => normalizeText(campaign.name) === "campanha neutra");
+  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? channels[0]?.id ?? "");
+  const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
+  const postFormatOptions = postFormatOptionsForChannel(selectedChannel);
+  const defaultFormat = editing?.format && postFormatOptions.includes(editing.format) ? editing.format : defaultPostFormatForChannel(selectedChannel);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
+  const [selectedAssetId, setSelectedAssetId] = useState("");
+  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0];
+  const canReview = currentUser.role === "admin" || currentUser.role === "gestor";
+  const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão").length;
+  const approvedCount = assets.filter((asset) => asset.status === "Aprovado").length;
+  const reviewSummary = !assets.length ? "Nenhuma arte enviada" : `${assets.length} arquivo(s) · ${approvedCount} aprovado(s) · ${pendingCount} pendente(s)`;
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const status = editing?.status ?? "Ideia";
+    const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), title: String(form.get("title")), channelId: String(form.get("channelId")), campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel), order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")) };
+    setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
+    close();
+  }
+
+  return (
+    <div className={`grid gap-5 ${reviewOpen && editing ? "xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}>
+      <div>
+        <EntityForm onSubmit={submit}>
+          <TextInput name="title" label="Título" required defaultValue={editing?.title} />
+          <label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <Select key={selectedChannelId} name="format" label="Formato" defaultValue={defaultFormat} options={postFormatOptions.map((item) => [item, item])} />
+          <Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId ?? neutralCampaign?.id} options={campaigns.map((item) => [item.id, item.name])} />
+          <Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} />
+          <Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} />
+          <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} />
+          <Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />
+          <MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} />
+          <TextInput name="publishAt" label="Data e hora" type="datetime-local" required defaultValue={defaultPublishAt} />
+          <TextArea name="description" label="Descrição" defaultValue={editing?.description} />
+          {editing && (
+            <button type="button" onClick={() => setReviewOpen(true)} className="rounded-3xl border border-blue-100 bg-blue-50 p-4 text-left transition hover:border-blue-300 md:col-span-2">
+              <p className="font-black text-blue-900">Artes para revisão</p>
+              <p className="mt-1 text-sm font-bold text-blue-600">{reviewSummary}</p>
+              <span className="mt-3 inline-flex rounded-2xl bg-blue-700 px-3 py-2 text-sm font-black text-white">{assets.length ? "Abrir revisão" : "Adicionar arte para revisão"}</span>
+            </button>
+          )}
+          <SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton>
+        </EntityForm>
+        {editing && <DeleteButton label="Excluir post" onDelete={() => { setPosts((current) => current.filter((post) => post.id !== editing.id)); close(); }} />}
+      </div>
+
+      {reviewOpen && editing && (
+        <PostReviewPanel
+          post={editing}
+          assets={assets}
+          selectedAsset={selectedAsset}
+          setSelectedAssetId={setSelectedAssetId}
+          profileById={profileById}
+          canReview={canReview}
+          addPostReviewAssets={addPostReviewAssets}
+          setReviewAssetStatus={setReviewAssetStatus}
+          addReviewComment={addReviewComment}
+          close={() => setReviewOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function PostReviewPanel({
+  post,
+  assets,
+  selectedAsset,
+  setSelectedAssetId,
+  profileById,
+  canReview,
+  addPostReviewAssets,
+  setReviewAssetStatus,
+  addReviewComment,
+  close
+}: {
+  post: EditorialPost;
+  assets: PostReviewAsset[];
+  selectedAsset?: PostReviewAsset;
+  setSelectedAssetId: (id: string) => void;
+  profileById: Map<string, Profile>;
+  canReview: boolean;
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
+  setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
+  addReviewComment: (assetId: string, message: string) => void;
+  close: () => void;
+}) {
+  const [adjustmentMessage, setAdjustmentMessage] = useState("");
+  const [comment, setComment] = useState("");
+
+  function submitComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedAsset) return;
+    addReviewComment(selectedAsset.id, comment);
+    setComment("");
+  }
+
+  function requestAdjustments() {
+    if (!selectedAsset || !adjustmentMessage.trim()) return;
+    setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
+    setAdjustmentMessage("");
+  }
+
+  return (
+    <aside className="rounded-[28px] border border-slate-200 bg-slate-50 p-4">
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-black text-blue-700">Revisão de arte</p>
+          <h3 className="font-black">{post.title}</h3>
+        </div>
+        <button type="button" onClick={close} className="rounded-2xl bg-white p-2"><X size={18} /></button>
+      </div>
+
+      <label className="mb-4 grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-white px-4 py-6 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-50">
+        <FileUp size={28} />
+        <span className="mt-2 text-sm font-black">{assets.length ? "Adicionar mais artes" : "Adicionar imagem, vídeo ou arquivo"}</span>
+        <input type="file" multiple className="hidden" onChange={(event) => event.target.files && addPostReviewAssets(post, event.target.files)} />
+      </label>
+
+      {assets.length > 0 && (
+        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+          {assets.map((asset) => (
+            <button key={asset.id} type="button" onClick={() => setSelectedAssetId(asset.id)} className={`shrink-0 rounded-2xl border px-3 py-2 text-xs font-black ${selectedAsset?.id === asset.id ? "border-blue-600 bg-blue-700 text-white" : "border-slate-200 bg-white text-slate-600"}`}>
+              {asset.name}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selectedAsset ? (
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
+            {selectedAsset.type === "foto" ? (
+              <img src={selectedAsset.url} alt={selectedAsset.name} className="max-h-80 w-full object-contain" />
+            ) : selectedAsset.type === "video" ? (
+              <video src={selectedAsset.url} controls className="max-h-80 w-full bg-black" />
+            ) : (
+              <a href={selectedAsset.url} target="_blank" className="block p-8 text-center font-black text-blue-700">Abrir arquivo: {selectedAsset.name}</a>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={selectedAsset.status === "Aprovado" ? "green" : selectedAsset.status === "Ajustes solicitados" ? "red" : "blue"}>{selectedAsset.status}</Badge>
+            <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name}</span>
+          </div>
+          {canReview && (
+            <div className="space-y-2 rounded-3xl bg-white p-3">
+              <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="w-full rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white">Aprovar arte</button>
+              <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="O que precisa ajustar?" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+              <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="w-full rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+            </div>
+          )}
+          <form onSubmit={submitComment} className="flex gap-2">
+            <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário sobre esta arte" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+            <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-3 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
+          </form>
+          <div className="space-y-2">
+            {selectedAsset.comments.map((item) => (
+              <div key={item.id} className="rounded-2xl bg-white p-3">
+                <p className="text-sm font-black">{profileById.get(item.authorId)?.name}</p>
+                <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <p className="rounded-3xl bg-white p-5 text-sm font-bold text-slate-500">Adicione uma arte para iniciar a revisão.</p>
+      )}
+    </aside>
+  );
+}
+
+function IdeaModalV2({ modal, currentUser, channels, productLines, vehicleTypes, contentTypes, funnelStages, ideas, setIdeas, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const editing = modal?.kind === "idea" && modal.id ? ideas.find((idea) => idea.id === modal.id) : undefined;
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const value: Idea = { id: editing?.id ?? crypto.randomUUID(), title: String(form.get("title")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), type: String(form.get("type")) as Idea["type"], channelId: String(form.get("channelId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, priority: String(form.get("priority")) as Idea["priority"], order: editing?.order ?? ideas.length + 1 };
+    setIdeas((current) => editing ? current.map((idea) => idea.id === value.id ? value : idea) : [value, ...current]);
+    close();
+  }
+  return <><EntityForm onSubmit={submit}><TextInput name="title" label="Ideia" required defaultValue={editing?.title} /><Select name="type" label="Tipo" defaultValue={editing?.type} options={ideaTypes.map((item) => [item, item])} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} /><Select name="channelId" label="Canal" defaultValue={editing?.channelId} options={channels.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={funnelStages.map((item) => [item.id, item.name])} /><Select name="priority" label="Prioridade" defaultValue={editing?.priority} options={["Alta", "Média", "Baixa"].map((item) => [item, item])} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir ideia" onDelete={() => { setIdeas((current) => current.filter((idea) => idea.id !== editing.id)); close(); }} />}</>;
+}
+
+function CampaignModalV2({ modal, currentUser, profiles, productLines, vehicleTypes, funnelStages, campaigns, setCampaigns, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const editing = modal?.kind === "campaign" && modal.id ? campaigns.find((item) => item.id === modal.id) : undefined;
+  const initialAudience = editing?.audience && campaignAudienceOptions.includes(editing.audience) ? editing.audience : editing?.audience ? "Outros" : "Geral";
+  const [audienceChoice, setAudienceChoice] = useState(initialAudience);
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const audience = audienceChoice === "Outros" ? String(form.get("customAudience")).trim() || "Outros" : audienceChoice;
+    const value: Campaign = { id: editing?.id ?? crypto.randomUUID(), name: String(form.get("name")), objective: String(form.get("objective")), audience, message: String(form.get("message")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), startDate: String(form.get("startDate")), endDate: String(form.get("endDate")), status: editing?.status ?? "Planejada" };
+    setCampaigns((current) => editing ? current.map((item) => item.id === value.id ? value : item) : [value, ...current]);
+    close();
+  }
+  return <><EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{campaignAudienceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{audienceChoice === "Outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={campaignAudienceOptions.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir campanha" onDelete={() => { setCampaigns((current) => current.filter((campaign) => campaign.id !== editing.id)); close(); }} />}</>;
+}
+
+function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, metrics, setMetrics, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const editing = modal?.kind === "metric" && modal.id ? metrics.find((metric) => metric.id === modal.id) : undefined;
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const postId = String(form.get("postId") ?? "");
+    const linkedPost = posts.find((post) => post.id === postId);
+    const value: PostMetric = {
+      id: editing?.id ?? crypto.randomUUID(),
+      postId: postId || undefined,
+      postTitle: String(form.get("postTitle")) || linkedPost?.title || "Métrica avulsa",
+      channelId: String(form.get("channelId")) || linkedPost?.channelId || "",
+      campaignId: String(form.get("campaignId")) || linkedPost?.campaignId || "",
+      productLineId: String(form.get("productLineId")) || linkedPost?.productLineId || "",
+      vehicleTypeId: String(form.get("vehicleTypeId")) || linkedPost?.vehicleTypeId || "",
+      contentTypeId: String(form.get("contentTypeId")) || linkedPost?.contentTypeId || "",
+      funnelStageId: String(form.get("funnelStageId")) || linkedPost?.funnelStageId || "",
+      date: String(form.get("date")),
+      reach: Number(form.get("reach")),
+      likes: Number(form.get("likes")),
+      comments: Number(form.get("comments")),
+      shares: Number(form.get("shares")),
+      clicks: Number(form.get("clicks")),
+      leads: Number(form.get("leads")),
+      notes: String(form.get("notes")),
+      learning: String(form.get("learning"))
+    };
+    setMetrics((current) => editing ? current.map((metric) => metric.id === value.id ? value : metric) : [value, ...current]);
+    close();
+  }
+  return <><EntityForm onSubmit={submit}><Select name="postId" label="Post vinculado" defaultValue={editing?.postId ?? ""} options={[["", "Métrica avulsa"], ...posts.map((post) => [post.id, post.title])]} /><TextInput name="postTitle" label="Nome do post/registro" required defaultValue={editing?.postTitle} /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={editing?.date ?? todayIso()} /><Select name="channelId" label="Canal" defaultValue={editing?.channelId} options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={funnelStages.map((item) => [item.id, item.name])} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required defaultValue={String((editing as unknown as Record<string, number | undefined>)?.[field] ?? "")} />)}<TextArea name="notes" label="Observações do resultado" defaultValue={editing?.notes} /><TextArea name="learning" label="Aprendizado" defaultValue={editing?.learning} /><SubmitButton>Salvar</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir métrica" onDelete={() => { setMetrics((current) => current.filter((metric) => metric.id !== editing.id)); close(); }} />}</>;
+}
+
+function PostModal({ modal, currentUser, profiles, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, posts, setPosts, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
+  const neutralCampaign = campaigns.find((campaign) => normalizeText(campaign.name) === "campanha neutra");
+  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? channels[0]?.id ?? "");
+  const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
+  const postFormatOptions = postFormatOptionsForChannel(selectedChannel);
+  const defaultFormat = editing?.format && postFormatOptions.includes(editing.format) ? editing.format : defaultPostFormatForChannel(selectedChannel);
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const status = editing?.status ?? "Ideia";
+    const value: EditorialPost = {
+      id: editing?.id ?? crypto.randomUUID(),
+      title: String(form.get("title")),
+      channelId: String(form.get("channelId")),
+      campaignId: String(form.get("campaignId")),
+      productLineId: String(form.get("productLineId")),
+      vehicleTypeId: String(form.get("vehicleTypeId")),
+      contentTypeId: String(form.get("contentTypeId")),
+      funnelStageId: String(form.get("funnelStageId")),
+      createdBy: editing?.createdBy ?? currentUser.id,
+      assignedTo: form.getAll("assignedTo").map(String),
+      status,
+      format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel),
+      order: editing?.order ?? posts.filter((post) => post.status === status).length + 1,
+      publishAt: String(form.get("publishAt")),
+      description: String(form.get("description"))
+    };
+    setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
+    close();
+  }
+  return <EntityForm onSubmit={submit}><TextInput name="title" label="Título" required defaultValue={editing?.title} /><label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><Select key={selectedChannelId} name="format" label="Formato" defaultValue={defaultFormat} options={postFormatOptions.map((item) => [item, item])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId ?? neutralCampaign?.id} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} /><TextInput name="publishAt" label="Data e hora" type="datetime-local" required defaultValue={editing?.publishAt} /><TextArea name="description" label="Descrição" defaultValue={editing?.description} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>;
+}
+
+function CampaignModal({ modal, currentUser, profiles, productLines, vehicleTypes, funnelStages, campaigns, setCampaigns, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const editing = modal?.kind === "campaign" && modal.id ? campaigns.find((item) => item.id === modal.id) : undefined;
+  const initialAudience = editing?.audience && campaignAudienceOptions.includes(editing.audience) ? editing.audience : editing?.audience ? "Outros" : "Geral";
+  const [audienceChoice, setAudienceChoice] = useState(initialAudience);
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const audience = audienceChoice === "Outros" ? String(form.get("customAudience")).trim() || "Outros" : audienceChoice;
+    const value: Campaign = { id: editing?.id ?? crypto.randomUUID(), name: String(form.get("name")), objective: String(form.get("objective")), audience, message: String(form.get("message")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), startDate: String(form.get("startDate")), endDate: String(form.get("endDate")), status: editing?.status ?? "Planejada" };
+    setCampaigns((current) => editing ? current.map((item) => item.id === value.id ? value : item) : [value, ...current]);
+    close();
+  }
+  return <EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{campaignAudienceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{audienceChoice === "Outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={campaignAudienceOptions.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>;
+}
+
+function MetricModal({ channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, setMetrics, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setMetrics((current) => [{ id: crypto.randomUUID(), postId: undefined, postTitle: String(form.get("postTitle")), channelId: String(form.get("channelId")), campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), date: String(form.get("date")), reach: Number(form.get("reach")), likes: Number(form.get("likes")), comments: Number(form.get("comments")), shares: Number(form.get("shares")), clicks: Number(form.get("clicks")), leads: Number(form.get("leads")), notes: String(form.get("notes")), learning: String(form.get("learning")) }, ...current]);
+    close();
+  }
+  return <EntityForm onSubmit={submit}><TextInput name="postTitle" label="Post" required /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={todayIso()} /><Select name="channelId" label="Canal" options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" options={contentTypes.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" options={funnelStages.map((item) => [item.id, item.name])} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required />)}<TextArea name="notes" label="Observações do resultado" /><TextArea name="learning" label="Aprendizado" /><SubmitButton>Salvar</SubmitButton></EntityForm>;
+}
+
+function ProfileModal({ currentUser, setProfiles, uploadProfilePhoto, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email"));
+    const password = String(form.get("password"));
+    const file = form.get("avatar");
+
+    if (supabase && email !== currentUser.email) {
+      await supabase.auth.updateUser({ email });
+    }
+    if (supabase && password) {
+      await supabase.auth.updateUser({ password });
+    }
+    if (file instanceof File && file.size > 0) {
+      await uploadProfilePhoto(currentUser.id, file);
+    }
+
+    setProfiles((current) =>
+      current.map((profile) =>
+        profile.id === currentUser.id
+          ? {
+              ...profile,
+              name: String(form.get("name")),
+              email,
+              phone: String(form.get("phone")),
+              bio: String(form.get("bio"))
+            }
+          : profile
+      )
+    );
+    close();
+  }
+
+  return (
+    <EntityForm onSubmit={submit}>
+      <TextInput name="name" label="Nome" required defaultValue={currentUser.name} />
+      <TextInput name="email" label="Email" type="email" required defaultValue={currentUser.email} />
+      <TextInput name="phone" label="Telefone" defaultValue={currentUser.phone} />
+      <PasswordInput name="password" label="Nova senha" />
+      <label className="block text-sm font-bold text-slate-600 md:col-span-2">
+        Foto de perfil
+        <input name="avatar" type="file" accept="image/*" className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" />
+      </label>
+      <TextArea name="bio" label="Bio curta" defaultValue={currentUser.bio} />
+      <SubmitButton>Salvar perfil</SubmitButton>
+    </EntityForm>
+  );
+}
+
+function TeamMemberModal({ modal, currentUser, profiles, setProfiles, uploadProfilePhoto, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const member = modal?.kind === "teamMember" ? profiles.find((profile) => profile.id === modal.id) : undefined;
+  const canManageTeam = currentUser.role === "admin" || currentUser.role === "gestor";
+  if (!member || !canManageTeam) return <p className="text-sm font-bold text-slate-500">Você não tem permissão para editar este membro.</p>;
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!member) return;
+    const form = new FormData(event.currentTarget);
+    const file = form.get("avatar");
+    if (file instanceof File && file.size > 0) {
+      await uploadProfilePhoto(member.id, file);
+    }
+    setProfiles((current) =>
+      current.map((profile) =>
+        profile.id === member.id
+          ? {
+              ...profile,
+              name: String(form.get("name")),
+              email: String(form.get("email")),
+              phone: String(form.get("phone")),
+              bio: String(form.get("bio")),
+              role: String(form.get("role")) as Role,
+              active: form.get("active") === "on"
+            }
+          : profile
+      )
+    );
+    close();
+  }
+
+  return (
+    <EntityForm onSubmit={submit}>
+      <TextInput name="name" label="Nome" required defaultValue={member.name} />
+      <TextInput name="email" label="Email" type="email" required defaultValue={member.email} />
+      <TextInput name="phone" label="Telefone" defaultValue={member.phone} />
+      <Select name="role" label="Função" defaultValue={member.role} options={roles.map((role) => [role, roleLabel[role]])} />
+      <label className="block text-sm font-bold text-slate-600 md:col-span-2">
+        Foto de perfil
+        <input name="avatar" type="file" accept="image/*" className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" />
+      </label>
+      <label className="flex items-center gap-2 rounded-2xl bg-slate-50 px-3 py-2 text-sm font-bold text-slate-600">
+        <input name="active" type="checkbox" defaultChecked={member.active} />
+        Membro ativo
+      </label>
+      <TextArea name="bio" label="Bio curta" defaultValue={member.bio} />
+      <SubmitButton>Salvar membro</SubmitButton>
+    </EntityForm>
+  );
+}
+
+function DeleteButton({ label, onDelete }: { label: string; onDelete: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (window.confirm(`${label}?`)) onDelete();
+      }}
+      className="mt-5 inline-flex items-center gap-2 rounded-2xl bg-rose-100 px-4 py-2 text-sm font-black text-rose-700"
+    >
+      <Trash2 size={16} />
+      {label}
+    </button>
+  );
+}
+
+function EntityForm({ children, onSubmit }: { children: ReactNode; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
+  return <form onSubmit={onSubmit} className="grid gap-4 md:grid-cols-2">{children}</form>;
+}
+
+function YearPicker({ visibleMonth, setVisibleMonth, setCalendarMode }: { visibleMonth: Date; setVisibleMonth: Dispatch<SetStateAction<Date>>; setCalendarMode: Dispatch<SetStateAction<"Semana" | "Mês" | "Ano">> }) {
+  const year = visibleMonth.getFullYear();
+  return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{Array.from({ length: 12 }, (_, month) => <button key={month} onClick={() => { setVisibleMonth(new Date(year, month, 1)); setCalendarMode("Mês"); }} className="rounded-3xl border border-slate-100 bg-slate-50 p-5 text-left font-black hover:border-blue-300 hover:bg-blue-50">{new Intl.DateTimeFormat("pt-BR", { month: "long" }).format(new Date(year, month, 1))}</button>)}</div>;
+}
+
+function makeWeek(start: Date) {
+  const first = new Date(start);
+  const mondayOffset = (first.getDay() + 6) % 7;
+  first.setDate(first.getDate() - mondayOffset);
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(first);
+    date.setDate(first.getDate() + index);
+    return date;
+  });
+}
+
+function makeMonth(date: Date) {
+  const first = new Date(date.getFullYear(), date.getMonth(), 1);
+  first.setDate(first.getDate() - first.getDay());
+  return Array.from({ length: 42 }, (_, index) => {
+    const day = new Date(first);
+    day.setDate(first.getDate() + index);
+    return day;
+  });
+}
+
+function Stat({ label, value, icon: Icon }: { label: string; value: string | number; icon: LucideIcon }) {
+  return <div className="rounded-[28px] bg-gradient-to-br from-blue-700 to-blue-500 p-5 text-white shadow-lg shadow-blue-900/10 motion-smooth animate-soft-pop"><div className="flex items-center justify-between"><p className="text-sm font-bold opacity-80">{label}</p><Icon size={20} /></div><p className="mt-4 text-3xl font-black">{value}</p></div>;
+}
+
+function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
+  return <section className="rounded-[30px] border border-slate-200 bg-white p-5 shadow-sm motion-smooth animate-fade-in-up"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-2"><Search size={17} className="text-blue-700" /><h2 className="font-black">{title}</h2></div>{action}</div>{children}</section>;
+}
+
+function RoundAdd({ onClick, label }: { onClick: () => void; label: string }) {
+  return <button onClick={onClick} aria-label={label} title={label} className="grid h-11 w-11 place-items-center rounded-full bg-blue-700 text-white shadow-lg shadow-blue-700/20 motion-smooth hover:bg-blue-800"><Plus size={22} /></button>;
+}
+
+function Badge({ children, tone }: { children: ReactNode; tone: "blue" | "cyan" | "slate" | "red" | "green" }) {
+  const tones = { blue: "bg-blue-100 text-blue-700", cyan: "bg-cyan-100 text-cyan-700", slate: "bg-slate-100 text-slate-600", red: "bg-rose-100 text-rose-700", green: "bg-emerald-100 text-emerald-700" };
+  return <span className={`inline-flex rounded-2xl px-2.5 py-1 text-xs font-black ${tones[tone]}`}>{children}</span>;
+}
+
+function FunnelBadge({ stage }: { stage?: FunnelStage }) {
+  if (!stage) return null;
+  return <span className="inline-flex rounded-2xl px-2.5 py-1 text-xs font-black text-white" style={{ backgroundColor: stage.color }}>{stage.name.split(" - ")[0]}</span>;
+}
+
+function Avatar({ profile, size }: { profile?: Profile; size: "xs" | "sm" | "md" | "lg" }) {
+  const sizes = { xs: "h-8 w-8 text-xs", sm: "h-10 w-10 text-xs", md: "h-12 w-12 text-sm", lg: "h-16 w-16 text-lg" };
+  return profile?.avatarUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={profile.avatarUrl} alt={profile.name} className={`${sizes[size]} rounded-full object-cover ring-2 ring-blue-100`} />
+  ) : <div className={`${sizes[size]} flex items-center justify-center rounded-full bg-blue-700 font-black text-white ring-2 ring-blue-100`}>{profile ? initials(profile.name) : <UserRound size={16} />}</div>;
+}
+
+function TextInput({ label, name, type = "text", required = false, defaultValue }: { label: string; name: string; type?: string; required?: boolean; defaultValue?: string }) {
+  return <label className="block text-sm font-bold text-slate-600">{label}<input name={name} type={type} required={required} defaultValue={defaultValue} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
+}
+
+function TextArea({ label, name, defaultValue }: { label: string; name: string; defaultValue?: string }) {
+  return <label className="block text-sm font-bold text-slate-600 md:col-span-2">{label}<textarea name={name} rows={4} defaultValue={defaultValue} className="mt-1 w-full resize-none rounded-3xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
+}
+
+function Select({ label, name, options, defaultValue }: { label: string; name: string; options: string[][]; defaultValue?: string }) {
+  return <label className="block text-sm font-bold text-slate-600">{label}<select name={name} defaultValue={defaultValue} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{options.map(([value, labelText]) => <option key={value} value={value}>{labelText}</option>)}</select></label>;
+}
+
+function SelectControlled({ label, value, options, onChange }: { label: string; value: string; options: string[][]; onChange: (value: string) => void }) {
+  return <label className="block text-sm font-bold text-slate-600">{label}<select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{options.map(([optionValue, labelText]) => <option key={optionValue} value={optionValue}>{labelText}</option>)}</select></label>;
+}
+
+function MultiSelect({ label, values, profiles, onChange }: { label: string; values: string[]; profiles: Profile[]; onChange: (values: string[]) => void }) {
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const slots = values.length ? values : [""];
+  function updateSlot(index: number, value: string) {
+    const next = slots.slice();
+    next[index] = value;
+    onChange(Array.from(new Set(next.filter(Boolean))));
+    setOpenIndex(null);
+  }
+  return (
+    <div className="block text-sm font-bold text-slate-600">
+      {label}
+      <div className="mt-1 space-y-2 rounded-2xl border border-slate-200 bg-white p-3">
+        {slots.map((value, index) => (
+          <div key={`${value}-${index}`} className="relative flex gap-2">
+            <button type="button" onClick={() => setOpenIndex(openIndex === index ? null : index)} className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-left font-black text-slate-700">
+              <span className="truncate">{profiles.find((profile) => profile.id === value)?.name ?? "Selecionar responsável"}</span>
+              <ChevronDown size={16} className="shrink-0 text-slate-400" />
+            </button>
+            {index === slots.length - 1 && (
+              <button type="button" onClick={() => onChange([...slots.filter(Boolean), ""])} className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-blue-50 text-blue-700 motion-smooth hover:bg-blue-100" aria-label="Adicionar responsável" title="Adicionar responsável">
+                <Plus size={17} />
+              </button>
+            )}
+            {slots.length > 1 && (
+              <button type="button" onClick={() => onChange(slots.filter((_, slotIndex) => slotIndex !== index).filter(Boolean))} className="rounded-2xl bg-rose-100 px-3 text-rose-700">
+                <X size={15} />
+              </button>
+            )}
+            {openIndex === index && (
+              <div className="absolute left-0 top-12 z-40 w-full rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                {profiles.map((profile) => (
+                  <button key={profile.id} type="button" onClick={() => updateSlot(index, profile.id)} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black hover:bg-blue-50">
+                    {profile.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MultiSelectField({ label, name, values, profiles }: { label: string; name: string; values: string[]; profiles: Profile[] }) {
+  const [selected, setSelected] = useState(values.length ? values : [""]);
+  const [openIndex, setOpenIndex] = useState<number | null>(null);
+  function updateSlot(index: number, value: string) {
+    const next = selected.slice();
+    next[index] = value;
+    setSelected(Array.from(new Set(next.filter(Boolean))));
+    setOpenIndex(null);
+  }
+  return (
+    <div className="block text-sm font-bold text-slate-600">
+      {label}
+      {selected.filter(Boolean).map((value) => <input key={value} type="hidden" name={name} value={value} />)}
+      <div className="mt-1 space-y-2 rounded-2xl border border-slate-200 p-3">
+        {selected.map((value, index) => (
+          <div key={`${value}-${index}`} className="relative flex gap-2">
+            <button type="button" onClick={() => setOpenIndex(openIndex === index ? null : index)} className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3 py-2 text-left font-black text-slate-700">
+              <span className="truncate">{profiles.find((profile) => profile.id === value)?.name ?? "Selecionar responsável"}</span>
+              <ChevronDown size={16} className="shrink-0 text-slate-400" />
+            </button>
+            {index === selected.length - 1 && (
+              <button type="button" onClick={() => setSelected([...selected.filter(Boolean), ""])} className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-blue-50 text-blue-700 motion-smooth hover:bg-blue-100" aria-label="Adicionar responsável" title="Adicionar responsável">
+                <Plus size={17} />
+              </button>
+            )}
+            {selected.length > 1 && (
+              <button type="button" onClick={() => setSelected(selected.filter((_, slotIndex) => slotIndex !== index).filter(Boolean))} className="rounded-2xl bg-rose-100 px-3 text-rose-700">
+                <X size={15} />
+              </button>
+            )}
+            {openIndex === index && (
+              <div className="absolute left-0 top-12 z-40 w-full rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                {profiles.map((profile) => (
+                  <button key={profile.id} type="button" onClick={() => updateSlot(index, profile.id)} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black hover:bg-blue-50">
+                    {profile.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SubmitButton({ children, full = false }: { children: ReactNode; full?: boolean }) {
+  return <button type="submit" className={`${full ? "w-full" : ""} inline-flex items-center justify-center rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950`}>{children}</button>;
+}
+
+
+
+
+
