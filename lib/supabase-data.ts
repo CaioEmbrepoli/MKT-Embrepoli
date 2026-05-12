@@ -258,8 +258,13 @@ export async function replacePostReviewAssets(client: SupabaseClient, assets: Po
     reviewed_by: item.reviewedBy || null,
     name: item.name,
     file_type: item.type,
+    source: item.source,
     storage_path: item.url,
     public_url: item.url,
+    preview_url: item.previewUrl,
+    original_size: item.originalSize,
+    compressed_size: item.compressedSize,
+    mime_type: item.mimeType,
     status: item.status,
     uploaded_at: item.uploadedAt,
     reviewed_at: item.reviewedAt || null
@@ -295,7 +300,7 @@ export async function replaceTasks(client: SupabaseClient, tasks: Task[], previo
   await replaceAssignees(client, "task_assignees", "task_id", organizationId, tasks.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
   await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.checklist.map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
   await replaceChildRows(client, "task_comments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.comments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, author_id: item.authorId, message: item.message, created_at: item.createdAt }))));
-  await replaceChildRows(client, "task_attachments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.attachments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, uploaded_by: task.createdBy, name: item.name, file_type: item.type, storage_path: item.url, public_url: item.url }))));
+  await replaceChildRows(client, "task_attachments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.attachments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, uploaded_by: task.createdBy, name: item.name, file_type: item.type, source: item.source, storage_path: item.url, public_url: item.url, preview_url: item.previewUrl, original_size: item.originalSize, compressed_size: item.compressedSize, mime_type: item.mimeType }))));
 }
 
 export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric[], previous: PostMetric[] = []) {
@@ -435,7 +440,12 @@ function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {
     postId: row.post_id,
     name: row.name,
     type: row.file_type,
+    source: row.source ?? "upload",
     url: row.public_url || row.storage_path,
+    previewUrl: row.preview_url || row.public_url || row.storage_path,
+    originalSize: row.original_size ?? 0,
+    compressedSize: row.compressed_size ?? row.original_size ?? 0,
+    mimeType: row.mime_type ?? "",
     status: row.status,
     uploadedBy: row.uploaded_by ?? "",
     reviewedBy: row.reviewed_by ?? "",
@@ -472,7 +482,7 @@ function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], 
     description: row.description ?? "",
     checklist: checklist.sort((a, b) => a.sort_order - b.sort_order).map((item): ChecklistItem => ({ id: item.id, label: item.label, done: item.done })),
     comments: comments.map((item): TaskComment => ({ id: item.id, authorId: item.author_id, message: item.message, createdAt: item.created_at })),
-    attachments: attachments.map((item): TaskAttachment => ({ id: item.id, name: item.name, type: item.file_type, url: item.public_url || item.storage_path }))
+    attachments: attachments.map((item): TaskAttachment => ({ id: item.id, name: item.name, type: item.file_type, source: item.source ?? "upload", url: item.public_url || item.storage_path, previewUrl: item.preview_url || item.public_url || item.storage_path, originalSize: item.original_size ?? 0, compressedSize: item.compressed_size ?? item.original_size ?? 0, mimeType: item.mime_type ?? "" }))
   };
 }
 

@@ -158,6 +158,16 @@ const configTabs = ["Equipe", "Funil", "Filtros", "Conta e Permissões"] as cons
 const calendarTaskBoardId = "__calendar_posts__";
 const localDataKey = "embrepoli-marketing:v1";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
+const maxImageBytes = 2 * 1024 * 1024;
+const maxVideoBytes = 100 * 1024 * 1024;
+const maxImageDimension = 1920;
+
+type PreparedUploadFile = {
+  file: File;
+  originalSize: number;
+  compressedSize: number;
+  notice: string;
+};
 
 function postFormatOptionsForChannel(channel?: Channel) {
   const normalized = normalizeText(channel?.name ?? "");
@@ -169,6 +179,80 @@ function postFormatOptionsForChannel(channel?: Channel) {
 
 function defaultPostFormatForChannel(channel?: Channel) {
   return postFormatOptionsForChannel(channel)[0] ?? "Post";
+}
+
+function formatBytes(bytes: number) {
+  if (!bytes) return "0 MB";
+  return `${(bytes / 1024 / 1024).toFixed(bytes >= 1024 * 1024 ? 1 : 2)} MB`;
+}
+
+function fileKind(file: File): "arquivo" | "foto" | "video" {
+  return file.type.startsWith("image/") ? "foto" : file.type.startsWith("video/") ? "video" : "arquivo";
+}
+
+async function prepareUploadFile(file: File): Promise<PreparedUploadFile> {
+  if (file.type.startsWith("video/") && file.size > maxVideoBytes) {
+    throw new Error(`Vídeos podem ter no máximo ${formatBytes(maxVideoBytes)}. Para arquivos maiores, adicione um link do Google Drive.`);
+  }
+  if (!file.type.startsWith("image/") || file.size <= maxImageBytes) {
+    return { file, originalSize: file.size, compressedSize: file.size, notice: "" };
+  }
+  const compressed = await compressImageFile(file);
+  if (compressed.size > maxImageBytes) {
+    throw new Error(`Não foi possível reduzir a imagem para menos de ${formatBytes(maxImageBytes)}. Tente enviar uma imagem menor.`);
+  }
+  return {
+    file: compressed,
+    originalSize: file.size,
+    compressedSize: compressed.size,
+    notice: `Imagem comprimida de ${formatBytes(file.size)} para ${formatBytes(compressed.size)}.`
+  };
+}
+
+async function compressImageFile(file: File) {
+  const image = await loadImage(file);
+  let width = image.naturalWidth;
+  let height = image.naturalHeight;
+  const ratio = Math.min(1, maxImageDimension / Math.max(width, height));
+  width = Math.max(1, Math.round(width * ratio));
+  height = Math.max(1, Math.round(height * ratio));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Não foi possível preparar a compressão da imagem.");
+  context.drawImage(image, 0, 0, width, height);
+  URL.revokeObjectURL(image.src);
+
+  let quality = 0.82;
+  let blob = await canvasToBlob(canvas, "image/jpeg", quality);
+  while (blob.size > maxImageBytes && quality > 0.42) {
+    quality -= 0.08;
+    blob = await canvasToBlob(canvas, "image/jpeg", quality);
+  }
+  return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+}
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new window.Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Não foi possível ler a imagem enviada."));
+    image.src = URL.createObjectURL(file);
+  });
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Não foi possível comprimir a imagem.")), type, quality);
+  });
+}
+
+function drivePreviewUrl(url: string) {
+  const trimmed = url.trim();
+  const match = trimmed.match(/drive\.google\.com\/file\/d\/([^/]+)/) ?? trimmed.match(/[?&]id=([^&]+)/);
+  if (!match?.[1]) return "";
+  return `https://drive.google.com/file/d/${match[1]}/preview`;
 }
 
 class AnyButtonPointerSensor extends PointerSensor {
@@ -687,31 +771,66 @@ export default function Home() {
   */
 
   async function uploadProfilePhoto(profileId: string, file: File) {
-    let avatarUrl = URL.createObjectURL(file);
-    if (supabase) {
-      const path = `avatars/${profileId}-${Date.now()}-${file.name}`;
-      const { error } = await supabase.storage.from("profile-avatars").upload(path, file, { upsert: true });
-      if (!error) {
-        avatarUrl = supabase.storage.from("profile-avatars").getPublicUrl(path).data.publicUrl;
+    setSaveStatus("saving");
+    setSaveError(file.size > maxImageBytes ? "Comprimindo imagem..." : "");
+    try {
+      const prepared = await prepareUploadFile(file);
+      let avatarUrl = URL.createObjectURL(prepared.file);
+      if (supabase) {
+        const path = `avatars/${profileId}-${Date.now()}-${prepared.file.name}`;
+        const { error } = await supabase.storage.from("profile-avatars").upload(path, prepared.file, { upsert: true });
+        if (!error) {
+          avatarUrl = supabase.storage.from("profile-avatars").getPublicUrl(path).data.publicUrl;
+        }
       }
+      if (prepared.notice) setSaveError(prepared.notice);
+      syncProfiles((current) => current.map((profile) => (profile.id === profileId ? { ...profile, avatarUrl } : profile)));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erro ao enviar imagem.";
+      setSaveStatus("error");
+      setSaveError(message);
+      window.alert(message);
     }
-    syncProfiles((current) => current.map((profile) => (profile.id === profileId ? { ...profile, avatarUrl } : profile)));
+  }
+
+  async function uploadFileToStorage(bucket: string, path: string, file: File) {
+    if (!supabase) return URL.createObjectURL(file);
+    const { error } = await supabase.storage.from(bucket).upload(path, file);
+    if (error) throw error;
+    return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
+  }
+
+  async function addTaskAttachment(taskId: string, file: File) {
+    setSaveStatus("saving");
+    setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
+    try {
+      const prepared = await prepareUploadFile(file);
+      const type = fileKind(prepared.file);
+      const path = `${taskId}/${Date.now()}-${prepared.file.name}`;
+      const url = await uploadFileToStorage("task-attachments", path, prepared.file);
+      const attachment: TaskAttachment = { id: crypto.randomUUID(), name: prepared.file.name, type, source: "upload", url, previewUrl: url, originalSize: prepared.originalSize, compressedSize: prepared.compressedSize, mimeType: prepared.file.type };
+      if (prepared.notice) setSaveError(prepared.notice);
+      updateTask(taskId, (task) => ({ ...task, attachments: [attachment, ...task.attachments] }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erro ao enviar arquivo.";
+      setSaveStatus("error");
+      setSaveError(message);
+      window.alert(message);
+    }
+  }
+
+  function addTaskExternalLink(taskId: string, url: string) {
+    const previewUrl = drivePreviewUrl(url);
+    if (!previewUrl) {
+      window.alert("Link do Google Drive inválido. Use um link de compartilhamento do arquivo.");
+      return;
+    }
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: "Vídeo do Google Drive", type: "video", source: "external", url, previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
+    updateTask(taskId, (task) => ({ ...task, attachments: [attachment, ...task.attachments] }));
   }
 
   function updateTask(taskId: string, updater: (task: Task) => Task) {
     syncTasks((current) => current.map((task) => (task.id === taskId ? updater(task) : task)));
-  }
-
-  async function addTaskAttachment(taskId: string, file: File) {
-    const type = file.type.startsWith("image/") ? "foto" : file.type.startsWith("video/") ? "video" : "arquivo";
-    let url = URL.createObjectURL(file);
-    if (supabase) {
-      const path = `${taskId}/${Date.now()}-${file.name}`;
-      const { error } = await supabase.storage.from("task-attachments").upload(path, file);
-      if (!error) url = supabase.storage.from("task-attachments").getPublicUrl(path).data.publicUrl;
-    }
-    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: file.name, type, url };
-    updateTask(taskId, (task) => ({ ...task, attachments: [attachment, ...task.attachments] }));
   }
 
   function createNotifications(userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) {
@@ -743,30 +862,70 @@ export default function Home() {
   async function addPostReviewAssets(post: EditorialPost, files: FileList | File[]) {
     const uploaded: PostReviewAsset[] = [];
     for (const file of Array.from(files)) {
-      const type = file.type.startsWith("image/") ? "foto" : file.type.startsWith("video/") ? "video" : "arquivo";
-      let url = URL.createObjectURL(file);
-      if (supabase) {
-        const path = `${post.id}/${Date.now()}-${file.name}`;
-        const { error } = await supabase.storage.from("post-review-assets").upload(path, file);
-        if (!error) url = supabase.storage.from("post-review-assets").getPublicUrl(path).data.publicUrl;
+      setSaveStatus("saving");
+      setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
+      try {
+        const prepared = await prepareUploadFile(file);
+        const type = fileKind(prepared.file);
+        const path = `${post.id}/${Date.now()}-${prepared.file.name}`;
+        const url = await uploadFileToStorage("post-review-assets", path, prepared.file);
+        if (prepared.notice) setSaveError(prepared.notice);
+        uploaded.push({
+          id: crypto.randomUUID(),
+          postId: post.id,
+          name: prepared.file.name,
+          type,
+          source: "upload",
+          url,
+          previewUrl: url,
+          originalSize: prepared.originalSize,
+          compressedSize: prepared.compressedSize,
+          mimeType: prepared.file.type,
+          status: "Aguardando revisão",
+          uploadedBy: currentUser.id,
+          reviewedBy: "",
+          uploadedAt: new Date().toISOString(),
+          reviewedAt: "",
+          comments: []
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Erro ao enviar arquivo.";
+        setSaveStatus("error");
+        setSaveError(message);
+        window.alert(message);
       }
-      uploaded.push({
-        id: crypto.randomUUID(),
-        postId: post.id,
-        name: file.name,
-        type,
-        url,
-        status: "Aguardando revisão",
-        uploadedBy: currentUser.id,
-        reviewedBy: "",
-        uploadedAt: new Date().toISOString(),
-        reviewedAt: "",
-        comments: []
-      });
     }
     if (!uploaded.length) return;
     syncPostReviewAssets((current) => [...uploaded, ...current]);
     createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
+  }
+
+  function addPostReviewExternalAsset(post: EditorialPost, url: string) {
+    const previewUrl = drivePreviewUrl(url);
+    if (!previewUrl) {
+      window.alert("Link do Google Drive inválido. Use um link de compartilhamento do arquivo.");
+      return;
+    }
+    const asset: PostReviewAsset = {
+      id: crypto.randomUUID(),
+      postId: post.id,
+      name: "Vídeo do Google Drive",
+      type: "video",
+      source: "external",
+      url,
+      previewUrl,
+      originalSize: 0,
+      compressedSize: 0,
+      mimeType: "text/html",
+      status: "Aguardando revisão",
+      uploadedBy: currentUser.id,
+      reviewedBy: "",
+      uploadedAt: new Date().toISOString(),
+      reviewedAt: "",
+      comments: []
+    };
+    syncPostReviewAssets((current) => [asset, ...current]);
+    createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", asset.id);
   }
 
   function updatePostReviewAsset(assetId: string, updater: (asset: PostReviewAsset) => PostReviewAsset) {
@@ -1023,6 +1182,7 @@ export default function Home() {
         setPosts={syncPosts}
         postReviewAssets={postReviewAssets}
         addPostReviewAssets={addPostReviewAssets}
+        addPostReviewExternalAsset={addPostReviewExternalAsset}
         setReviewAssetStatus={setReviewAssetStatus}
         addReviewComment={addReviewComment}
         ideas={ideas}
@@ -1037,6 +1197,7 @@ export default function Home() {
         taskColumns={taskColumns}
         updateTask={updateTask}
         addTaskAttachment={addTaskAttachment}
+        addTaskExternalLink={addTaskExternalLink}
         addSubtask={addSubtask}
       />
     </main>
@@ -1211,7 +1372,7 @@ function Header({
       <div className="flex items-start gap-3">
         {saveStatus !== "idle" && (
           <div className={`hidden rounded-2xl px-3 py-2 text-xs font-black md:block ${saveStatus === "error" ? "bg-rose-100 text-rose-700" : saveStatus === "saving" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`} title={saveError || undefined}>
-            {saveStatus === "saving" ? "Salvando..." : saveStatus === "error" ? "Erro ao salvar" : "Salvo"}
+            {saveStatus === "saving" ? saveError || "Salvando..." : saveStatus === "error" ? "Erro ao salvar" : saveError || "Salvo"}
           </div>
         )}
         <div className="relative">
@@ -2836,6 +2997,7 @@ function EntityModal(props: {
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   postReviewAssets: PostReviewAsset[];
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
+  addPostReviewExternalAsset: (post: EditorialPost, url: string) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
   ideas: Idea[];
@@ -2850,6 +3012,7 @@ function EntityModal(props: {
   taskColumns: TaskColumn[];
   updateTask: (taskId: string, updater: (task: Task) => Task) => void;
   addTaskAttachment: (taskId: string, file: File) => void;
+  addTaskExternalLink: (taskId: string, url: string) => void;
   addSubtask: (task: Task, title?: string) => void;
 }) {
   if (!props.modal) return null;
@@ -2894,7 +3057,7 @@ function modalTitle(modal: NonNullable<ModalState>) {
   return modal.id ? "Editar métrica" : "Nova métrica";
 }
 
-function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, addSubtask, setModal, setTasks, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
+function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const subtasks = tasks.filter((item) => item.parentTaskId === task.id);
   const parentTask = task.parentTaskId ? tasks.find((item) => item.id === task.parentTaskId) : undefined;
@@ -2956,6 +3119,13 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     updateTask(task.id, (current) => ({ ...current, comments: [{ id: crypto.randomUUID(), authorId: currentUser.id, message: String(form.get("message")), createdAt: new Date().toISOString() }, ...current.comments] }));
+    event.currentTarget.reset();
+  }
+
+  function addExternalAttachment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    addTaskExternalLink(task.id, String(form.get("externalUrl")));
     event.currentTarget.reset();
   }
 
@@ -3058,10 +3228,20 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         <label className="grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50 px-4 py-8 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-100">
           <Camera size={34} />
           <span className="mt-3 text-sm font-black">Adicionar imagem, vídeo ou arquivo</span>
-          <span className="mt-1 text-xs font-bold text-blue-500">Clique para selecionar do computador</span>
+          <span className="mt-1 text-xs font-bold text-blue-500">Imagens até 2 MB, vídeos até 100 MB</span>
           <input type="file" className="hidden" onChange={(event) => event.target.files?.[0] && addTaskAttachment(task.id, event.target.files[0])} />
         </label>
-        <div className="space-y-2">{task.attachments.map((attachment) => <a key={attachment.id} href={attachment.url} target="_blank" className="block rounded-2xl bg-slate-50 p-3 text-sm font-black">{attachment.type}: {attachment.name}</a>)}</div>
+        <form onSubmit={addExternalAttachment} className="flex gap-2">
+          <input name="externalUrl" required placeholder="Cole um link do Google Drive" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+          <button className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white">Adicionar link</button>
+        </form>
+        <div className="space-y-2">{task.attachments.map((attachment) => (
+          <div key={attachment.id} className="rounded-2xl bg-slate-50 p-3 text-sm font-black">
+            <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.type}: {attachment.name}</a>
+            <p className="mt-1 text-xs font-bold text-slate-400">{attachment.source === "external" ? "Google Drive" : `${formatBytes(attachment.compressedSize || attachment.originalSize)}${attachment.originalSize && attachment.compressedSize && attachment.originalSize !== attachment.compressedSize ? ` após compressão de ${formatBytes(attachment.originalSize)}` : ""}`}</p>
+            {attachment.source === "external" && attachment.previewUrl && <iframe src={attachment.previewUrl} allow="autoplay" className="mt-3 aspect-video w-full rounded-2xl border border-slate-200 bg-white" />}
+          </div>
+        ))}</div>
       </section>
 
       <section className="sticky bottom-0 -mx-5 border-t border-slate-200 bg-white px-5 py-4">
@@ -3083,7 +3263,7 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
 function normalizeText(value: string) {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
-function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, posts, setPosts, postReviewAssets, addPostReviewAssets, setReviewAssetStatus, addReviewComment, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, setReviewAssetStatus, addReviewComment, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
   const defaultPublishAt = editing?.publishAt ?? (modal?.kind === "post" && modal.date ? toDateTimeLocalValue(modal.date) : "");
   const neutralCampaign = campaigns.find((campaign) => normalizeText(campaign.name) === "campanha neutra");
@@ -3145,6 +3325,7 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
           profileById={profileById}
           canReview={canReview}
           addPostReviewAssets={addPostReviewAssets}
+          addPostReviewExternalAsset={addPostReviewExternalAsset}
           setReviewAssetStatus={setReviewAssetStatus}
           addReviewComment={addReviewComment}
           close={() => setReviewOpen(false)}
@@ -3162,6 +3343,7 @@ function PostReviewPanel({
   profileById,
   canReview,
   addPostReviewAssets,
+  addPostReviewExternalAsset,
   setReviewAssetStatus,
   addReviewComment,
   close
@@ -3173,12 +3355,14 @@ function PostReviewPanel({
   profileById: Map<string, Profile>;
   canReview: boolean;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
+  addPostReviewExternalAsset: (post: EditorialPost, url: string) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
   close: () => void;
 }) {
   const [adjustmentMessage, setAdjustmentMessage] = useState("");
   const [comment, setComment] = useState("");
+  const [externalUrl, setExternalUrl] = useState("");
 
   function submitComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -3193,6 +3377,12 @@ function PostReviewPanel({
     setAdjustmentMessage("");
   }
 
+  function submitExternalAsset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    addPostReviewExternalAsset(post, externalUrl);
+    setExternalUrl("");
+  }
+
   return (
     <aside className="rounded-[28px] border border-slate-200 bg-slate-50 p-4">
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -3205,9 +3395,14 @@ function PostReviewPanel({
 
       <label className="mb-4 grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-white px-4 py-6 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-50">
         <FileUp size={28} />
-        <span className="mt-2 text-sm font-black">{assets.length ? "Adicionar mais artes" : "Adicionar imagem, vídeo ou arquivo"}</span>
+        <span className="mt-2 text-sm font-black">{assets.length ? "Adicionar mais artes" : "Enviar arquivo"}</span>
+        <span className="mt-1 text-xs font-bold text-blue-500">Imagens até 2 MB, vídeos até 100 MB</span>
         <input type="file" multiple className="hidden" onChange={(event) => event.target.files && addPostReviewAssets(post, event.target.files)} />
       </label>
+      <form onSubmit={submitExternalAsset} className="mb-4 flex gap-2">
+        <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Link do Google Drive" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+        <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar link</button>
+      </form>
 
       {assets.length > 0 && (
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
@@ -3222,16 +3417,19 @@ function PostReviewPanel({
       {selectedAsset ? (
         <div className="space-y-4">
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
-            {selectedAsset.type === "foto" ? (
-              <img src={selectedAsset.url} alt={selectedAsset.name} className="max-h-80 w-full object-contain" />
+            {selectedAsset.source === "external" ? (
+              <iframe src={selectedAsset.previewUrl} allow="autoplay" className="aspect-video w-full bg-white" />
+            ) : selectedAsset.type === "foto" ? (
+              <img src={selectedAsset.previewUrl || selectedAsset.url} alt={selectedAsset.name} className="max-h-80 w-full object-contain" />
             ) : selectedAsset.type === "video" ? (
-              <video src={selectedAsset.url} controls className="max-h-80 w-full bg-black" />
+              <video src={selectedAsset.previewUrl || selectedAsset.url} controls className="max-h-80 w-full bg-black" />
             ) : (
               <a href={selectedAsset.url} target="_blank" className="block p-8 text-center font-black text-blue-700">Abrir arquivo: {selectedAsset.name}</a>
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={selectedAsset.status === "Aprovado" ? "green" : selectedAsset.status === "Ajustes solicitados" ? "red" : "blue"}>{selectedAsset.status}</Badge>
+            <Badge tone="slate">{selectedAsset.source === "external" ? "Google Drive" : formatBytes(selectedAsset.compressedSize || selectedAsset.originalSize)}</Badge>
             <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name}</span>
           </div>
           {canReview && (

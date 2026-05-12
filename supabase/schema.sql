@@ -153,8 +153,13 @@ create table if not exists public.post_review_assets (
   reviewed_by text references public.profiles(id) on delete set null,
   name text not null,
   file_type text not null,
+  source text not null default 'upload',
   storage_path text not null,
   public_url text not null default '',
+  preview_url text not null default '',
+  original_size bigint not null default 0,
+  compressed_size bigint not null default 0,
+  mime_type text not null default '',
   status text not null default 'Aguardando revisão',
   uploaded_at timestamptz not null default now(),
   reviewed_at timestamptz,
@@ -249,8 +254,13 @@ create table if not exists public.task_attachments (
   uploaded_by text references public.profiles(id) on delete set null,
   name text not null,
   file_type text not null,
+  source text not null default 'upload',
   storage_path text not null,
   public_url text not null default '',
+  preview_url text not null default '',
+  original_size bigint not null default 0,
+  compressed_size bigint not null default 0,
+  mime_type text not null default '',
   created_at timestamptz not null default now()
 );
 
@@ -303,6 +313,16 @@ alter table public.posts add column if not exists vehicle_type_id text reference
 alter table public.posts add column if not exists content_type_id text references public.content_types(id) on delete set null;
 alter table public.ideas add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;
 alter table public.ideas add column if not exists content_type_id text references public.content_types(id) on delete set null;
+alter table public.post_review_assets add column if not exists source text not null default 'upload';
+alter table public.post_review_assets add column if not exists preview_url text not null default '';
+alter table public.post_review_assets add column if not exists original_size bigint not null default 0;
+alter table public.post_review_assets add column if not exists compressed_size bigint not null default 0;
+alter table public.post_review_assets add column if not exists mime_type text not null default '';
+alter table public.task_attachments add column if not exists source text not null default 'upload';
+alter table public.task_attachments add column if not exists preview_url text not null default '';
+alter table public.task_attachments add column if not exists original_size bigint not null default 0;
+alter table public.task_attachments add column if not exists compressed_size bigint not null default 0;
+alter table public.task_attachments add column if not exists mime_type text not null default '';
 
 create or replace function public.current_organization_id()
 returns text

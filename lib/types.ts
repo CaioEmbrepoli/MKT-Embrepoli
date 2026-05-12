@@ -106,7 +106,12 @@ export type PostReviewAsset = {
   postId: string;
   name: string;
   type: "arquivo" | "foto" | "video";
+  source: "upload" | "external";
   url: string;
+  previewUrl: string;
+  originalSize: number;
+  compressedSize: number;
+  mimeType: string;
   status: ReviewAssetStatus;
   uploadedBy: string;
   reviewedBy: string;
@@ -149,7 +154,12 @@ export type TaskAttachment = {
   id: string;
   name: string;
   type: "arquivo" | "foto" | "video";
+  source: "upload" | "external";
   url: string;
+  previewUrl: string;
+  originalSize: number;
+  compressedSize: number;
+  mimeType: string;
 };
 
 export type Task = {
