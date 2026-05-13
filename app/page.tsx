@@ -71,26 +71,44 @@ import {
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import {
   type AppData,
+  deleteCampaign,
+  deleteCampaignAudience,
+  deleteCalendarDate,
+  deleteChannel,
+  deleteContentType,
+  deleteFunnelStage,
+  deleteIdea,
+  deleteMetric,
+  deleteNotification,
+  deletePost,
+  deletePostReviewAsset as deletePostReviewAssetRecord,
+  deletePostTemplate,
+  deleteProductLine,
+  deleteProfile,
+  deleteTask,
+  deleteTaskBoard,
+  deleteTaskColumn,
+  deleteVehicleType,
   ensureCurrentProfile,
   loadAppData,
-  replaceCampaigns,
-  replaceCampaignAudiences,
-  replaceCalendarDates,
-  replaceChannels,
-  replaceContentTypes,
-  replaceFunnelStages,
-  replaceIdeas,
-  replaceMetrics,
-  replaceNotifications,
-  replacePostTemplates,
-  replacePostReviewAssets,
-  replacePosts,
-  replaceProductLines,
-  replaceProfiles,
-  replaceTaskBoards,
-  replaceTaskColumns,
-  replaceTasks,
-  replaceVehicleTypes
+  saveCampaign,
+  saveCampaignAudience,
+  saveCalendarDate,
+  saveChannel,
+  saveContentType,
+  saveFunnelStage,
+  saveIdea,
+  saveMetric,
+  saveNotification,
+  savePost,
+  savePostReviewAsset,
+  savePostTemplate,
+  saveProductLine,
+  saveProfile,
+  saveTask,
+  saveTaskBoard,
+  saveTaskColumn,
+  saveVehicleType
 } from "@/lib/supabase-data";
 import type {
   Campaign,
@@ -420,6 +438,8 @@ export default function Home() {
   const [ideasView, setIdeasView] = useState<"Quadro" | "Lista">("Quadro");
   const [ideasTab, setIdeasTab] = useState<"Todos" | "Estatísticas" | Idea["type"]>("Todos");
   const realtimeReloading = useRef(false);
+  const pendingSaveCount = useRef(0);
+  const realtimeReloadTimer = useRef<number | null>(null);
   const remoteReady = useRef(!isSupabaseConfigured);
   const localReady = useRef(isSupabaseConfigured);
 
@@ -585,10 +605,31 @@ export default function Home() {
     localReady.current = true;
   }, []);
 
+  function scheduleRealtimeReload() {
+    if (typeof window === "undefined") return;
+    if (realtimeReloadTimer.current) window.clearTimeout(realtimeReloadTimer.current);
+    realtimeReloadTimer.current = window.setTimeout(() => {
+      if (pendingSaveCount.current > 0) {
+        scheduleRealtimeReload();
+        return;
+      }
+      void reloadFromSupabase();
+    }, 500);
+  }
+
   async function reloadFromSupabase() {
     if (!supabase || !isSupabaseConfigured) return;
+    if (pendingSaveCount.current > 0) {
+      scheduleRealtimeReload();
+      return;
+    }
     realtimeReloading.current = true;
     const data = await loadAppData(supabase);
+    if (pendingSaveCount.current > 0) {
+      realtimeReloading.current = false;
+      scheduleRealtimeReload();
+      return;
+    }
     setProfiles(data.profiles.length ? data.profiles : seedProfiles);
     setChannels(data.channels);
     setProductLines(data.productLines);
@@ -649,14 +690,31 @@ export default function Home() {
     const channel = supabase.channel("embrepoli-marketing-realtime");
     tables.forEach((table) => {
       channel.on("postgres_changes", { event: "*", schema: "public", table }, () => {
-        void reloadFromSupabase();
+        scheduleRealtimeReload();
       });
     });
     channel.subscribe();
     return () => {
+      if (realtimeReloadTimer.current) window.clearTimeout(realtimeReloadTimer.current);
       void supabase?.removeChannel(channel);
     };
   }, [loggedIn]);
+
+  async function persistArrayChanges<T extends { id: string }>(
+    previous: T[],
+    next: T[],
+    save: (item: T, previousItem?: T) => Promise<void>,
+    remove: (id: string, previousItem: T) => Promise<void>
+  ) {
+    const previousById = new Map(previous.map((item) => [item.id, item]));
+    const nextById = new Map(next.map((item) => [item.id, item]));
+    const deletedItems = previous.filter((item) => !nextById.has(item.id));
+    const changedItems = next.filter((item) => JSON.stringify(item) !== JSON.stringify(previousById.get(item.id)));
+    await Promise.all([
+      ...deletedItems.map((item) => remove(item.id, item)),
+      ...changedItems.map((item) => save(item, previousById.get(item.id)))
+    ]);
+  }
 
   function syncState<K extends keyof AppData>(key: K, setter: Dispatch<SetStateAction<AppData[K]>>, persist: (previous: AppData[K], next: AppData[K]) => Promise<void>) {
     return (action: SetStateAction<AppData[K]>) => {
@@ -665,12 +723,17 @@ export default function Home() {
         if (supabase && isSupabaseConfigured && remoteReady.current && !realtimeReloading.current) {
           setSaveStatus("saving");
           setSaveError("");
+          pendingSaveCount.current += 1;
           void persist(current, next)
             .then(() => setSaveStatus("saved"))
             .catch((error) => {
               console.error(`Erro ao salvar ${String(key)} no Supabase`, error);
               setSaveStatus("error");
               setSaveError("Erro ao salvar. Verifique a conexão e tente novamente.");
+            })
+            .finally(() => {
+              pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
+              if (pendingSaveCount.current === 0) scheduleRealtimeReload();
             });
         } else if (!isSupabaseConfigured && localReady.current) {
           try {
@@ -688,24 +751,24 @@ export default function Home() {
     };
   }
 
-  const syncProfiles = syncState("profiles", setProfiles, (previous, next) => replaceProfiles(supabase!, next, previous));
-  const syncChannels = syncState("channels", setChannels, (previous, next) => replaceChannels(supabase!, next, previous));
-  const syncProductLines = syncState("productLines", setProductLines, (previous, next) => replaceProductLines(supabase!, next, previous));
-  const syncVehicleTypes = syncState("vehicleTypes", setVehicleTypes, (previous, next) => replaceVehicleTypes(supabase!, next, previous));
-  const syncContentTypes = syncState("contentTypes", setContentTypes, (previous, next) => replaceContentTypes(supabase!, next, previous));
-  const syncFunnelStages = syncState("funnelStages", setFunnelStages, (previous, next) => replaceFunnelStages(supabase!, next, previous));
-  const syncTaskBoards = syncState("taskBoards", setTaskBoards, (previous, next) => replaceTaskBoards(supabase!, next, previous));
-  const syncTaskColumns = syncState("taskColumns", setTaskColumns, (previous, next) => replaceTaskColumns(supabase!, next, previous));
-  const syncCampaigns = syncState("campaigns", setCampaigns, (previous, next) => replaceCampaigns(supabase!, next, previous));
-  const syncCampaignAudiences = syncState("campaignAudiences", setCampaignAudiences, (previous, next) => replaceCampaignAudiences(supabase!, next, previous));
-  const syncPostTemplates = syncState("postTemplates", setPostTemplates, (previous, next) => replacePostTemplates(supabase!, next, previous));
-  const syncPosts = syncState("posts", setPosts, (previous, next) => replacePosts(supabase!, next, previous));
-  const syncPostReviewAssets = syncState("postReviewAssets", setPostReviewAssets, (previous, next) => replacePostReviewAssets(supabase!, next, previous));
-  const syncIdeas = syncState("ideas", setIdeas, (previous, next) => replaceIdeas(supabase!, next, previous));
-  const syncCalendarDates = syncState("calendarDates", setCalendarDates, (previous, next) => replaceCalendarDates(supabase!, next, previous));
-  const syncTasks = syncState("tasks", setTasks, (previous, next) => replaceTasks(supabase!, next, previous));
-  const syncMetrics = syncState("metrics", setMetrics, (previous, next) => replaceMetrics(supabase!, next, previous));
-  const syncNotifications = syncState("notifications", setNotifications, (previous, next) => replaceNotifications(supabase!, next, previous));
+  const syncProfiles = syncState("profiles", setProfiles, (previous, next) => persistArrayChanges(previous, next, (item) => saveProfile(supabase!, item), (id) => deleteProfile(supabase!, id)));
+  const syncChannels = syncState("channels", setChannels, (previous, next) => persistArrayChanges(previous, next, (item) => saveChannel(supabase!, item), (id) => deleteChannel(supabase!, id)));
+  const syncProductLines = syncState("productLines", setProductLines, (previous, next) => persistArrayChanges(previous, next, (item) => saveProductLine(supabase!, item), (id) => deleteProductLine(supabase!, id)));
+  const syncVehicleTypes = syncState("vehicleTypes", setVehicleTypes, (previous, next) => persistArrayChanges(previous, next, (item) => saveVehicleType(supabase!, item), (id) => deleteVehicleType(supabase!, id)));
+  const syncContentTypes = syncState("contentTypes", setContentTypes, (previous, next) => persistArrayChanges(previous, next, (item) => saveContentType(supabase!, item), (id) => deleteContentType(supabase!, id)));
+  const syncFunnelStages = syncState("funnelStages", setFunnelStages, (previous, next) => persistArrayChanges(previous, next, (item) => saveFunnelStage(supabase!, item), (id) => deleteFunnelStage(supabase!, id)));
+  const syncTaskBoards = syncState("taskBoards", setTaskBoards, (previous, next) => persistArrayChanges(previous, next, (item) => saveTaskBoard(supabase!, item), (id) => deleteTaskBoard(supabase!, id)));
+  const syncTaskColumns = syncState("taskColumns", setTaskColumns, (previous, next) => persistArrayChanges(previous, next, (item) => saveTaskColumn(supabase!, item), (id) => deleteTaskColumn(supabase!, id)));
+  const syncCampaigns = syncState("campaigns", setCampaigns, (previous, next) => persistArrayChanges(previous, next, (item) => saveCampaign(supabase!, item), (id) => deleteCampaign(supabase!, id)));
+  const syncCampaignAudiences = syncState("campaignAudiences", setCampaignAudiences, (previous, next) => persistArrayChanges(previous, next, (item) => saveCampaignAudience(supabase!, item), (id) => deleteCampaignAudience(supabase!, id)));
+  const syncPostTemplates = syncState("postTemplates", setPostTemplates, (previous, next) => persistArrayChanges(previous, next, (item) => savePostTemplate(supabase!, item), (id) => deletePostTemplate(supabase!, id)));
+  const syncPosts = syncState("posts", setPosts, (previous, next) => persistArrayChanges(previous, next, (item) => savePost(supabase!, item), (id) => deletePost(supabase!, id)));
+  const syncPostReviewAssets = syncState("postReviewAssets", setPostReviewAssets, (previous, next) => persistArrayChanges(previous, next, (item) => savePostReviewAsset(supabase!, item), (id) => deletePostReviewAssetRecord(supabase!, id)));
+  const syncIdeas = syncState("ideas", setIdeas, (previous, next) => persistArrayChanges(previous, next, (item) => saveIdea(supabase!, item), (id) => deleteIdea(supabase!, id)));
+  const syncCalendarDates = syncState("calendarDates", setCalendarDates, (previous, next) => persistArrayChanges(previous, next, (item) => saveCalendarDate(supabase!, item), (id) => deleteCalendarDate(supabase!, id)));
+  const syncTasks = syncState("tasks", setTasks, (previous, next) => persistArrayChanges(previous, next, (item) => saveTask(supabase!, item), (id) => deleteTask(supabase!, id)));
+  const syncMetrics = syncState("metrics", setMetrics, (previous, next) => persistArrayChanges(previous, next, (item) => saveMetric(supabase!, item), (id) => deleteMetric(supabase!, id)));
+  const syncNotifications = syncState("notifications", setNotifications, (previous, next) => persistArrayChanges(previous, next, (item) => saveNotification(supabase!, item), (id) => deleteNotification(supabase!, id)));
 
   async function loadCurrentSession() {
     if (!supabase || !isSupabaseConfigured) return;
@@ -4149,12 +4212,12 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
 
       <section className="space-y-3 border-t border-slate-200 pt-4">
         <h3 className="font-black">Anexos</h3>
-        <label className="grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50 px-4 py-8 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-100">
-          <Camera size={34} />
-          <span className="mt-3 text-sm font-black">Adicionar imagem, vídeo ou arquivo</span>
-          <span className="mt-1 text-xs font-bold text-blue-500">Imagens até 2 MB, vídeos até 100 MB</span>
-          <input type="file" className="hidden" onChange={(event) => event.target.files?.[0] && addTaskAttachment(task.id, event.target.files[0])} />
-        </label>
+        <FileDropZone
+          icon="camera"
+          title="Adicionar imagem, vídeo ou arquivo"
+          hint="Imagens até 2 MB, vídeos até 100 MB"
+          onFiles={(files) => files[0] && addTaskAttachment(task.id, files[0])}
+        />
         <form onSubmit={addExternalAttachment} className="flex gap-2">
           <input name="externalUrl" required placeholder="Cole um link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
           <button className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white">Adicionar link</button>
@@ -4527,12 +4590,14 @@ function PostReviewPanel({
         <button type="button" onClick={close} className="rounded-2xl bg-white p-2"><X size={18} /></button>
       </div>
 
-      <label className="mb-4 grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-white px-4 py-6 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-50">
-        <FileUp size={28} />
-        <span className="mt-2 text-sm font-black">{assets.length ? "Adicionar mais artes" : "Enviar arquivo"}</span>
-        <span className="mt-1 text-xs font-bold text-blue-500">Imagens até 2 MB, vídeos até 100 MB</span>
-        <input type="file" multiple className="hidden" onChange={(event) => event.target.files && addPostReviewAssets(post, event.target.files)} />
-      </label>
+      <FileDropZone
+        className="mb-4"
+        icon="file"
+        multiple
+        title={assets.length ? "Adicionar mais artes" : "Enviar arquivo"}
+        hint="Imagens até 2 MB, vídeos até 100 MB"
+        onFiles={(files) => addPostReviewAssets(post, files)}
+      />
       <form onSubmit={submitExternalAsset} className="mb-4 flex gap-2">
         <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
         <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar link</button>
@@ -4674,12 +4739,13 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
       </EntityForm>
       <section className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
           <h3 className="font-black">Arquivo de exemplo</h3>
-          <label className="mt-3 grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-white px-4 py-7 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-50">
-            <FileUp size={28} />
-            <span className="mt-2 text-sm font-black">Adicionar imagem, vídeo ou arquivo</span>
-            <span className="mt-1 text-xs font-bold text-blue-500">Imagens até 2 MB, vídeos até 100 MB</span>
-            <input type="file" className="hidden" onChange={(event) => event.target.files?.[0] && addDraftFile(event.target.files[0])} />
-          </label>
+          <FileDropZone
+            className="mt-3"
+            icon="file"
+            title="Adicionar imagem, vídeo ou arquivo"
+            hint="Imagens até 2 MB, vídeos até 100 MB"
+            onFiles={(files) => files[0] && addDraftFile(files[0])}
+          />
           <form onSubmit={addDraftLink} className="mt-3 flex gap-2">
             <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Cole um link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
             <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white disabled:bg-slate-200">Adicionar link</button>
@@ -5008,6 +5074,78 @@ function Select({ label, name, options, defaultValue }: { label: string; name: s
 
 function SelectControlled({ label, value, options, onChange }: { label: string; value: string; options: string[][]; onChange: (value: string) => void }) {
   return <label className="block text-sm font-bold text-slate-600">{label}<select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{options.map(([optionValue, labelText]) => <option key={optionValue} value={optionValue}>{labelText}</option>)}</select></label>;
+}
+
+function FileDropZone({
+  title,
+  hint,
+  icon,
+  multiple = false,
+  className = "",
+  onFiles
+}: {
+  title: string;
+  hint: string;
+  icon: "camera" | "file";
+  multiple?: boolean;
+  className?: string;
+  onFiles: (files: File[]) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const Icon = icon === "camera" ? Camera : FileUp;
+
+  function filesFromList(fileList: FileList | null) {
+    return fileList ? Array.from(fileList).filter((file) => file.size > 0) : [];
+  }
+
+  function handleDrop(event: React.DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragging(false);
+    const files = filesFromList(event.dataTransfer.files);
+    if (!files.length) return;
+    onFiles(multiple ? files : files.slice(0, 1));
+  }
+
+  return (
+    <label
+      onDragEnter={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        setDragging(true);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "copy";
+        setDragging(true);
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        setDragging(false);
+      }}
+      onDrop={handleDrop}
+      className={`${className} grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed px-4 py-7 text-center transition ${
+        dragging ? "border-blue-500 bg-blue-100 text-blue-800 shadow-lg shadow-blue-900/10" : "border-blue-200 bg-white text-blue-700 hover:border-blue-400 hover:bg-blue-50"
+      }`}
+    >
+      <Icon size={icon === "camera" ? 34 : 28} />
+      <span className="mt-2 text-sm font-black">{dragging ? "Solte o arquivo aqui" : title}</span>
+      <span className="mt-1 text-xs font-bold text-blue-500">{hint}</span>
+      <input
+        type="file"
+        multiple={multiple}
+        className="hidden"
+        onChange={(event) => {
+          const files = filesFromList(event.target.files);
+          if (files.length) onFiles(multiple ? files : files.slice(0, 1));
+          event.target.value = "";
+        }}
+      />
+    </label>
+  );
 }
 
 function MultiSelect({ label, values, profiles, onChange }: { label: string; values: string[]; profiles: Profile[]; onChange: (values: string[]) => void }) {

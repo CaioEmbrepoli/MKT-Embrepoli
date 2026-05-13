@@ -179,32 +179,96 @@ export async function replaceProfiles(client: SupabaseClient, profiles: Profile[
   })));
 }
 
+export async function saveProfile(client: SupabaseClient, profile: Profile) {
+  await replaceProfiles(client, [profile], [profile]);
+}
+
+export async function deleteProfile(client: SupabaseClient, id: string) {
+  await deleteById(client, "profiles", id);
+}
+
 export async function replaceChannels(client: SupabaseClient, channels: Channel[], previous: Channel[] = []) {
   await replaceSimple(client, "channels", channels, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name, color: item.color }));
+}
+
+export async function saveChannel(client: SupabaseClient, channel: Channel) {
+  await replaceChannels(client, [channel], [channel]);
+}
+
+export async function deleteChannel(client: SupabaseClient, id: string) {
+  await deleteById(client, "channels", id);
 }
 
 export async function replaceProductLines(client: SupabaseClient, productLines: ProductLine[], previous: ProductLine[] = []) {
   await replaceSimple(client, "product_lines", productLines, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
 }
 
+export async function saveProductLine(client: SupabaseClient, productLine: ProductLine) {
+  await replaceProductLines(client, [productLine], [productLine]);
+}
+
+export async function deleteProductLine(client: SupabaseClient, id: string) {
+  await deleteById(client, "product_lines", id);
+}
+
 export async function replaceVehicleTypes(client: SupabaseClient, vehicleTypes: VehicleType[], previous: VehicleType[] = []) {
   await replaceSimple(client, "vehicle_types", vehicleTypes, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
+}
+
+export async function saveVehicleType(client: SupabaseClient, vehicleType: VehicleType) {
+  await replaceVehicleTypes(client, [vehicleType], [vehicleType]);
+}
+
+export async function deleteVehicleType(client: SupabaseClient, id: string) {
+  await deleteById(client, "vehicle_types", id);
 }
 
 export async function replaceContentTypes(client: SupabaseClient, contentTypes: ContentType[], previous: ContentType[] = []) {
   await replaceSimple(client, "content_types", contentTypes, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
 }
 
+export async function saveContentType(client: SupabaseClient, contentType: ContentType) {
+  await replaceContentTypes(client, [contentType], [contentType]);
+}
+
+export async function deleteContentType(client: SupabaseClient, id: string) {
+  await deleteById(client, "content_types", id);
+}
+
 export async function replaceFunnelStages(client: SupabaseClient, stages: FunnelStage[], previous: FunnelStage[] = []) {
   await replaceSimple(client, "funnel_stages", stages, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name, color: item.color, sort_order: item.order }));
+}
+
+export async function saveFunnelStage(client: SupabaseClient, stage: FunnelStage) {
+  await replaceFunnelStages(client, [stage], [stage]);
+}
+
+export async function deleteFunnelStage(client: SupabaseClient, id: string) {
+  await deleteById(client, "funnel_stages", id);
 }
 
 export async function replaceTaskBoards(client: SupabaseClient, boards: TaskBoard[], previous: TaskBoard[] = []) {
   await replaceSimple(client, "task_boards", boards, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name, sort_order: item.order, is_fixed: item.isFixed }));
 }
 
+export async function saveTaskBoard(client: SupabaseClient, board: TaskBoard) {
+  await replaceTaskBoards(client, [board], [board]);
+}
+
+export async function deleteTaskBoard(client: SupabaseClient, id: string) {
+  await deleteById(client, "task_boards", id);
+}
+
 export async function replaceTaskColumns(client: SupabaseClient, columns: TaskColumn[], previous: TaskColumn[] = []) {
   await replaceSimple(client, "task_columns", columns, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, task_board_id: item.boardId, name: item.name, color: item.color, sort_order: item.order }));
+}
+
+export async function saveTaskColumn(client: SupabaseClient, column: TaskColumn) {
+  await replaceTaskColumns(client, [column], [column]);
+}
+
+export async function deleteTaskColumn(client: SupabaseClient, id: string) {
+  await deleteById(client, "task_columns", id);
 }
 
 export async function replaceIdeas(client: SupabaseClient, ideas: Idea[], previous: Idea[] = []) {
@@ -243,6 +307,14 @@ export async function replaceIdeas(client: SupabaseClient, ideas: Idea[], previo
   }))));
 }
 
+export async function saveIdea(client: SupabaseClient, idea: Idea) {
+  await replaceIdeas(client, [idea], [idea]);
+}
+
+export async function deleteIdea(client: SupabaseClient, id: string) {
+  await deleteById(client, "ideas", id);
+}
+
 export async function replaceCampaigns(client: SupabaseClient, campaigns: Campaign[], previous: Campaign[] = []) {
   const organizationId = await currentOrganizationId(client);
   await replaceSimpleWithOrg(client, "campaigns", organizationId, campaigns, previous, (item) => ({
@@ -263,8 +335,24 @@ export async function replaceCampaigns(client: SupabaseClient, campaigns: Campai
   await replaceAssignees(client, "campaign_assignees", "campaign_id", organizationId, campaigns.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
 }
 
+export async function saveCampaign(client: SupabaseClient, campaign: Campaign) {
+  await replaceCampaigns(client, [campaign], [campaign]);
+}
+
+export async function deleteCampaign(client: SupabaseClient, id: string) {
+  await deleteById(client, "campaigns", id);
+}
+
 export async function replaceCampaignAudiences(client: SupabaseClient, audiences: CampaignAudience[], previous: CampaignAudience[] = []) {
   await replaceSimple(client, "campaign_audiences", audiences, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
+}
+
+export async function saveCampaignAudience(client: SupabaseClient, audience: CampaignAudience) {
+  await replaceCampaignAudiences(client, [audience], [audience]);
+}
+
+export async function deleteCampaignAudience(client: SupabaseClient, id: string) {
+  await deleteById(client, "campaign_audiences", id);
 }
 
 export async function replacePostTemplates(client: SupabaseClient, templates: PostTemplate[], previous: PostTemplate[] = []) {
@@ -285,6 +373,14 @@ export async function replacePostTemplates(client: SupabaseClient, templates: Po
     visual_guidance: item.visualGuidance,
     caption_example: item.captionExample
   }));
+}
+
+export async function savePostTemplate(client: SupabaseClient, template: PostTemplate) {
+  await replacePostTemplates(client, [template], [template]);
+}
+
+export async function deletePostTemplate(client: SupabaseClient, id: string) {
+  await deleteById(client, "post_templates", id);
 }
 
 export async function replacePosts(client: SupabaseClient, posts: EditorialPost[], previous: EditorialPost[] = []) {
@@ -310,6 +406,14 @@ export async function replacePosts(client: SupabaseClient, posts: EditorialPost[
     production_checklist: item.productionChecklist ?? []
   }));
   await replaceAssignees(client, "post_assignees", "post_id", organizationId, posts.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
+}
+
+export async function savePost(client: SupabaseClient, post: EditorialPost) {
+  await replacePosts(client, [post], [post]);
+}
+
+export async function deletePost(client: SupabaseClient, id: string) {
+  await deleteById(client, "posts", id);
 }
 
 export async function replacePostReviewAssets(client: SupabaseClient, assets: PostReviewAsset[], previous: PostReviewAsset[] = []) {
@@ -344,6 +448,14 @@ export async function replacePostReviewAssets(client: SupabaseClient, assets: Po
   }))));
 }
 
+export async function savePostReviewAsset(client: SupabaseClient, asset: PostReviewAsset) {
+  await replacePostReviewAssets(client, [asset], [asset]);
+}
+
+export async function deletePostReviewAsset(client: SupabaseClient, id: string) {
+  await deleteById(client, "post_review_assets", id);
+}
+
 export async function replaceTasks(client: SupabaseClient, tasks: Task[], previous: Task[] = []) {
   const organizationId = await currentOrganizationId(client);
   await replaceSimpleWithOrg(client, "tasks", organizationId, tasks, previous, (item) => ({
@@ -365,6 +477,14 @@ export async function replaceTasks(client: SupabaseClient, tasks: Task[], previo
   await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.checklist.map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
   await replaceChildRows(client, "task_comments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.comments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, author_id: item.authorId, message: item.message, created_at: item.createdAt }))));
   await replaceChildRows(client, "task_attachments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.attachments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, uploaded_by: task.createdBy, name: item.name, file_type: item.type, source: item.source, storage_path: item.url, public_url: item.url, preview_url: item.previewUrl, original_size: item.originalSize, compressed_size: item.compressedSize, mime_type: item.mimeType }))));
+}
+
+export async function saveTask(client: SupabaseClient, task: Task) {
+  await replaceTasks(client, [task], [task]);
+}
+
+export async function deleteTask(client: SupabaseClient, id: string) {
+  await deleteById(client, "tasks", id);
 }
 
 export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric[], previous: PostMetric[] = []) {
@@ -391,6 +511,14 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
   }));
 }
 
+export async function saveMetric(client: SupabaseClient, metric: PostMetric) {
+  await replaceMetrics(client, [metric], [metric]);
+}
+
+export async function deleteMetric(client: SupabaseClient, id: string) {
+  await deleteById(client, "post_metrics", id);
+}
+
 export async function replaceNotifications(client: SupabaseClient, notifications: Notification[], previous: Notification[] = []) {
   await replaceSimple(client, "notifications", notifications, previous, (item, organizationId) => ({
     id: item.id,
@@ -405,6 +533,14 @@ export async function replaceNotifications(client: SupabaseClient, notifications
   }));
 }
 
+export async function saveNotification(client: SupabaseClient, notification: Notification) {
+  await replaceNotifications(client, [notification], [notification]);
+}
+
+export async function deleteNotification(client: SupabaseClient, id: string) {
+  await deleteById(client, "notifications", id);
+}
+
 export async function replaceCalendarDates(client: SupabaseClient, calendarDates: CalendarDate[], previous: CalendarDate[] = []) {
   await replaceSimple(client, "calendar_dates", calendarDates, previous, (item, organizationId) => ({
     id: item.id,
@@ -415,6 +551,14 @@ export async function replaceCalendarDates(client: SupabaseClient, calendarDates
     color: item.color,
     notes: item.notes
   }));
+}
+
+export async function saveCalendarDate(client: SupabaseClient, calendarDate: CalendarDate) {
+  await replaceCalendarDates(client, [calendarDate], [calendarDate]);
+}
+
+export async function deleteCalendarDate(client: SupabaseClient, id: string) {
+  await deleteById(client, "calendar_dates", id);
 }
 
 async function replaceSimple<T extends { id: string }>(client: SupabaseClient, table: string, rows: T[], previous: T[], mapper: (row: T, organizationId: string) => Record<string, unknown>) {
@@ -444,6 +588,11 @@ async function deleteRemovedRows<T extends { id: string }>(client: SupabaseClien
   const nextIds = new Set(next.map((row) => row.id));
   const removedIds = previous.map((row) => row.id).filter((id) => !nextIds.has(id));
   if (removedIds.length) await client.from(table).delete().eq("organization_id", organizationId).in("id", removedIds);
+}
+
+async function deleteById(client: SupabaseClient, table: string, id: string) {
+  const organizationId = await currentOrganizationId(client);
+  await client.from(table).delete().eq("organization_id", organizationId).eq("id", id);
 }
 
 async function currentOrganizationId(client: SupabaseClient) {
