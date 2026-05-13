@@ -1,6 +1,8 @@
 ﻿import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   Campaign,
+  CampaignAudience,
+  CalendarDate,
   Channel,
   ChecklistItem,
   ContentType,
@@ -11,6 +13,7 @@ import type {
   PostReviewAsset,
   PostReviewComment,
   PostMetric,
+  PostTemplate,
   ProductLine,
   Profile,
   Task,
@@ -31,12 +34,15 @@ export type AppData = {
   taskBoards: TaskBoard[];
   taskColumns: TaskColumn[];
   campaigns: Campaign[];
+  campaignAudiences: CampaignAudience[];
+  postTemplates: PostTemplate[];
   posts: EditorialPost[];
   postReviewAssets: PostReviewAsset[];
   ideas: Idea[];
   tasks: Task[];
   metrics: PostMetric[];
   notifications: Notification[];
+  calendarDates: CalendarDate[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -79,6 +85,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     taskBoards,
     taskColumns,
     campaigns,
+    campaignAudiences,
+    postTemplates,
     campaignAssignees,
     posts,
     postAssignees,
@@ -91,7 +99,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     comments,
     attachments,
     metrics,
-    notifications
+    notifications,
+    calendarDates,
+    ideaAttachments
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("channels").select("*").eq("organization_id", organizationId),
@@ -102,6 +112,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("task_boards").select("*").eq("organization_id", organizationId),
     client.from("task_columns").select("*").eq("organization_id", organizationId),
     client.from("campaigns").select("*").eq("organization_id", organizationId),
+    client.from("campaign_audiences").select("*").eq("organization_id", organizationId),
+    client.from("post_templates").select("*").eq("organization_id", organizationId),
     client.from("campaign_assignees").select("*").eq("organization_id", organizationId),
     client.from("posts").select("*").eq("organization_id", organizationId),
     client.from("post_assignees").select("*").eq("organization_id", organizationId),
@@ -114,7 +126,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("task_comments").select("*").eq("organization_id", organizationId),
     client.from("task_attachments").select("*").eq("organization_id", organizationId),
     client.from("post_metrics").select("*").eq("organization_id", organizationId),
-    client.from("notifications").select("*").eq("organization_id", organizationId)
+    client.from("notifications").select("*").eq("organization_id", organizationId),
+    client.from("calendar_dates").select("*").eq("organization_id", organizationId),
+    client.from("idea_attachments").select("*").eq("organization_id", organizationId)
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -124,6 +138,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
   const checklistMap = groupByParent(checklist.data ?? [], "task_id");
   const commentsMap = groupByParent(comments.data ?? [], "task_id");
   const attachmentsMap = groupByParent(attachments.data ?? [], "task_id");
+  const ideaAttachmentMap = groupByParent(ideaAttachments.data ?? [], "idea_id");
 
   return {
     profiles: (profiles.data ?? []).map(mapProfile),
@@ -135,12 +150,15 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     taskBoards: (taskBoards.data ?? []).map(mapTaskBoard),
     taskColumns: (taskColumns.data ?? []).map(mapTaskColumn),
     campaigns: (campaigns.data ?? []).map((item) => mapCampaign(item, campaignAssigneeMap.get(item.id) ?? [])),
+    campaignAudiences: (campaignAudiences.data ?? []).map(mapCampaignAudience),
+    postTemplates: (postTemplates.data ?? []).map(mapPostTemplate),
     posts: (posts.data ?? []).map((item) => mapPost(item, postAssigneeMap.get(item.id) ?? [])),
     postReviewAssets: (reviewAssets.data ?? []).map((item) => mapReviewAsset(item, reviewCommentMap.get(item.id) ?? [])),
-    ideas: (ideas.data ?? []).map(mapIdea),
+    ideas: (ideas.data ?? []).map((item) => mapIdea(item, ideaAttachmentMap.get(item.id) ?? [])),
     tasks: (tasks.data ?? []).map((item) => mapTask(item, taskAssigneeMap.get(item.id) ?? [], checklistMap.get(item.id) ?? [], commentsMap.get(item.id) ?? [], attachmentsMap.get(item.id) ?? [])),
     metrics: (metrics.data ?? []).map(mapMetric),
-    notifications: (notifications.data ?? []).map(mapNotification)
+    notifications: (notifications.data ?? []).map(mapNotification),
+    calendarDates: (calendarDates.data ?? []).map(mapCalendarDate)
   };
 }
 
@@ -190,7 +208,8 @@ export async function replaceTaskColumns(client: SupabaseClient, columns: TaskCo
 }
 
 export async function replaceIdeas(client: SupabaseClient, ideas: Idea[], previous: Idea[] = []) {
-  await replaceSimple(client, "ideas", ideas, previous, (item, organizationId) => ({
+  const organizationId = await currentOrganizationId(client);
+  await replaceSimpleWithOrg(client, "ideas", organizationId, ideas, previous, (item) => ({
     id: item.id,
     organization_id: organizationId,
     channel_id: item.channelId,
@@ -198,12 +217,30 @@ export async function replaceIdeas(client: SupabaseClient, ideas: Idea[], previo
     vehicle_type_id: item.vehicleTypeId,
     content_type_id: item.contentTypeId,
     funnel_stage_id: item.funnelStageId || null,
+    template_id: item.templateId || null,
     created_by: item.createdBy,
     title: item.title,
+    description: item.description,
     type: item.type,
+    format: item.format || "Post",
     priority: item.priority,
     sort_order: item.order
   }));
+  await replaceChildRows(client, "idea_attachments", "idea_id", organizationId, ideas.map((idea) => idea.id), ideas.flatMap((idea) => (idea.attachments ?? []).map((item) => ({
+    id: item.id,
+    organization_id: organizationId,
+    idea_id: idea.id,
+    uploaded_by: idea.createdBy,
+    name: item.name,
+    file_type: item.type,
+    source: item.source,
+    storage_path: item.url,
+    public_url: item.url,
+    preview_url: item.previewUrl,
+    original_size: item.originalSize,
+    compressed_size: item.compressedSize,
+    mime_type: item.mimeType
+  }))));
 }
 
 export async function replaceCampaigns(client: SupabaseClient, campaigns: Campaign[], previous: Campaign[] = []) {
@@ -226,6 +263,30 @@ export async function replaceCampaigns(client: SupabaseClient, campaigns: Campai
   await replaceAssignees(client, "campaign_assignees", "campaign_id", organizationId, campaigns.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
 }
 
+export async function replaceCampaignAudiences(client: SupabaseClient, audiences: CampaignAudience[], previous: CampaignAudience[] = []) {
+  await replaceSimple(client, "campaign_audiences", audiences, previous, (item, organizationId) => ({ id: item.id, organization_id: organizationId, name: item.name }));
+}
+
+export async function replacePostTemplates(client: SupabaseClient, templates: PostTemplate[], previous: PostTemplate[] = []) {
+  await replaceSimple(client, "post_templates", templates, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    name: item.name,
+    description: item.description,
+    content_type_id: item.contentTypeId || null,
+    channel_id: item.channelId || null,
+    format: item.format,
+    suggested_time: item.suggestedTime || "",
+    funnel_stage_id: item.funnelStageId || null,
+    structure: item.structure,
+    checklist: item.checklist,
+    structure_items: item.structureItems ?? [],
+    checklist_items: item.checklistItems ?? [],
+    visual_guidance: item.visualGuidance,
+    caption_example: item.captionExample
+  }));
+}
+
 export async function replacePosts(client: SupabaseClient, posts: EditorialPost[], previous: EditorialPost[] = []) {
   const organizationId = await currentOrganizationId(client);
   await replaceSimpleWithOrg(client, "posts", organizationId, posts, previous, (item) => ({
@@ -237,13 +298,16 @@ export async function replacePosts(client: SupabaseClient, posts: EditorialPost[
     vehicle_type_id: item.vehicleTypeId || null,
     content_type_id: item.contentTypeId || null,
     funnel_stage_id: item.funnelStageId || null,
+    idea_id: item.ideaId || null,
+    template_id: item.templateId || null,
     created_by: item.createdBy,
     title: item.title,
     status: item.status,
     format: item.format,
     sort_order: item.order ?? 1,
     publish_at: item.publishAt,
-    description: item.description
+    description: item.description,
+    production_checklist: item.productionChecklist ?? []
   }));
   await replaceAssignees(client, "post_assignees", "post_id", organizationId, posts.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
 }
@@ -341,6 +405,18 @@ export async function replaceNotifications(client: SupabaseClient, notifications
   }));
 }
 
+export async function replaceCalendarDates(client: SupabaseClient, calendarDates: CalendarDate[], previous: CalendarDate[] = []) {
+  await replaceSimple(client, "calendar_dates", calendarDates, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    name: item.name,
+    date: item.date || null,
+    type: item.type,
+    color: item.color,
+    notes: item.notes
+  }));
+}
+
 async function replaceSimple<T extends { id: string }>(client: SupabaseClient, table: string, rows: T[], previous: T[], mapper: (row: T, organizationId: string) => Record<string, unknown>) {
   const organizationId = await currentOrganizationId(client);
   await replaceSimpleWithOrg(client, table, organizationId, rows, previous, (row) => mapper(row, organizationId));
@@ -394,6 +470,10 @@ function quote(value: string) {
   return `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function textLines(value: string) {
+  return value.split(/\r?\n/).map((line) => line.replace(/^\d+\.\s*/, "").trim()).filter(Boolean);
+}
+
 function mapProfile(row: any): Profile {
   return { id: row.id, name: row.name, email: row.email, phone: row.phone ?? "", bio: row.bio ?? "", role: row.role, avatarUrl: row.avatar_url ?? "", active: row.active ?? true, notificationSound: row.notification_sound ?? true };
 }
@@ -430,8 +510,31 @@ function mapCampaign(row: any, assignees: any[]): Campaign {
   return { id: row.id, name: row.name, objective: row.objective, audience: row.audience, message: row.message, productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), startDate: row.start_date ?? "", endDate: row.end_date ?? "", status: row.status };
 }
 
+function mapCampaignAudience(row: any): CampaignAudience {
+  return { id: row.id, name: row.name };
+}
+
+function mapPostTemplate(row: any): PostTemplate {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description ?? "",
+    contentTypeId: row.content_type_id ?? "",
+    channelId: row.channel_id ?? "",
+    format: row.format ?? "",
+    suggestedTime: row.suggested_time ?? "",
+    funnelStageId: row.funnel_stage_id ?? "",
+    structure: row.structure ?? "",
+    checklist: row.checklist ?? "",
+    structureItems: row.structure_items?.length ? row.structure_items : textLines(row.structure ?? ""),
+    checklistItems: row.checklist_items?.length ? row.checklist_items : textLines(row.checklist ?? "").map((label, index) => ({ id: `${row.id}-check-${index + 1}`, label, done: false })),
+    visualGuidance: row.visual_guidance ?? "",
+    captionExample: row.caption_example ?? ""
+  };
+}
+
 function mapPost(row: any, assignees: any[]): EditorialPost {
-  return { id: row.id, title: row.title, channelId: row.channel_id ?? "", campaignId: row.campaign_id ?? "", productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), status: row.status, format: row.format ?? "Post", order: row.sort_order ?? 1, publishAt: String(row.publish_at ?? "").slice(0, 16), description: row.description ?? "" };
+  return { id: row.id, ideaId: row.idea_id ?? "", templateId: row.template_id ?? "", title: row.title, channelId: row.channel_id ?? "", campaignId: row.campaign_id ?? "", productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), status: row.status, format: row.format ?? "Post", order: row.sort_order ?? 1, publishAt: String(row.publish_at ?? "").slice(0, 16), description: row.description ?? "", productionChecklist: row.production_checklist ?? [] };
 }
 
 function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {
@@ -461,8 +564,24 @@ function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {
   };
 }
 
-function mapIdea(row: any): Idea {
-  return { id: row.id, title: row.title, productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", type: row.type, channelId: row.channel_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", priority: row.priority, order: row.sort_order ?? 1 };
+function mapIdea(row: any, attachments: any[]): Idea {
+  return {
+    id: row.id,
+    templateId: row.template_id ?? "",
+    title: row.title,
+    description: row.description ?? "",
+    productLineId: row.product_line_id ?? "",
+    vehicleTypeId: row.vehicle_type_id ?? "",
+    contentTypeId: row.content_type_id ?? "",
+    type: row.type,
+    channelId: row.channel_id ?? "",
+    format: row.format ?? "Post",
+    funnelStageId: row.funnel_stage_id ?? "",
+    createdBy: row.created_by ?? "",
+    priority: row.priority,
+    order: row.sort_order ?? 1,
+    attachments: attachments.map(mapFileAttachment)
+  };
 }
 
 function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], attachments: any[]): Task {
@@ -482,7 +601,7 @@ function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], 
     description: row.description ?? "",
     checklist: checklist.sort((a, b) => a.sort_order - b.sort_order).map((item): ChecklistItem => ({ id: item.id, label: item.label, done: item.done })),
     comments: comments.map((item): TaskComment => ({ id: item.id, authorId: item.author_id, message: item.message, createdAt: item.created_at })),
-    attachments: attachments.map((item): TaskAttachment => ({ id: item.id, name: item.name, type: item.file_type, source: item.source ?? "upload", url: item.public_url || item.storage_path, previewUrl: item.preview_url || item.public_url || item.storage_path, originalSize: item.original_size ?? 0, compressedSize: item.compressed_size ?? item.original_size ?? 0, mimeType: item.mime_type ?? "" }))
+    attachments: attachments.map(mapFileAttachment)
   };
 }
 
@@ -511,5 +630,13 @@ function mapMetric(row: any): PostMetric {
 
 function mapNotification(row: any): Notification {
   return { id: row.id, userId: row.user_id, title: row.title, description: row.description, createdAt: row.created_at, read: row.read, targetKind: row.target_kind, targetId: row.target_id };
+}
+
+function mapCalendarDate(row: any): CalendarDate {
+  return { id: row.id, name: row.name, date: row.date ?? "", type: row.type ?? "Data comemorativa", color: row.color ?? "#2563eb", notes: row.notes ?? "" };
+}
+
+function mapFileAttachment(item: any): TaskAttachment {
+  return { id: item.id, name: item.name, type: item.file_type, source: item.source ?? "upload", url: item.public_url || item.storage_path, previewUrl: item.preview_url || item.public_url || item.storage_path, originalSize: item.original_size ?? 0, compressedSize: item.compressed_size ?? item.original_size ?? 0, mimeType: item.mime_type ?? "" };
 }
 

@@ -110,6 +110,32 @@ create table if not exists public.campaigns (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.campaign_audiences (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.post_templates (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  name text not null,
+  description text not null default '',
+  content_type_id text references public.content_types(id) on delete set null,
+  channel_id text references public.channels(id) on delete set null,
+  format text not null default '',
+  suggested_time text not null default '',
+  funnel_stage_id text references public.funnel_stages(id) on delete set null,
+  structure text not null default '',
+  checklist text not null default '',
+  structure_items jsonb not null default '[]'::jsonb,
+  checklist_items jsonb not null default '[]'::jsonb,
+  visual_guidance text not null default '',
+  caption_example text not null default '',
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.campaign_assignees (
   id text primary key default gen_random_uuid()::text,
   organization_id text not null references public.organizations(id) on delete cascade,
@@ -127,6 +153,7 @@ create table if not exists public.posts (
   vehicle_type_id text references public.vehicle_types(id) on delete set null,
   content_type_id text references public.content_types(id) on delete set null,
   funnel_stage_id text references public.funnel_stages(id) on delete set null,
+  template_id text references public.post_templates(id) on delete set null,
   created_by text references public.profiles(id) on delete set null,
   title text not null,
   status public.post_status not null default 'Ideia',
@@ -134,6 +161,7 @@ create table if not exists public.posts (
   sort_order integer not null default 1,
   publish_at timestamptz,
   description text not null default '',
+  production_checklist jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -184,11 +212,42 @@ create table if not exists public.ideas (
   vehicle_type_id text references public.vehicle_types(id) on delete set null,
   content_type_id text references public.content_types(id) on delete set null,
   funnel_stage_id text references public.funnel_stages(id) on delete set null,
+  template_id text references public.post_templates(id) on delete set null,
   created_by text references public.profiles(id) on delete set null,
   title text not null,
+  description text not null default '',
   type text not null default 'Postagem',
+  format text not null default 'Post',
   priority text not null default 'Média',
   sort_order integer not null default 1,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.idea_attachments (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  idea_id text not null references public.ideas(id) on delete cascade,
+  uploaded_by text references public.profiles(id) on delete set null,
+  name text not null,
+  file_type text not null,
+  source text not null default 'upload',
+  storage_path text not null,
+  public_url text not null default '',
+  preview_url text not null default '',
+  original_size bigint not null default 0,
+  compressed_size bigint not null default 0,
+  mime_type text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.calendar_dates (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  name text not null,
+  date date,
+  type text not null default 'Data comemorativa',
+  color text not null default '#2563eb',
+  notes text not null default '',
   created_at timestamptz not null default now()
 );
 
@@ -303,7 +362,16 @@ alter table public.profiles add column if not exists notification_sound boolean 
 alter table public.campaigns add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;
 alter table public.posts add column if not exists sort_order integer not null default 1;
 alter table public.posts add column if not exists format text not null default 'Post';
+alter table public.posts add column if not exists idea_id text references public.ideas(id) on delete set null;
+alter table public.posts add column if not exists template_id text references public.post_templates(id) on delete set null;
+alter table public.posts add column if not exists production_checklist jsonb not null default '[]'::jsonb;
 alter table public.ideas add column if not exists sort_order integer not null default 1;
+alter table public.ideas add column if not exists description text not null default '';
+alter table public.ideas add column if not exists template_id text references public.post_templates(id) on delete set null;
+alter table public.ideas add column if not exists format text not null default 'Post';
+alter table public.post_templates add column if not exists structure_items jsonb not null default '[]'::jsonb;
+alter table public.post_templates add column if not exists checklist_items jsonb not null default '[]'::jsonb;
+alter table public.post_templates add column if not exists suggested_time text not null default '';
 alter table public.post_metrics add column if not exists campaign_id text references public.campaigns(id) on delete set null;
 alter table public.post_metrics add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;
 alter table public.post_metrics add column if not exists content_type_id text references public.content_types(id) on delete set null;
@@ -392,10 +460,14 @@ alter table public.funnel_stages enable row level security;
 alter table public.task_boards enable row level security;
 alter table public.task_columns enable row level security;
 alter table public.campaigns enable row level security;
+alter table public.campaign_audiences enable row level security;
+alter table public.post_templates enable row level security;
 alter table public.posts enable row level security;
 alter table public.post_review_assets enable row level security;
 alter table public.post_review_comments enable row level security;
 alter table public.ideas enable row level security;
+alter table public.idea_attachments enable row level security;
+alter table public.calendar_dates enable row level security;
 alter table public.tasks enable row level security;
 alter table public.task_assignees enable row level security;
 alter table public.campaign_assignees enable row level security;
@@ -470,6 +542,14 @@ create policy "role scoped campaigns" on public.campaigns for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
+create policy "members manage campaign audiences" on public.campaign_audiences for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage post templates" on public.post_templates for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
 create policy "role scoped posts" on public.posts for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
@@ -483,6 +563,14 @@ using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
 create policy "role scoped ideas" on public.ideas for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage idea attachments" on public.idea_attachments for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage calendar dates" on public.calendar_dates for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
@@ -533,16 +621,18 @@ on conflict (name) do nothing;
 insert into storage.buckets (id, name, public)
 values
   ('task-attachments', 'task-attachments', true),
+  ('idea-attachments', 'idea-attachments', true),
   ('profile-avatars', 'profile-avatars', true),
   ('post-review-assets', 'post-review-assets', true)
 on conflict (id) do nothing;
 
-insert into public.funnel_stages (organization_id, name, color, sort_order)
+insert into public.funnel_stages (id, organization_id, name, color, sort_order)
 values
-  ('00000000-0000-0000-0000-000000000001', 'Topo - Descoberta', '#38bdf8', 1),
-  ('00000000-0000-0000-0000-000000000001', 'Meio - Interesse', '#2563eb', 2),
-  ('00000000-0000-0000-0000-000000000001', 'Fundo - Decisão', '#1d4ed8', 3),
-  ('00000000-0000-0000-0000-000000000001', 'Pós-venda - Relacionamento', '#334155', 4);
+  ('topo', '00000000-0000-0000-0000-000000000001', 'Topo - Descoberta', '#38bdf8', 1),
+  ('meio', '00000000-0000-0000-0000-000000000001', 'Meio - Interesse', '#2563eb', 2),
+  ('fundo', '00000000-0000-0000-0000-000000000001', 'Fundo - Decisão', '#1d4ed8', 3),
+  ('pos', '00000000-0000-0000-0000-000000000001', 'Pós-venda - Relacionamento', '#334155', 4)
+on conflict (id) do nothing;
 
 insert into public.task_boards (id, organization_id, name, sort_order, is_fixed)
 values
@@ -560,13 +650,14 @@ values
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000102', 'Em revisão', '#e0e7ff', 3),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000102', 'Concluído', '#dcfce7', 4);
 
-insert into public.channels (organization_id, name, color)
+insert into public.channels (id, organization_id, name, color)
 values
-  ('00000000-0000-0000-0000-000000000001', 'Instagram', '#e25588'),
-  ('00000000-0000-0000-0000-000000000001', 'TikTok', '#111827'),
-  ('00000000-0000-0000-0000-000000000001', 'YouTube', '#ef4444'),
-  ('00000000-0000-0000-0000-000000000001', 'Facebook', '#2563eb'),
-  ('00000000-0000-0000-0000-000000000001', 'LinkedIn', '#0a66c2');
+  ('instagram', '00000000-0000-0000-0000-000000000001', 'Instagram', '#e25588'),
+  ('tiktok', '00000000-0000-0000-0000-000000000001', 'TikTok', '#111827'),
+  ('youtube', '00000000-0000-0000-0000-000000000001', 'YouTube', '#ef4444'),
+  ('facebook', '00000000-0000-0000-0000-000000000001', 'Facebook', '#2563eb'),
+  ('linkedin', '00000000-0000-0000-0000-000000000001', 'LinkedIn', '#0a66c2')
+on conflict (id) do nothing;
 
 insert into public.product_lines (organization_id, name)
 values
@@ -583,18 +674,92 @@ values
   ('00000000-0000-0000-0000-000000000001', 'Tratores'),
   ('00000000-0000-0000-0000-000000000001', 'Caminhões');
 
-insert into public.content_types (organization_id, name)
+insert into public.content_types (id, organization_id, name)
 values
-  ('00000000-0000-0000-0000-000000000001', 'Antes/depois'),
-  ('00000000-0000-0000-0000-000000000001', 'Dúvidas técnicas'),
-  ('00000000-0000-0000-0000-000000000001', 'Bastidores'),
-  ('00000000-0000-0000-0000-000000000001', 'Instalação'),
-  ('00000000-0000-0000-0000-000000000001', 'Clientes'),
-  ('00000000-0000-0000-0000-000000000001', 'Provas/resultados');
+  ('antes-depois', '00000000-0000-0000-0000-000000000001', 'Antes/depois'),
+  ('duvidas-tecnicas', '00000000-0000-0000-0000-000000000001', 'Dúvidas técnicas'),
+  ('bastidores', '00000000-0000-0000-0000-000000000001', 'Bastidores'),
+  ('instalacao', '00000000-0000-0000-0000-000000000001', 'Instalação'),
+  ('clientes', '00000000-0000-0000-0000-000000000001', 'Clientes'),
+  ('provas-resultados', '00000000-0000-0000-0000-000000000001', 'Provas/resultados')
+on conflict (id) do nothing;
 
 insert into public.campaigns (id, organization_id, name, objective, audience, message, status)
 values
   ('campanha-neutra', '00000000-0000-0000-0000-000000000001', 'Campanha neutra', '', 'Geral', '', 'Planejada')
+on conflict (id) do nothing;
+
+insert into public.campaign_audiences (id, organization_id, name)
+values
+  ('geral', '00000000-0000-0000-0000-000000000001', 'Geral'),
+  ('clientes-atuais', '00000000-0000-0000-0000-000000000001', 'Clientes atuais'),
+  ('leads', '00000000-0000-0000-0000-000000000001', 'Leads'),
+  ('equipe-interna', '00000000-0000-0000-0000-000000000001', 'Equipe interna'),
+  ('outros', '00000000-0000-0000-0000-000000000001', 'Outros')
+on conflict (id) do nothing;
+
+insert into public.post_templates (id, organization_id, name, description, content_type_id, channel_id, format, funnel_stage_id, structure, checklist, visual_guidance, caption_example)
+values
+  ('template-antes-depois-tecnico', '00000000-0000-0000-0000-000000000001', 'Antes/depois técnico', 'Mostrar a condição inicial, a solução aplicada e o resultado percebido.', 'antes-depois', 'instagram', 'Feed', 'meio', '1. Problema inicial
+2. Peça/kit aplicado
+3. Resultado após instalação
+4. Chamada para tirar dúvidas', 'Foto do antes
+Foto do depois
+Aplicação correta identificada
+Legenda sem promessa exagerada', 'Usar comparação clara, setas ou marcações simples e foco na aplicação real.', 'Antes e depois de uma aplicação diesel com upgrade bem dimensionado.'),
+  ('template-duvida-tecnica', '00000000-0000-0000-0000-000000000001', 'Dúvida técnica', 'Responder uma pergunta frequente de forma simples, técnica e direta.', 'duvidas-tecnicas', 'youtube', 'Shorts', 'topo', '1. Pergunta do cliente
+2. Resposta curta
+3. Explicação técnica
+4. Quando procurar a Embrepoli', 'Pergunta clara
+Resposta sem termos confusos
+Exemplo prático
+CTA leve', 'Usar close da peça, texto curto na tela e fala objetiva.', 'Essa é uma dúvida comum em motores diesel.'),
+  ('template-bastidor-instalacao', '00000000-0000-0000-0000-000000000001', 'Bastidor de instalação', 'Mostrar o processo de montagem ou preparação como conteúdo de confiança.', 'bastidores', 'tiktok', 'Vídeo', 'topo', '1. Cena rápida da oficina
+2. Detalhe técnico
+3. Cuidados na montagem
+4. Resultado final', 'Ambiente organizado
+Peça em destaque
+Mostrar cuidado técnico
+Evitar informação sensível do cliente', 'Vídeo dinâmico, cortes curtos e áudio/legenda explicando o detalhe técnico.', 'Um pouco dos bastidores de uma instalação diesel feita com atenção em cada detalhe.'),
+  ('template-prova-resultado', '00000000-0000-0000-0000-000000000001', 'Prova de resultado', 'Evidenciar resultado, aplicação real ou feedback de cliente.', 'provas-resultados', 'instagram', 'Reels', 'fundo', '1. Contexto da aplicação
+2. O que foi instalado
+3. Resultado/feedback
+4. Próximo passo para orçamento', 'Resultado verificável
+Contexto do veículo/máquina
+Autorização para uso
+CTA para atendimento', 'Priorizar imagens reais, depoimento curto e texto destacando a aplicação.', 'Aplicação real, resultado na prática e solução pensada para o uso do cliente.'),
+  ('template-cliente-aplicacao-real', '00000000-0000-0000-0000-000000000001', 'Cliente/aplicação real', 'Apresentar uma aplicação real de cliente com foco em contexto e confiança.', 'clientes', 'facebook', 'Post', 'meio', '1. Tipo de cliente/aplicação
+2. Necessidade
+3. Solução Embrepoli
+4. Benefício percebido', 'Cliente autorizado
+Aplicação bem explicada
+Linha de produto correta
+Foto ou vídeo real', 'Mostrar veículo, máquina ou peça aplicada sem poluir a arte.', 'Cada aplicação tem uma necessidade. Por isso, o dimensionamento correto faz diferença.'),
+  ('template-oferta-produto', '00000000-0000-0000-0000-000000000001', 'Oferta de produto', 'Divulgar produto/linha com chamada comercial sem perder clareza técnica.', 'instalacao', 'instagram', 'Story', 'fundo', '1. Produto ou kit
+2. Aplicação indicada
+3. Diferencial
+4. Chamada para orçamento', 'Produto correto
+Aplicações claras
+Preço só se autorizado
+CTA direto', 'Arte limpa com produto em destaque, pouco texto e chamada visível.', 'Kit indicado para quem busca uma solução bem dimensionada para aplicação diesel.'),
+  ('template-educativo-diesel-performance', '00000000-0000-0000-0000-000000000001', 'Conteúdo educativo diesel performance', 'Explicar conceitos de performance diesel e posicionar a Embrepoli como referência técnica.', 'duvidas-tecnicas', 'youtube', 'Vídeo', 'topo', '1. Conceito principal
+2. Erro comum
+3. Explicação técnica simples
+4. Aplicação prática', 'Tema útil
+Linguagem simples
+Exemplo real
+Evitar promessa absoluta', 'Misturar fala técnica com imagens de peças, gráficos simples ou exemplos reais.', 'Performance diesel não é só potência. Dimensionamento, aplicação e confiabilidade caminham juntos.')
+on conflict (id) do nothing;
+
+insert into public.calendar_dates (id, organization_id, name, date, type, color, notes)
+values
+  ('ano-novo-2026', '00000000-0000-0000-0000-000000000001', 'Ano Novo', '2026-01-01', 'Feriado', '#2563eb', ''),
+  ('tiradentes-2026', '00000000-0000-0000-0000-000000000001', 'Tiradentes', '2026-04-21', 'Feriado', '#2563eb', ''),
+  ('dia-do-trabalho-2026', '00000000-0000-0000-0000-000000000001', 'Dia do Trabalho', '2026-05-01', 'Feriado', '#2563eb', ''),
+  ('dia-dos-namorados-2026', '00000000-0000-0000-0000-000000000001', 'Dia dos Namorados', '2026-06-12', 'Data comemorativa', '#e25588', 'Possível gancho para campanhas leves.'),
+  ('dia-do-cliente-2026', '00000000-0000-0000-0000-000000000001', 'Dia do Cliente', '2026-09-15', 'Data comemorativa', '#0891b2', 'Bom para provas sociais e pós-venda.'),
+  ('black-friday-2026', '00000000-0000-0000-0000-000000000001', 'Black Friday', '2026-11-27', 'Data comemorativa', '#111827', 'Planejar ofertas e criativos com antecedência.'),
+  ('natal-2026', '00000000-0000-0000-0000-000000000001', 'Natal', '2026-12-25', 'Feriado', '#16a34a', '')
 on conflict (id) do nothing;
 
 alter publication supabase_realtime add table
@@ -607,12 +772,16 @@ alter publication supabase_realtime add table
   public.task_boards,
   public.task_columns,
   public.campaigns,
+  public.campaign_audiences,
+  public.post_templates,
   public.campaign_assignees,
   public.posts,
   public.post_assignees,
   public.post_review_assets,
   public.post_review_comments,
   public.ideas,
+  public.idea_attachments,
+  public.calendar_dates,
   public.tasks,
   public.task_assignees,
   public.task_checklist_items,

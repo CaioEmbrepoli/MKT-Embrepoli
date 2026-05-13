@@ -46,16 +46,19 @@ import {
   X,
   type LucideIcon
 } from "lucide-react";
-import type { Dispatch, FormEvent, ReactNode, SetStateAction } from "react";
+import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   campaigns as seedCampaigns,
+  campaignAudiences as seedCampaignAudiences,
+  calendarDates as seedCalendarDates,
   channels as seedChannels,
   contentTypes as seedContentTypes,
   funnelStages as seedFunnelStages,
   ideas as seedIdeas,
   metrics as seedMetrics,
   notifications as seedNotifications,
+  postTemplates as seedPostTemplates,
   postReviewAssets as seedPostReviewAssets,
   posts as seedPosts,
   productLines as seedProductLines,
@@ -71,12 +74,15 @@ import {
   ensureCurrentProfile,
   loadAppData,
   replaceCampaigns,
+  replaceCampaignAudiences,
+  replaceCalendarDates,
   replaceChannels,
   replaceContentTypes,
   replaceFunnelStages,
   replaceIdeas,
   replaceMetrics,
   replaceNotifications,
+  replacePostTemplates,
   replacePostReviewAssets,
   replacePosts,
   replaceProductLines,
@@ -88,9 +94,13 @@ import {
 } from "@/lib/supabase-data";
 import type {
   Campaign,
+  CampaignAudience,
+  CalendarDate,
   Channel,
+  ChecklistItem,
   ContentType,
   EditorialPost,
+  FileAttachment,
   FunnelStage,
   Idea,
   Notification,
@@ -98,6 +108,7 @@ import type {
   PostReviewComment,
   ReviewAssetStatus,
   PostMetric,
+  PostTemplate,
   PostStatus,
   ProductLine,
   Profile,
@@ -117,6 +128,7 @@ import {
   BarChart,
   CartesianGrid,
   Cell,
+  LabelList,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -126,7 +138,7 @@ import {
 } from "recharts";
 
 type ModalState =
-  | { kind: "post"; id?: string; date?: Date }
+  | { kind: "post"; id?: string; date?: Date; ideaId?: string }
   | { kind: "idea"; id?: string }
   | { kind: "campaign"; id?: string }
   | { kind: "metric"; id?: string }
@@ -135,26 +147,32 @@ type ModalState =
   | { kind: "teamMember"; id: string }
   | null;
 
+type MediaPreviewItem = Pick<FileAttachment, "name" | "type" | "source" | "url" | "previewUrl" | "mimeType">;
+
 type AuthMode = "login" | "signup" | "forgot" | "reset" | "pending";
+type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
 
 const menu = [
   { id: "painel", label: "Painel", icon: BarChart3 },
   { id: "calendario", label: "Calendário", icon: CalendarDays },
   { id: "ideias", label: "Ideias", icon: Lightbulb },
   { id: "tarefas", label: "Tarefas", icon: KanbanSquare },
+  { id: "revisoes", label: "Revisões", icon: CheckCircle2 },
   { id: "campanhas", label: "Campanhas", icon: Megaphone },
   { id: "metricas", label: "Métricas", icon: ClipboardList },
   { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
 
 const postStatuses: PostStatus[] = ["Ideia", "Produção", "Revisão", "Aprovado", "Agendado", "Publicado"];
-const campaignAudienceOptions = ["Geral", "Clientes atuais", "Leads", "Equipe interna", "Outros"];
+const campaignAudienceOptions = seedCampaignAudiences.map((audience) => audience.name);
 const fallbackPostFormats = ["Post", "Vídeo", "Story"];
 const priorities: TaskPriority[] = ["Alta", "Média", "Baixa"];
 const progresses: TaskProgress[] = ["Bloqueada", "No prazo", "Atenção", "Finalizando"];
+const priorityToneMap: Record<string, BadgeTone> = { Alta: "red", Média: "amber", Baixa: "blue" };
+const progressToneMap: Record<string, BadgeTone> = { Bloqueada: "red", "No prazo": "blue", Atenção: "amber", Finalizando: "green" };
 const roles: Role[] = ["admin", "gestor", "colaborador"];
 const ideaTypes: Idea["type"][] = ["Postagem", "Melhoria", "Sistema", "Outros"];
-const configTabs = ["Equipe", "Funil", "Filtros", "Conta e Permissões"] as const;
+const configTabs = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões"] as const;
 const calendarTaskBoardId = "__calendar_posts__";
 const localDataKey = "embrepoli-marketing:v1";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
@@ -179,6 +197,11 @@ function postFormatOptionsForChannel(channel?: Channel) {
 
 function defaultPostFormatForChannel(channel?: Channel) {
   return postFormatOptionsForChannel(channel)[0] ?? "Post";
+}
+
+function stableCollisionDetection(args: Parameters<typeof pointerWithin>[0]) {
+  const pointerHits = pointerWithin(args);
+  return pointerHits.length ? pointerHits : closestCorners(args);
 }
 
 function formatBytes(bytes: number) {
@@ -250,9 +273,20 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number):
 
 function drivePreviewUrl(url: string) {
   const trimmed = url.trim();
+  const youtube = youtubePreviewUrl(trimmed);
+  if (youtube) return youtube;
   const match = trimmed.match(/drive\.google\.com\/file\/d\/([^/]+)/) ?? trimmed.match(/[?&]id=([^&]+)/);
   if (!match?.[1]) return "";
   return `https://drive.google.com/file/d/${match[1]}/preview`;
+}
+
+function youtubePreviewUrl(url: string) {
+  const trimmed = url.trim();
+  const match = trimmed.match(/youtu\.be\/([^?&/]+)/)
+    ?? trimmed.match(/[?&]v=([^?&/]+)/)
+    ?? trimmed.match(/youtube\.com\/shorts\/([^?&/]+)/)
+    ?? trimmed.match(/youtube\.com\/embed\/([^?&/]+)/);
+  return match?.[1] ? `https://www.youtube.com/embed/${match[1]}` : "";
 }
 
 class AnyButtonPointerSensor extends PointerSensor {
@@ -296,6 +330,16 @@ const slug = (value: string) =>
   value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
+
+function dateId(value: Date) {
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+}
+
+function dateFromId(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1, 12, 0, 0, 0);
+}
 
 function initials(name: string) {
   return name.split(" ").filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
@@ -351,9 +395,12 @@ export default function Home() {
   const [activeTaskBoardId, setActiveTaskBoardId] = useState(seedTaskBoards[0]?.id ?? "tarefas");
   const [taskColumns, setTaskColumns] = useState<TaskColumn[]>(seedTaskColumns);
   const [campaigns, setCampaigns] = useState<Campaign[]>(seedCampaigns);
+  const [campaignAudiences, setCampaignAudiences] = useState<CampaignAudience[]>(seedCampaignAudiences);
+  const [postTemplates, setPostTemplates] = useState<PostTemplate[]>(seedPostTemplates);
   const [posts, setPosts] = useState<EditorialPost[]>(seedPosts);
   const [postReviewAssets, setPostReviewAssets] = useState<PostReviewAsset[]>(seedPostReviewAssets);
   const [ideas, setIdeas] = useState<Idea[]>(seedIdeas);
+  const [calendarDates, setCalendarDates] = useState<CalendarDate[]>(seedCalendarDates);
   const [tasks, setTasks] = useState<Task[]>(seedTasks);
   const [metrics, setMetrics] = useState<PostMetric[]>(seedMetrics);
   const [notifications, setNotifications] = useState<Notification[]>(seedNotifications);
@@ -366,11 +413,12 @@ export default function Home() {
   const [saveError, setSaveError] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem | null>(null);
   const [calendarMode, setCalendarMode] = useState<"Semana" | "Mês" | "Ano">("Mês");
   const [visibleMonth, setVisibleMonth] = useState(new Date(2026, 4, 1));
   const [configTab, setConfigTab] = useState<(typeof configTabs)[number]>("Equipe");
   const [ideasView, setIdeasView] = useState<"Quadro" | "Lista">("Quadro");
-  const [ideasTab, setIdeasTab] = useState<"Todos" | Idea["type"]>("Todos");
+  const [ideasTab, setIdeasTab] = useState<"Todos" | "Estatísticas" | Idea["type"]>("Todos");
   const realtimeReloading = useRef(false);
   const remoteReady = useRef(!isSupabaseConfigured);
   const localReady = useRef(isSupabaseConfigured);
@@ -384,11 +432,14 @@ export default function Home() {
   const funnelById = useMemo(() => new Map(funnelStages.map((stage) => [stage.id, stage])), [funnelStages]);
   const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns]);
   const columnById = useMemo(() => new Map(taskColumns.map((column) => [column.id, column])), [taskColumns]);
+  const canReviewAssets = currentUser.role === "admin" || currentUser.role === "gestor";
+  const pendingReviewAssets = postReviewAssets.filter((asset) => asset.status === "Aguardando revisão");
 
   const visiblePosts = posts.filter((post) => canSeeItem(currentUser, post.createdBy, post.assignedTo));
   const visibleTasks = tasks.filter((task) => canSeeItem(currentUser, task.createdBy, task.assignedTo) && !task.parentTaskId);
   const visibleIdeas = ideas.filter((idea) => currentUser.role !== "colaborador" || idea.createdBy === currentUser.id);
   const visibleCampaigns = campaigns.filter((campaign) => canSeeItem(currentUser, campaign.createdBy, campaign.assignedTo));
+  const today = todayIso();
   const derivedTaskNotifications = useMemo(
     () =>
       visibleTasks
@@ -405,9 +456,80 @@ export default function Home() {
         })),
     [visibleTasks, currentUser.id]
   );
+  const derivedPostNotifications = useMemo(
+    () =>
+      visiblePosts
+        .filter((post) => post.assignedTo.includes(currentUser.id))
+        .map((post): Notification => ({
+          id: `post-assigned:${post.id}:${currentUser.id}`,
+          userId: currentUser.id,
+          title: "Post atribuído",
+          description: post.title,
+          createdAt: post.publishAt || new Date().toISOString(),
+          read: false,
+          targetKind: "post",
+          targetId: post.id
+        })),
+    [visiblePosts, currentUser.id]
+  );
+  const derivedCampaignNotifications = useMemo(
+    () =>
+      visibleCampaigns
+        .filter((campaign) => campaign.assignedTo.includes(currentUser.id))
+        .map((campaign): Notification => ({
+          id: `campaign-assigned:${campaign.id}:${currentUser.id}`,
+          userId: currentUser.id,
+          title: "Campanha atribuída",
+          description: campaign.name,
+          createdAt: campaign.startDate ? `${campaign.startDate}T09:00:00` : new Date().toISOString(),
+          read: false,
+          targetKind: "campaign",
+          targetId: campaign.id
+        })),
+    [visibleCampaigns, currentUser.id]
+  );
+  const derivedDeadlineNotifications = useMemo(
+    () =>
+      visibleTasks
+        .filter((task) => task.assignedTo.includes(currentUser.id) && task.dueDate && !columnById.get(task.columnId)?.name.toLowerCase().includes("conclu"))
+        .filter((task) => {
+          const diffDays = Math.ceil((new Date(`${task.dueDate}T12:00:00`).getTime() - new Date(`${today}T12:00:00`).getTime()) / 86400000);
+          return diffDays <= 1;
+        })
+        .map((task): Notification => {
+          const overdue = task.dueDate < today;
+          return {
+            id: `task-deadline:${task.id}:${currentUser.id}:${task.dueDate}`,
+            userId: currentUser.id,
+            title: overdue ? "Tarefa vencida" : "Tarefa próxima do prazo",
+            description: task.title,
+            createdAt: `${task.dueDate}T08:00:00`,
+            read: false,
+            targetKind: "task",
+            targetId: task.id
+          };
+        }),
+    [visibleTasks, columnById, currentUser.id, today]
+  );
+  const derivedCalendarNotifications = useMemo(
+    () =>
+      visiblePosts
+        .filter((post) => post.publishAt?.slice(0, 10) === today)
+        .map((post): Notification => ({
+          id: `post-today:${post.id}:${currentUser.id}:${today}`,
+          userId: currentUser.id,
+          title: "Post agendado para hoje",
+          description: post.title,
+          createdAt: post.publishAt,
+          read: false,
+          targetKind: "calendar",
+          targetId: post.id
+        })),
+    [visiblePosts, currentUser.id, today]
+  );
   const currentNotifications = useMemo(
-    () => [...notifications.filter((item) => item.userId === currentUser.id), ...derivedTaskNotifications].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-    [notifications, derivedTaskNotifications, currentUser.id]
+    () => [...notifications.filter((item) => item.userId === currentUser.id), ...derivedTaskNotifications, ...derivedPostNotifications, ...derivedCampaignNotifications, ...derivedDeadlineNotifications, ...derivedCalendarNotifications].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [notifications, derivedTaskNotifications, derivedPostNotifications, derivedCampaignNotifications, derivedDeadlineNotifications, derivedCalendarNotifications, currentUser.id]
   );
   const seenNotificationIds = useRef<Set<string>>(new Set());
 
@@ -451,9 +573,12 @@ export default function Home() {
     }
     if (data.taskColumns?.length) setTaskColumns(data.taskColumns);
     if (data.campaigns) setCampaigns(data.campaigns);
+    if (data.campaignAudiences?.length) setCampaignAudiences(data.campaignAudiences);
+    if (data.postTemplates?.length) setPostTemplates(data.postTemplates);
     if (data.posts) setPosts(data.posts);
     if (data.postReviewAssets) setPostReviewAssets(data.postReviewAssets);
     if (data.ideas) setIdeas(data.ideas);
+    if (data.calendarDates) setCalendarDates(data.calendarDates);
     if (data.tasks) setTasks(data.tasks);
     if (data.metrics) setMetrics(data.metrics);
     if (data.notifications) setNotifications(data.notifications);
@@ -473,9 +598,12 @@ export default function Home() {
     setTaskBoards(data.taskBoards);
     setTaskColumns(data.taskColumns);
     setCampaigns(data.campaigns);
+    setCampaignAudiences(data.campaignAudiences.length ? data.campaignAudiences : seedCampaignAudiences);
+    setPostTemplates(data.postTemplates.length ? data.postTemplates : seedPostTemplates);
     setPosts(data.posts);
     setPostReviewAssets(data.postReviewAssets);
     setIdeas(data.ideas);
+    setCalendarDates(data.calendarDates);
     setTasks(data.tasks);
     setMetrics(data.metrics);
     setNotifications(data.notifications);
@@ -500,12 +628,16 @@ export default function Home() {
       "task_boards",
       "task_columns",
       "campaigns",
+      "campaign_audiences",
+      "post_templates",
       "campaign_assignees",
       "posts",
       "post_assignees",
       "post_review_assets",
       "post_review_comments",
       "ideas",
+      "idea_attachments",
+      "calendar_dates",
       "tasks",
       "task_assignees",
       "task_checklist_items",
@@ -565,9 +697,12 @@ export default function Home() {
   const syncTaskBoards = syncState("taskBoards", setTaskBoards, (previous, next) => replaceTaskBoards(supabase!, next, previous));
   const syncTaskColumns = syncState("taskColumns", setTaskColumns, (previous, next) => replaceTaskColumns(supabase!, next, previous));
   const syncCampaigns = syncState("campaigns", setCampaigns, (previous, next) => replaceCampaigns(supabase!, next, previous));
+  const syncCampaignAudiences = syncState("campaignAudiences", setCampaignAudiences, (previous, next) => replaceCampaignAudiences(supabase!, next, previous));
+  const syncPostTemplates = syncState("postTemplates", setPostTemplates, (previous, next) => replacePostTemplates(supabase!, next, previous));
   const syncPosts = syncState("posts", setPosts, (previous, next) => replacePosts(supabase!, next, previous));
   const syncPostReviewAssets = syncState("postReviewAssets", setPostReviewAssets, (previous, next) => replacePostReviewAssets(supabase!, next, previous));
   const syncIdeas = syncState("ideas", setIdeas, (previous, next) => replaceIdeas(supabase!, next, previous));
+  const syncCalendarDates = syncState("calendarDates", setCalendarDates, (previous, next) => replaceCalendarDates(supabase!, next, previous));
   const syncTasks = syncState("tasks", setTasks, (previous, next) => replaceTasks(supabase!, next, previous));
   const syncMetrics = syncState("metrics", setMetrics, (previous, next) => replaceMetrics(supabase!, next, previous));
   const syncNotifications = syncState("notifications", setNotifications, (previous, next) => replaceNotifications(supabase!, next, previous));
@@ -800,6 +935,17 @@ export default function Home() {
     return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
   }
 
+  async function prepareIdeaAttachment(ideaId: string, file: File) {
+    setSaveStatus("saving");
+    setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
+    const prepared = await prepareUploadFile(file);
+    const type = fileKind(prepared.file);
+    const path = `${ideaId}/${Date.now()}-${prepared.file.name}`;
+    const url = await uploadFileToStorage("idea-attachments", path, prepared.file);
+    if (prepared.notice) setSaveError(prepared.notice);
+    return { id: crypto.randomUUID(), name: prepared.file.name, type, source: "upload" as const, url, previewUrl: url, originalSize: prepared.originalSize, compressedSize: prepared.compressedSize, mimeType: prepared.file.type };
+  }
+
   async function addTaskAttachment(taskId: string, file: File) {
     setSaveStatus("saving");
     setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
@@ -822,11 +968,35 @@ export default function Home() {
   function addTaskExternalLink(taskId: string, url: string) {
     const previewUrl = drivePreviewUrl(url);
     if (!previewUrl) {
-      window.alert("Link do Google Drive inválido. Use um link de compartilhamento do arquivo.");
+      window.alert("Link inválido. Use um link de compartilhamento do Google Drive ou YouTube.");
       return;
     }
-    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: "Vídeo do Google Drive", type: "video", source: "external", url, previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: youtubePreviewUrl(url) ? "Vídeo do YouTube" : "Vídeo do Google Drive", type: "video", source: "external", url, previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
     updateTask(taskId, (task) => ({ ...task, attachments: [attachment, ...task.attachments] }));
+  }
+
+  async function addIdeaAttachment(ideaId: string, file: File) {
+    setSaveStatus("saving");
+    setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
+    try {
+      const attachment = await prepareIdeaAttachment(ideaId, file);
+      syncIdeas((current) => current.map((idea) => idea.id === ideaId ? { ...idea, attachments: [attachment, ...(idea.attachments ?? [])] } : idea));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erro ao enviar arquivo.";
+      setSaveStatus("error");
+      setSaveError(message);
+      window.alert(message);
+    }
+  }
+
+  function addIdeaExternalLink(ideaId: string, url: string) {
+    const previewUrl = drivePreviewUrl(url);
+    if (!previewUrl) {
+      window.alert("Link inválido. Use um link de compartilhamento do Google Drive ou YouTube.");
+      return;
+    }
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: youtubePreviewUrl(url) ? "Exemplo do YouTube" : "Exemplo do Google Drive", type: "video", source: "external", url, previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
+    syncIdeas((current) => current.map((idea) => idea.id === ideaId ? { ...idea, attachments: [attachment, ...(idea.attachments ?? [])] } : idea));
   }
 
   function updateTask(taskId: string, updater: (task: Task) => Task) {
@@ -838,7 +1008,7 @@ export default function Home() {
     if (!uniqueUserIds.length) return;
     const createdAt = new Date().toISOString();
     const newNotifications = uniqueUserIds.map((userId): Notification => ({
-      id: crypto.randomUUID(),
+      id: `notification:${targetKind}:${targetId}:${slug(title)}:${userId}`,
       userId,
       title,
       description,
@@ -847,7 +1017,7 @@ export default function Home() {
       targetKind,
       targetId
     }));
-    syncNotifications((current) => [...newNotifications, ...current]);
+    syncNotifications((current) => [...newNotifications.filter((item) => !current.some((existing) => existing.id === item.id)), ...current]);
   }
 
   function reviewRecipients(post: EditorialPost) {
@@ -903,13 +1073,14 @@ export default function Home() {
   function addPostReviewExternalAsset(post: EditorialPost, url: string) {
     const previewUrl = drivePreviewUrl(url);
     if (!previewUrl) {
-      window.alert("Link do Google Drive inválido. Use um link de compartilhamento do arquivo.");
+      window.alert("Link inválido. Use um link de compartilhamento do Google Drive ou YouTube.");
       return;
     }
+    const isYoutube = Boolean(youtubePreviewUrl(url));
     const asset: PostReviewAsset = {
       id: crypto.randomUUID(),
       postId: post.id,
-      name: "Vídeo do Google Drive",
+      name: isYoutube ? "Vídeo do YouTube" : "Vídeo do Google Drive",
       type: "video",
       source: "external",
       url,
@@ -930,6 +1101,10 @@ export default function Home() {
 
   function updatePostReviewAsset(assetId: string, updater: (asset: PostReviewAsset) => PostReviewAsset) {
     syncPostReviewAssets((current) => current.map((asset) => (asset.id === assetId ? updater(asset) : asset)));
+  }
+
+  function deletePostReviewAsset(assetId: string) {
+    syncPostReviewAssets((current) => current.filter((asset) => asset.id !== assetId));
   }
 
   function setReviewAssetStatus(assetId: string, status: ReviewAssetStatus, message = "") {
@@ -967,7 +1142,7 @@ export default function Home() {
         priority: "Média",
         progress: "No prazo",
         createdBy: currentUser.id,
-        assignedTo: [currentUser.id],
+        assignedTo: [],
         relatedTo: "",
         funnelStageId: funnelStages[0]?.id ?? "",
         dueDate: todayIso(),
@@ -990,7 +1165,7 @@ export default function Home() {
       priority: "Média",
       progress: "No prazo",
       createdBy: currentUser.id,
-      assignedTo: [currentUser.id],
+      assignedTo: [],
       relatedTo: parentTask.title,
       funnelStageId: parentTask.funnelStageId,
       parentTaskId: parentTask.id,
@@ -1035,6 +1210,7 @@ export default function Home() {
           </div>
           <nav className="mt-8 space-y-2">
             {menu.map((item) => {
+              if (item.id === "revisoes" && !canReviewAssets) return null;
               const Icon = item.icon;
               const selected = activeSection === item.id;
               return (
@@ -1061,11 +1237,14 @@ export default function Home() {
             setProfileOpen={setProfileOpen}
             uploadProfilePhoto={uploadProfilePhoto}
             setModal={setModal}
+            setActiveSection={setActiveSection}
             notifications={currentNotifications}
             notificationsOpen={notificationsOpen}
             setNotificationsOpen={setNotificationsOpen}
             setNotifications={syncNotifications}
             postReviewAssets={postReviewAssets}
+            pendingReviewCount={pendingReviewAssets.length}
+            canReviewAssets={canReviewAssets}
             saveStatus={saveStatus}
             saveError={saveError}
             logout={handleLogout}
@@ -1085,6 +1264,7 @@ export default function Home() {
               contentTypes={contentTypes}
               funnelStages={funnelStages}
               profiles={profiles}
+              calendarDates={calendarDates}
               channelById={channelById}
               funnelById={funnelById}
               calendarMode={calendarMode}
@@ -1095,7 +1275,7 @@ export default function Home() {
             />
           )}
           {activeSection === "ideias" && (
-            <Ideas ideas={visibleIdeas} setIdeas={syncIdeas} view={ideasView} setView={setIdeasView} activeTab={ideasTab} setActiveTab={setIdeasTab} channelById={channelById} lineById={lineById} vehicleTypeById={vehicleTypeById} contentTypeById={contentTypeById} funnelById={funnelById} profileById={profileById} setModal={setModal} />
+            <Ideas ideas={visibleIdeas} posts={posts} setIdeas={syncIdeas} view={ideasView} setView={setIdeasView} activeTab={ideasTab} setActiveTab={setIdeasTab} channelById={channelById} lineById={lineById} vehicleTypeById={vehicleTypeById} contentTypeById={contentTypeById} funnelById={funnelById} profileById={profileById} setModal={setModal} />
           )}
           {activeSection === "tarefas" && (
             <Tasks
@@ -1106,6 +1286,10 @@ export default function Home() {
               setTaskBoards={syncTaskBoards}
               posts={posts}
               setPosts={syncPosts}
+              ideas={ideas}
+              currentUser={currentUser}
+              campaigns={campaigns}
+              channels={channels}
               activeTaskBoardId={activeTaskBoardId}
               setActiveTaskBoardId={setActiveTaskBoardId}
               taskColumns={taskColumns}
@@ -1114,7 +1298,22 @@ export default function Home() {
               channelById={channelById}
               funnelById={funnelById}
               setModal={setModal}
+              createNotifications={createNotifications}
               addQuickTask={addQuickTask}
+            />
+          )}
+          {activeSection === "revisoes" && canReviewAssets && (
+            <ReviewsPage
+              assets={postReviewAssets}
+              posts={posts}
+              profiles={profiles}
+              profileById={profileById}
+              channelById={channelById}
+              setModal={setModal}
+              openMediaPreview={setMediaPreview}
+              setReviewAssetStatus={setReviewAssetStatus}
+              addReviewComment={addReviewComment}
+              deletePostReviewAsset={deletePostReviewAsset}
             />
           )}
           {activeSection === "campanhas" && (
@@ -1147,6 +1346,8 @@ export default function Home() {
               currentUser={currentUser}
               profiles={profiles}
               channels={channels}
+              campaignAudiences={campaignAudiences}
+              postTemplates={postTemplates}
               productLines={productLines}
               vehicleTypes={vehicleTypes}
               contentTypes={contentTypes}
@@ -1155,9 +1356,13 @@ export default function Home() {
               setConfigTab={setConfigTab}
               setProfiles={syncProfiles}
               setChannels={syncChannels}
+              setCampaignAudiences={syncCampaignAudiences}
+              setPostTemplates={syncPostTemplates}
               setProductLines={syncProductLines}
               setVehicleTypes={syncVehicleTypes}
               setContentTypes={syncContentTypes}
+              calendarDates={calendarDates}
+              setCalendarDates={syncCalendarDates}
               setFunnelStages={syncFunnelStages}
               uploadProfilePhoto={uploadProfilePhoto}
               setModal={setModal}
@@ -1178,15 +1383,23 @@ export default function Home() {
         contentTypes={contentTypes}
         funnelStages={funnelStages}
         campaigns={campaigns}
+        campaignAudiences={campaignAudiences}
+        postTemplates={postTemplates}
         posts={posts}
         setPosts={syncPosts}
         postReviewAssets={postReviewAssets}
         addPostReviewAssets={addPostReviewAssets}
         addPostReviewExternalAsset={addPostReviewExternalAsset}
+        deletePostReviewAsset={deletePostReviewAsset}
         setReviewAssetStatus={setReviewAssetStatus}
         addReviewComment={addReviewComment}
         ideas={ideas}
         setIdeas={syncIdeas}
+        addIdeaAttachment={addIdeaAttachment}
+        addIdeaExternalLink={addIdeaExternalLink}
+        prepareIdeaAttachment={prepareIdeaAttachment}
+        openMediaPreview={setMediaPreview}
+        createNotifications={createNotifications}
         setCampaigns={syncCampaigns}
         metrics={metrics}
         setMetrics={syncMetrics}
@@ -1200,6 +1413,7 @@ export default function Home() {
         addTaskExternalLink={addTaskExternalLink}
         addSubtask={addSubtask}
       />
+      {mediaPreview && <MediaPreviewModal item={mediaPreview} close={() => setMediaPreview(null)} />}
     </main>
   );
 }
@@ -1314,6 +1528,132 @@ function PasswordInput({ name, label, required, defaultValue = "" }: { name: str
     </label>
   );
 }
+
+function ReviewsPage({
+  assets,
+  posts,
+  profileById,
+  channelById,
+  setModal,
+  openMediaPreview,
+  setReviewAssetStatus,
+  addReviewComment,
+  deletePostReviewAsset
+}: {
+  assets: PostReviewAsset[];
+  posts: EditorialPost[];
+  profiles: Profile[];
+  profileById: Map<string, Profile>;
+  channelById: Map<string, Channel>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+  openMediaPreview: (item: MediaPreviewItem) => void;
+  setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
+  addReviewComment: (assetId: string, message: string) => void;
+  deletePostReviewAsset: (assetId: string) => void;
+}) {
+  const [statusFilter, setStatusFilter] = useState<ReviewAssetStatus | "Todas">("Aguardando revisão");
+  const [selectedAssetId, setSelectedAssetId] = useState(assets[0]?.id ?? "");
+  const [adjustmentMessage, setAdjustmentMessage] = useState("");
+  const [comment, setComment] = useState("");
+  const filteredAssets = assets
+    .filter((asset) => statusFilter === "Todas" || asset.status === statusFilter)
+    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? filteredAssets[0];
+  const selectedPost = selectedAsset ? posts.find((post) => post.id === selectedAsset.postId) : undefined;
+
+  function requestAdjustments() {
+    if (!selectedAsset || !adjustmentMessage.trim()) return;
+    setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
+    setAdjustmentMessage("");
+  }
+
+  function submitComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedAsset || !comment.trim()) return;
+    addReviewComment(selectedAsset.id, comment);
+    setComment("");
+  }
+
+  function removeAsset() {
+    if (!selectedAsset) return;
+    if (!window.confirm("Excluir esta arte de revisão?")) return;
+    deletePostReviewAsset(selectedAsset.id);
+    const nextAsset = filteredAssets.find((asset) => asset.id !== selectedAsset.id);
+    setSelectedAssetId(nextAsset?.id ?? "");
+  }
+
+  return (
+    <div className="space-y-5 animate-task-switch">
+      <Panel title="Fila de revisões" action={<Badge tone="amber">{assets.filter((asset) => asset.status === "Aguardando revisão").length} pendente(s)</Badge>}>
+        <div className="mb-5 flex flex-wrap gap-2">
+          {(["Aguardando revisão", "Ajustes solicitados", "Aprovado", "Todas"] as const).map((status) => (
+            <button key={status} type="button" onClick={() => setStatusFilter(status)} className={`rounded-2xl px-4 py-2 text-sm font-black transition ${statusFilter === status ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"}`}>
+              {status}
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <div className="max-h-[68vh] space-y-3 overflow-y-auto pr-1">
+            {filteredAssets.map((asset) => {
+              const post = posts.find((item) => item.id === asset.postId);
+              return (
+                <button key={asset.id} type="button" onClick={() => setSelectedAssetId(asset.id)} className={`w-full rounded-3xl border p-4 text-left transition ${selectedAsset?.id === asset.id ? "border-blue-400 bg-blue-50 shadow-sm" : "border-slate-100 bg-white hover:border-blue-200"}`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="line-clamp-2 font-black">{post?.title ?? asset.name}</p>
+                      <p className="mt-1 text-xs font-bold text-slate-500">{channelById.get(post?.channelId ?? "")?.name ?? "Canal"} · {profileById.get(asset.uploadedBy)?.name ?? "Equipe"}</p>
+                    </div>
+                    <Badge tone={asset.status === "Aprovado" ? "green" : asset.status === "Ajustes solicitados" ? "red" : "amber"}>{asset.status}</Badge>
+                  </div>
+                </button>
+              );
+            })}
+            {!filteredAssets.length && <p className="rounded-3xl bg-slate-50 p-6 text-center text-sm font-bold text-slate-400">Nenhuma revisão nesse filtro.</p>}
+          </div>
+          {selectedAsset ? (
+            <div className="rounded-[30px] border border-slate-100 bg-slate-50 p-4">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-blue-700">Arte para revisão</p>
+                  <h3 className="mt-1 text-xl font-black">{selectedPost?.title ?? selectedAsset.name}</h3>
+                  <p className="mt-1 text-sm font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name ?? "Equipe"} em {formatDate(selectedAsset.uploadedAt)}</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {selectedPost && <button type="button" onClick={() => setModal({ kind: "post", id: selectedPost.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Abrir post</button>}
+                  <button type="button" onClick={removeAsset} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700">Excluir</button>
+                </div>
+              </div>
+              <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
+                <MediaPreviewContent item={selectedAsset} />
+              </button>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar</button>
+                <div className="rounded-3xl bg-white p-3">
+                  <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="Descreva os ajustes necessários" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                  <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+                </div>
+              </div>
+              <form onSubmit={submitComment} className="mt-4 flex gap-2">
+                <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário interno sobre a revisão" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-4 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
+              </form>
+              <div className="mt-4 space-y-2">
+                {selectedAsset.comments.map((item) => (
+                  <div key={item.id} className="rounded-2xl bg-white p-3">
+                    <p className="text-sm font-black">{profileById.get(item.authorId)?.name ?? "Equipe"}</p>
+                    <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma revisão.</div>
+          )}
+        </div>
+      </Panel>
+    </div>
+  );
+}
 function Header({
   activeSection,
   currentUser,
@@ -1321,11 +1661,14 @@ function Header({
   setProfileOpen,
   uploadProfilePhoto,
   setModal,
+  setActiveSection,
   notifications,
   notificationsOpen,
   setNotificationsOpen,
   setNotifications,
   postReviewAssets,
+  pendingReviewCount,
+  canReviewAssets,
   saveStatus,
   saveError,
   logout
@@ -1336,11 +1679,14 @@ function Header({
   setProfileOpen: Dispatch<SetStateAction<boolean>>;
   uploadProfilePhoto: (profileId: string, file: File) => void;
   setModal: Dispatch<SetStateAction<ModalState>>;
+  setActiveSection: Dispatch<SetStateAction<string>>;
   notifications: Notification[];
   notificationsOpen: boolean;
   setNotificationsOpen: Dispatch<SetStateAction<boolean>>;
   setNotifications: Dispatch<SetStateAction<Notification[]>>;
   postReviewAssets: PostReviewAsset[];
+  pendingReviewCount: number;
+  canReviewAssets: boolean;
   saveStatus: SaveStatus;
   saveError: string;
   logout: () => void;
@@ -1358,9 +1704,30 @@ function Header({
     }
     if (notification.targetKind === "review") {
       const asset = postReviewAssets.find((item) => item.id === notification.targetId);
+      if (asset && canReviewAssets) {
+        setActiveSection("revisoes");
+        return;
+      }
       if (asset) setModal({ kind: "post", id: asset.postId });
       return;
     }
+    if (notification.targetKind === "idea") {
+      setModal({ kind: "idea", id: notification.targetId });
+      return;
+    }
+    if (notification.targetKind === "campaign") {
+      setModal({ kind: "campaign", id: notification.targetId });
+      return;
+    }
+    if (notification.targetKind === "calendar") {
+      setModal({ kind: "post", id: notification.targetId });
+      return;
+    }
+    if (notification.targetKind === "metric") {
+      setModal({ kind: "metric", id: notification.targetId });
+      return;
+    }
+    if (notification.targetKind === "system") return;
     setModal({ kind: "post", id: notification.targetId });
   }
   return (
@@ -1370,6 +1737,16 @@ function Header({
         <h2 className="mt-1 text-3xl font-black">{title}</h2>
       </div>
       <div className="flex items-start gap-3">
+        {canReviewAssets && pendingReviewCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setActiveSection("revisoes")}
+            className="hidden rounded-3xl border border-amber-200 bg-amber-100 px-4 py-3 text-sm font-black text-amber-800 shadow-sm transition hover:border-amber-300 hover:bg-amber-200 md:block"
+            title="Abrir revisões pendentes"
+          >
+            {pendingReviewCount} revisão(ões)
+          </button>
+        )}
         {saveStatus !== "idle" && (
           <div className={`hidden rounded-2xl px-3 py-2 text-xs font-black md:block ${saveStatus === "error" ? "bg-rose-100 text-rose-700" : saveStatus === "saving" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`} title={saveError || undefined}>
             {saveStatus === "saving" ? saveError || "Salvando..." : saveStatus === "error" ? "Erro ao salvar" : saveError || "Salvo"}
@@ -1506,25 +1883,29 @@ function Dashboard({
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
+                <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
+                <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
                 <Tooltip />
-                <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe" />
+                <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe">
+                  <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={13} fontWeight={900} />
+                </Area>
               </AreaChart>
             </ResponsiveContainer>
           </div>
+          <ChartValueList data={chartData.slice(0, 5).map((item) => ({ label: item.name, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />
         </Panel>
         <Panel title="Funil">
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
-                <Pie data={funnelData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={94}>
+                <Pie data={funnelData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={94} label={({ value }) => String(value)}>
                   {funnelData.map((item) => <Cell key={item.name} fill={item.color} />)}
                 </Pie>
                 <Tooltip />
               </PieChart>
             </ResponsiveContainer>
           </div>
+          <ChartValueList data={funnelData.map((item) => ({ label: item.name, value: `${item.value} item(ns)` }))} />
         </Panel>
       </div>
       <Panel title="Mini calendário da semana">
@@ -1555,6 +1936,7 @@ function EditorialCalendar(props: {
   contentTypes: ContentType[];
   funnelStages: FunnelStage[];
   profiles: Profile[];
+  calendarDates: CalendarDate[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   calendarMode: "Semana" | "Mês" | "Ano";
@@ -1564,6 +1946,7 @@ function EditorialCalendar(props: {
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
   const days = props.calendarMode === "Semana" ? makeWeek(props.visibleMonth) : makeMonth(props.visibleMonth);
+  const today = new Date();
   const periodLabel = props.calendarMode === "Semana"
     ? `${formatDateOnly(days[0])} - ${formatDateOnly(days[6])}`
     : props.calendarMode === "Mês"
@@ -1586,19 +1969,23 @@ function EditorialCalendar(props: {
   }
 
   function handleDragEnd(event: DragEndEvent) {
-    const postId = String(event.active.id).replace("post:", "");
+    const activeId = String(event.active.id);
+    if (!activeId.startsWith("post:")) return;
+    const postId = activeId.replace("post:", "");
     const target = String(event.over?.id ?? "");
     if (!target.startsWith("day:") && !target.startsWith("hour:")) {
       return;
     }
     const [, dayPart, hourPart] = target.split(":");
-    const day = new Date(dayPart);
+    if (!dayPart) return;
+    const day = dateFromId(dayPart);
+    if (Number.isNaN(day.getTime())) return;
     props.setPosts((current) =>
       current.map((post) => {
         if (post.id !== postId) return post;
         const currentDate = new Date(post.publishAt);
         day.setHours(hourPart ? Number(hourPart) : currentDate.getHours(), hourPart ? 0 : currentDate.getMinutes(), 0, 0);
-        return { ...post, publishAt: day.toISOString().slice(0, 16) };
+        return { ...post, publishAt: toDateTimeLocalValue(day) };
       })
     );
   }
@@ -1631,7 +2018,7 @@ function EditorialCalendar(props: {
         ) : (
           <DndContext collisionDetection={pointerWithin} onDragEnd={handleDragEnd}>
             {props.calendarMode === "Semana" ? (
-              <WeekCalendar days={days} posts={props.posts} channelById={props.channelById} funnelById={props.funnelById} setModal={props.setModal} />
+              <WeekCalendar days={days} today={today} posts={props.posts} calendarDates={props.calendarDates} channelById={props.channelById} funnelById={props.funnelById} setModal={props.setModal} />
             ) : (
               <>
                 <div className="mb-3 grid grid-cols-7 gap-2 text-center text-xs font-black uppercase text-slate-500">
@@ -1642,6 +2029,8 @@ function EditorialCalendar(props: {
                     <CalendarDay
                       key={day.toISOString()}
                       day={day}
+                      isToday={sameDay(day, today)}
+                      calendarDates={props.calendarDates.filter((item) => sameDay(new Date(`${item.date}T12:00:00`), day))}
                       posts={props.posts.filter((post) => sameDay(new Date(post.publishAt), day))}
                       channelById={props.channelById}
                       funnelById={props.funnelById}
@@ -1660,26 +2049,38 @@ function EditorialCalendar(props: {
 
 function CalendarDay({
   day,
+  isToday,
+  calendarDates,
   posts,
   channelById,
   funnelById,
   setModal
 }: {
   day: Date;
+  isToday: boolean;
+  calendarDates: CalendarDate[];
   posts: EditorialPost[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `day:${day.toISOString()}` });
+  const { setNodeRef, isOver } = useDroppable({ id: `day:${dateId(day)}` });
   function createPostOnDay() {
     const date = new Date(day);
     date.setHours(9, 0, 0, 0);
     setModal({ kind: "post", date });
   }
   return (
-    <div ref={setNodeRef} onClick={createPostOnDay} className={`min-h-36 cursor-pointer rounded-3xl border p-2 text-left motion-smooth ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title="Criar post neste dia">
-      <p className="text-sm font-black text-slate-700">{day.getDate()}</p>
+    <div ref={setNodeRef} onClick={createPostOnDay} className={`min-h-36 cursor-pointer rounded-3xl border p-2 text-left motion-smooth ${isToday ? "border-blue-500 bg-blue-100 ring-2 ring-blue-200" : isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title="Criar post neste dia">
+      <p className={`inline-grid h-7 min-w-7 place-items-center rounded-full px-2 text-sm font-black ${isToday ? "bg-blue-700 text-white" : "text-slate-700"}`}>{day.getDate()}</p>
+      {calendarDates.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {calendarDates.slice(0, 2).map((item) => (
+            <span key={item.id} className="rounded-full px-2 py-0.5 text-[10px] font-black text-white" style={{ backgroundColor: item.color }}>{item.name}</span>
+          ))}
+          {calendarDates.length > 2 && <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-black text-slate-600">+{calendarDates.length - 2}</span>}
+        </div>
+      )}
       <div className="mt-2 space-y-2">
         {posts.map((post) => (
           <DraggablePost key={post.id} post={post} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
@@ -1691,22 +2092,26 @@ function CalendarDay({
 
 function WeekCalendar({
   days,
+  today,
   posts,
+  calendarDates,
   channelById,
   funnelById,
   setModal
 }: {
   days: Date[];
+  today: Date;
   posts: EditorialPost[];
+  calendarDates: CalendarDate[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
   const [showEarlyHours, setShowEarlyHours] = useState(false);
   const [showLateHours, setShowLateHours] = useState(false);
-  const earlyHours = [0, 1, 2, 3, 4, 5];
-  const mainHours = Array.from({ length: 16 }, (_, index) => index + 6);
-  const lateHours = [22, 23];
+  const earlyHours = Array.from({ length: 8 }, (_, index) => index);
+  const mainHours = Array.from({ length: 13 }, (_, index) => index + 8);
+  const lateHours = [21, 22, 23];
   const earlyCount = posts.filter((post) => {
     const hour = new Date(post.publishAt).getHours();
     return earlyHours.includes(hour);
@@ -1721,17 +2126,22 @@ function WeekCalendar({
     <div className="overflow-x-auto pb-3">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => setShowEarlyHours((value) => !value)} className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">
-          {showEarlyHours ? "Ocultar madrugada" : "Mostrar 00h-05h"} {earlyCount > 0 && <span className="ml-1 rounded-full bg-blue-700 px-2 py-0.5 text-white">{earlyCount}</span>}
+          {showEarlyHours ? "Ocultar horários antes das 8h" : "Mostrar 00h-07h"} {earlyCount > 0 && <span className="ml-1 rounded-full bg-blue-700 px-2 py-0.5 text-white">{earlyCount}</span>}
         </button>
         <button type="button" onClick={() => setShowLateHours((value) => !value)} className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600">
-          {showLateHours ? "Ocultar noite" : "Mostrar 22h-23h"} {lateCount > 0 && <span className="ml-1 rounded-full bg-blue-700 px-2 py-0.5 text-white">{lateCount}</span>}
+          {showLateHours ? "Ocultar noite" : "Mostrar 21h-23h"} {lateCount > 0 && <span className="ml-1 rounded-full bg-blue-700 px-2 py-0.5 text-white">{lateCount}</span>}
         </button>
       </div>
       <div className="grid min-w-[980px] grid-cols-[72px_repeat(7,1fr)] gap-2">
         <div />
         {days.map((day) => (
-          <div key={day.toISOString()} className="rounded-2xl bg-slate-100 p-2 text-center text-xs font-black uppercase text-slate-600">
+          <div key={day.toISOString()} className={`rounded-2xl p-2 text-center text-xs font-black uppercase ${sameDay(day, today) ? "bg-blue-700 text-white shadow-lg shadow-blue-700/20" : "bg-slate-100 text-slate-600"}`}>
             {day.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit" })}
+            <div className="mt-1 flex flex-wrap justify-center gap-1 normal-case">
+              {calendarDates.filter((item) => sameDay(new Date(`${item.date}T12:00:00`), day)).slice(0, 2).map((item) => (
+                <span key={item.id} className="rounded-full px-2 py-0.5 text-[10px] font-black text-white" style={{ backgroundColor: item.color }}>{item.name}</span>
+              ))}
+            </div>
           </div>
         ))}
         {hours.map((hour) => (
@@ -1739,6 +2149,7 @@ function WeekCalendar({
             key={hour}
             hour={hour}
             days={days}
+            today={today}
             posts={posts}
             channelById={channelById}
             funnelById={funnelById}
@@ -1753,6 +2164,7 @@ function WeekCalendar({
 function HourRow({
   hour,
   days,
+  today,
   posts,
   channelById,
   funnelById,
@@ -1760,6 +2172,7 @@ function HourRow({
 }: {
   hour: number;
   days: Date[];
+  today: Date;
   posts: EditorialPost[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
@@ -1772,6 +2185,7 @@ function HourRow({
         <HourCell
           key={`${day.toISOString()}-${hour}`}
           day={day}
+          isToday={sameDay(day, today)}
           hour={hour}
           posts={posts.filter((post) => {
             const date = new Date(post.publishAt);
@@ -1788,6 +2202,7 @@ function HourRow({
 
 function HourCell({
   day,
+  isToday,
   hour,
   posts,
   channelById,
@@ -1795,20 +2210,21 @@ function HourCell({
   setModal
 }: {
   day: Date;
+  isToday: boolean;
   hour: number;
   posts: EditorialPost[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: `hour:${day.toISOString()}:${hour}` });
+  const { setNodeRef, isOver } = useDroppable({ id: `hour:${dateId(day)}:${hour}` });
   function createPostOnHour() {
     const date = new Date(day);
     date.setHours(hour, 0, 0, 0);
     setModal({ kind: "post", date });
   }
   return (
-    <div ref={setNodeRef} onClick={createPostOnHour} className={`min-h-24 cursor-pointer rounded-2xl border p-2 text-left motion-smooth ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title={`Criar post às ${String(hour).padStart(2, "0")}:00`}>
+    <div ref={setNodeRef} onClick={createPostOnHour} className={`min-h-24 cursor-pointer rounded-2xl border p-2 text-left motion-smooth ${isToday ? "border-blue-200 bg-blue-50" : isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title={`Criar post às ${String(hour).padStart(2, "0")}:00`}>
       <div className="space-y-2">
         {posts.map((post) => (
           <DraggablePost key={post.id} post={post} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
@@ -1852,6 +2268,10 @@ function Tasks(props: {
   setTaskBoards: Dispatch<SetStateAction<TaskBoard[]>>;
   posts: EditorialPost[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
+  ideas: Idea[];
+  currentUser: Profile;
+  campaigns: Campaign[];
+  channels: Channel[];
   activeTaskBoardId: string;
   setActiveTaskBoardId: Dispatch<SetStateAction<string>>;
   taskColumns: TaskColumn[];
@@ -1860,9 +2280,10 @@ function Tasks(props: {
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
+  createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void;
   addQuickTask: (columnId: string, title: string) => void;
 }) {
-  const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { delay: 120, tolerance: 5 } }));
+  const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { distance: 7 } }));
   const [taskMenu, setTaskMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
 
   function addColumn() {
@@ -1984,9 +2405,9 @@ function Tasks(props: {
         <button type="button" onClick={addBoard} className="grid h-10 w-10 place-items-center rounded-full bg-blue-100 text-blue-700" title="Novo quadro"><Plus size={18} /></button>
       </div>
       {calendarActive ? (
-        <CalendarPostsKanban posts={props.posts} setPosts={props.setPosts} channelById={props.channelById} setModal={props.setModal} />
+        <CalendarPostsKanban posts={props.posts} setPosts={props.setPosts} ideas={props.ideas} currentUser={props.currentUser} campaigns={props.campaigns} channels={props.channels} channelById={props.channelById} setModal={props.setModal} createNotifications={props.createNotifications} />
       ) : (
-      <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={stableCollisionDetection} onDragEnd={handleDragEnd}>
         <div className="overflow-x-auto pb-3">
           <SortableContext items={activeColumns.map((column) => `column:${column.id}`)} strategy={horizontalListSortingStrategy}>
             <div className="flex min-w-full gap-4">
@@ -2178,7 +2599,8 @@ function SortableTaskCard({ task, profileById, funnelById, setModal, openTaskMen
         <p className="mt-2 line-clamp-2 text-sm text-slate-500">{task.description || "Clique para detalhar esta tarefa."}</p>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
-        <Badge tone={task.priority === "Alta" ? "red" : task.priority === "Média" ? "blue" : "slate"}>{task.priority}</Badge>
+        <Badge tone={priorityToneMap[task.priority] ?? "slate"}>{task.priority}</Badge>
+        <Badge tone={progressToneMap[task.progress] ?? "slate"}>{task.progress}</Badge>
         <FunnelBadge stage={funnelById.get(task.funnelStageId)} />
       </div>
     </article>
@@ -2209,16 +2631,18 @@ function TaskQuickMenu({ task, columns, x, y, close, setModal, setTasks }: { tas
   );
 }
 
-function CalendarPostsKanban({ posts, setPosts, channelById, setModal }: { posts: EditorialPost[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
-  const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { delay: 120, tolerance: 5 } }));
+function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, channels, channelById, setModal, createNotifications }: { posts: EditorialPost[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; ideas: Idea[]; currentUser: Profile; campaigns: Campaign[]; channels: Channel[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>>; createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void }) {
+  const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { distance: 7 } }));
   const statuses = [...postStatuses, ...(posts.some((post) => !postStatuses.includes(post.status)) ? ["Outros"] : [])];
+  const neutralCampaign = campaigns.find((campaign) => normalizeText(campaign.name) === "campanha neutra");
+  const unlinkedIdeas = ideas.filter((idea) => !posts.some((post) => post.ideaId === idea.id)).sort((a, b) => a.order - b.order);
 
   function statusFor(post: EditorialPost) {
     return postStatuses.includes(post.status) ? post.status : "Outros";
   }
 
   function handleDragEnd(event: DragEndEvent) {
-    const activeId = String(event.active.id).replace("calendar-post:", "");
+    const rawActiveId = String(event.active.id);
     const overId = String(event.over?.id ?? "");
     if (!overId) return;
     const overPost = overId.startsWith("calendar-post:") ? posts.find((post) => `calendar-post:${post.id}` === overId) : undefined;
@@ -2229,10 +2653,53 @@ function CalendarPostsKanban({ posts, setPosts, channelById, setModal }: { posts
         : "";
     if (!targetStatus) return;
 
+    if (rawActiveId.startsWith("calendar-idea:")) {
+      if (targetStatus === "Ideia") return;
+      const ideaId = rawActiveId.replace("calendar-idea:", "");
+      const idea = ideas.find((item) => item.id === ideaId);
+      if (!idea) return;
+      const channel = channels.find((item) => item.id === idea.channelId);
+      const publishAt = new Date();
+      publishAt.setHours(9, 0, 0, 0);
+      const normalizedStatus = targetStatus === "Outros" ? "Ideia" : targetStatus;
+      const newPostId = crypto.randomUUID();
+      setPosts((current) => [{
+        id: newPostId,
+        ideaId: idea.id,
+        templateId: idea.templateId,
+        title: idea.title,
+        channelId: idea.channelId || channels[0]?.id || "",
+        campaignId: neutralCampaign?.id ?? "",
+        productLineId: idea.productLineId,
+        vehicleTypeId: idea.vehicleTypeId,
+        contentTypeId: idea.contentTypeId,
+        funnelStageId: idea.funnelStageId,
+        createdBy: currentUser.id,
+        assignedTo: [],
+        status: normalizedStatus,
+        format: idea.format || defaultPostFormatForChannel(channel),
+        order: current.filter((post) => statusFor(post) === normalizedStatus).length + 1,
+        publishAt: publishAt.toISOString().slice(0, 16),
+        description: idea.description,
+        productionChecklist: []
+      }, ...current]);
+      return;
+    }
+
+    const activeId = rawActiveId.replace("calendar-post:", "");
+
     setPosts((current) => {
       const activePost = current.find((post) => post.id === activeId);
       if (!activePost) return current;
+      if (targetStatus === "Ideia" && activePost.ideaId && activePost.status !== "Ideia") {
+        return current.filter((post) => post.id !== activeId);
+      }
       const normalizedStatus = targetStatus === "Outros" ? activePost.status : targetStatus;
+      if (normalizedStatus !== activePost.status) {
+        if (normalizedStatus === "Revisão") createNotifications(activePost.assignedTo.filter((id) => id !== currentUser.id), "Post entrou em revisão", activePost.title, "post", activePost.id);
+        if (normalizedStatus === "Aprovado") createNotifications([activePost.createdBy, ...activePost.assignedTo].filter((id) => id !== currentUser.id), "Post aprovado", activePost.title, "post", activePost.id);
+        if (normalizedStatus === "Publicado") createNotifications([activePost.createdBy, ...activePost.assignedTo].filter((id) => id !== currentUser.id), "Post publicado", activePost.title, "post", activePost.id);
+      }
       const targetPosts = current.filter((post) => post.id !== activeId && statusFor(post) === targetStatus).sort((a, b) => (a.order ?? 1) - (b.order ?? 1));
       const moved = current.map((post) => post.id === activeId ? { ...post, status: normalizedStatus, order: targetPosts.length + 1 } : post);
       if (!overPost) {
@@ -2249,11 +2716,11 @@ function CalendarPostsKanban({ posts, setPosts, channelById, setModal }: { posts
   }
 
   return (
-    <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} collisionDetection={stableCollisionDetection} onDragEnd={handleDragEnd}>
       <div className="overflow-x-auto pb-3">
         <div className="flex min-w-full gap-4">
           {statuses.map((status) => (
-            <CalendarStatusColumn key={status} status={status} posts={posts.filter((post) => statusFor(post) === status).sort((a, b) => (a.order ?? 1) - (b.order ?? 1))} channelById={channelById} setModal={setModal} />
+            <CalendarStatusColumn key={status} status={status} posts={posts.filter((post) => statusFor(post) === status).sort((a, b) => (a.order ?? 1) - (b.order ?? 1))} ideas={status === "Ideia" ? unlinkedIdeas : []} channelById={channelById} setModal={setModal} />
           ))}
         </div>
       </div>
@@ -2261,21 +2728,44 @@ function CalendarPostsKanban({ posts, setPosts, channelById, setModal }: { posts
   );
 }
 
-function CalendarStatusColumn({ status, posts, channelById, setModal }: { status: string; posts: EditorialPost[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+function CalendarStatusColumn({ status, posts, ideas, channelById, setModal }: { status: string; posts: EditorialPost[]; ideas: Idea[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
   const { setNodeRef, isOver } = useDroppable({ id: `calendar-status:${status}` });
   return (
     <section ref={setNodeRef} className={`min-h-[540px] w-80 shrink-0 rounded-[30px] border p-3 transition ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white"}`}>
       <div className="mb-3 flex items-center justify-between">
         <h3 className="font-black">{status}</h3>
-        <Badge tone="slate">{posts.length}</Badge>
+        <Badge tone="slate">{posts.length + ideas.length}</Badge>
       </div>
       <SortableContext items={posts.map((post) => `calendar-post:${post.id}`)} strategy={verticalListSortingStrategy}>
         <div className={`min-h-80 space-y-3 rounded-[24px] border border-dashed p-2 transition ${isOver ? "border-blue-300 bg-blue-100/50" : "border-transparent"}`}>
+          {ideas.map((idea) => <DraggableCalendarIdeaCard key={idea.id} idea={idea} channel={channelById.get(idea.channelId)} setModal={setModal} />)}
           {posts.map((post) => <SortableCalendarPostCard key={post.id} post={post} channel={channelById.get(post.channelId)} setModal={setModal} />)}
-          {!posts.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">Solte um post aqui</div>}
+          {!posts.length && !ideas.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">Solte um post aqui</div>}
         </div>
       </SortableContext>
     </section>
+  );
+}
+
+function DraggableCalendarIdeaCard({ idea, channel, setModal }: { idea: Idea; channel?: Channel; setModal: Dispatch<SetStateAction<ModalState>> }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `calendar-idea:${idea.id}` });
+  return (
+    <article
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onContextMenu={(event) => event.preventDefault()}
+      onClick={() => setModal({ kind: "idea", id: idea.id })}
+      style={{ transform: CSS.Translate.toString(transform), opacity: isDragging ? 0.55 : 1 }}
+      className={`cursor-grab rounded-3xl border border-blue-100 bg-blue-50 p-4 shadow-sm transition-[border-color,box-shadow,opacity] active:cursor-grabbing ${isDragging ? "ring-2 ring-blue-200" : "hover:border-blue-300 hover:shadow-md"}`}
+    >
+      <div className="flex items-center gap-2 text-xs font-black text-blue-700">
+        <Lightbulb size={14} />
+        Ideia · {channel?.name ?? "Canal"}
+      </div>
+      <h4 className="mt-2 line-clamp-2 font-black">{idea.title}</h4>
+      <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{idea.description || "Arraste para uma coluna para virar post."}</p>
+    </article>
   );
 }
 
@@ -2314,11 +2804,11 @@ function SortableCalendarPostCard({ post, channel, setModal }: { post: Editorial
   );
 }
 
-function Ideas({ ideas, setIdeas, view, setView, activeTab, setActiveTab, channelById, lineById, vehicleTypeById, contentTypeById, funnelById, profileById, setModal }: { ideas: Idea[]; setIdeas: Dispatch<SetStateAction<Idea[]>>; view: "Quadro" | "Lista"; setView: Dispatch<SetStateAction<"Quadro" | "Lista">>; activeTab: "Todos" | Idea["type"]; setActiveTab: Dispatch<SetStateAction<"Todos" | Idea["type"]>>; channelById: Map<string, Channel>; lineById: Map<string, ProductLine>; vehicleTypeById: Map<string, VehicleType>; contentTypeById: Map<string, ContentType>; funnelById: Map<string, FunnelStage>; profileById: Map<string, Profile>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+function Ideas({ ideas, posts, setIdeas, view, setView, activeTab, setActiveTab, channelById, lineById, vehicleTypeById, contentTypeById, funnelById, profileById, setModal }: { ideas: Idea[]; posts: EditorialPost[]; setIdeas: Dispatch<SetStateAction<Idea[]>>; view: "Quadro" | "Lista"; setView: Dispatch<SetStateAction<"Quadro" | "Lista">>; activeTab: "Todos" | "Estatísticas" | Idea["type"]; setActiveTab: Dispatch<SetStateAction<"Todos" | "Estatísticas" | Idea["type"]>>; channelById: Map<string, Channel>; lineById: Map<string, ProductLine>; vehicleTypeById: Map<string, VehicleType>; contentTypeById: Map<string, ContentType>; funnelById: Map<string, FunnelStage>; profileById: Map<string, Profile>; setModal: Dispatch<SetStateAction<ModalState>> }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
-  const tabs: ("Todos" | Idea["type"])[] = ["Todos", ...ideaTypes];
+  const tabs: ("Todos" | "Estatísticas" | Idea["type"])[] = ["Todos", ...ideaTypes, "Estatísticas"];
   const sortedIdeas = ideas.slice().sort((a, b) => a.order - b.order);
-  const filteredIdeas = sortedIdeas.filter((idea) => activeTab === "Todos" || idea.type === activeTab);
+  const filteredIdeas = sortedIdeas.filter((idea) => activeTab === "Todos" || activeTab === "Estatísticas" || idea.type === activeTab);
 
   function reorderIdeas(event: DragEndEvent) {
     const activeId = String(event.active.id).replace("idea:", "");
@@ -2344,6 +2834,7 @@ function Ideas({ ideas, setIdeas, view, setView, activeTab, setActiveTab, channe
         </div>
         <h3 className="mt-3 font-black">{idea.title}</h3>
         <p className="mt-2 text-sm text-slate-500">{lineById.get(idea.productLineId)?.name} · {vehicleTypeById.get(idea.vehicleTypeId)?.name} · {contentTypeById.get(idea.contentTypeId)?.name} · {channelById.get(idea.channelId)?.name}</p>
+        {idea.description && <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{idea.description}</p>}
         <p className="mt-2 text-xs font-bold text-slate-400">Criado por {profileById.get(idea.createdBy)?.name}</p>
         <div className="mt-3"><FunnelBadge stage={funnelById.get(idea.funnelStageId)} /></div>
       </button>
@@ -2368,7 +2859,9 @@ function Ideas({ ideas, setIdeas, view, setView, activeTab, setActiveTab, channe
           ))}
         </div>
       </div>
-      {view === "Lista" ? (
+      {activeTab === "Estatísticas" ? (
+        <IdeaStats ideas={ideas} posts={posts} channelById={channelById} lineById={lineById} vehicleTypeById={vehicleTypeById} contentTypeById={contentTypeById} funnelById={funnelById} profileById={profileById} />
+      ) : view === "Lista" ? (
         <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={reorderIdeas}>
           <SortableContext items={filteredIdeas.map((idea) => `idea:${idea.id}`)} strategy={verticalListSortingStrategy}>
             <div className="space-y-3">
@@ -2405,6 +2898,91 @@ function SortableIdeaRow({ idea, profileById, setModal }: { idea: Idea; profileB
         <h3 className="mt-2 truncate font-black">{idea.title}</h3>
         <p className="mt-1 text-xs font-bold text-slate-400">Criado por {profileById.get(idea.createdBy)?.name}</p>
       </button>
+    </div>
+  );
+}
+
+function IdeaStats({
+  ideas,
+  posts,
+  channelById,
+  lineById,
+  vehicleTypeById,
+  contentTypeById,
+  funnelById,
+  profileById
+}: {
+  ideas: Idea[];
+  posts: EditorialPost[];
+  channelById: Map<string, Channel>;
+  lineById: Map<string, ProductLine>;
+  vehicleTypeById: Map<string, VehicleType>;
+  contentTypeById: Map<string, ContentType>;
+  funnelById: Map<string, FunnelStage>;
+  profileById: Map<string, Profile>;
+}) {
+  const linkedIdeaIds = new Set(posts.filter((post) => post.status !== "Ideia").map((post) => post.ideaId).filter(Boolean));
+  const conversion = ideas.length ? (linkedIdeaIds.size / ideas.length) * 100 : 0;
+  const funnelData = aggregateIdeas(ideas, "funnelStageId", funnelById);
+  const typeData = aggregateIdeas(ideas, "type");
+  const channelData = aggregateIdeas(ideas, "channelId", channelById);
+  const lineData = aggregateIdeas(ideas, "productLineId", lineById);
+  const vehicleData = aggregateIdeas(ideas, "vehicleTypeId", vehicleTypeById);
+  const contentData = aggregateIdeas(ideas, "contentTypeId", contentTypeById);
+  const creatorData = aggregateIdeas(ideas, "createdBy", profileById);
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-3 md:grid-cols-4">
+        <MetricSummaryCard label="Ideias totais" value={String(ideas.length)} />
+        <MetricSummaryCard label="Viraram post" value={String(linkedIdeaIds.size)} />
+        <MetricSummaryCard label="Conversão" value={formatPercent(conversion)} />
+        <MetricSummaryCard label="Com arquivo" value={String(ideas.filter((idea) => idea.attachments?.length).length)} />
+      </div>
+      <div className="grid gap-4 xl:grid-cols-3">
+        <IdeaBreakdown title="Funil" data={funnelData} />
+        <IdeaBreakdown title="Tipo de ideia" data={typeData} />
+        <IdeaBreakdown title="Canal" data={channelData} />
+        <IdeaBreakdown title="Linha de produto" data={lineData} />
+        <IdeaBreakdown title="Tipo de veículo" data={vehicleData} />
+        <IdeaBreakdown title="Tipo de conteúdo" data={contentData} />
+        <IdeaBreakdown title="Criador" data={creatorData} />
+      </div>
+    </div>
+  );
+}
+
+function aggregateIdeas(ideas: Idea[], key: keyof Idea, labels?: Map<string, { name: string }>) {
+  const total = Math.max(ideas.length, 1);
+  return Object.entries(ideas.reduce<Record<string, number>>((acc, idea) => {
+    const id = String(idea[key] ?? "") || "sem-categoria";
+    acc[id] = (acc[id] ?? 0) + 1;
+    return acc;
+  }, {})).sort((a, b) => b[1] - a[1]).map(([id, count]) => ({
+    id,
+    name: labels?.get(id)?.name ?? (id === "sem-categoria" ? "Sem categoria" : id),
+    count,
+    percent: (count / total) * 100
+  }));
+}
+
+function IdeaBreakdown({ title, data }: { title: string; data: { id: string; name: string; count: number; percent: number }[] }) {
+  return (
+    <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+      <h3 className="font-black">{title}</h3>
+      <div className="mt-3 space-y-3">
+        {data.map((item) => (
+          <div key={item.id}>
+            <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+              <span className="font-black">{item.name}</span>
+              <span className="font-black text-blue-700">{item.count} · {formatPercent(item.percent)}</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full rounded-full bg-blue-700" style={{ width: `${Math.min(item.percent, 100)}%` }} />
+            </div>
+          </div>
+        ))}
+        {!data.length && <p className="text-sm font-bold text-slate-400">Sem dados ainda.</p>}
+      </div>
     </div>
   );
 }
@@ -2533,13 +3111,26 @@ function Metrics({
   const winners = filteredMetrics.filter((metric) => metric.leads > 0 && metricEngagementRate(metric) >= 5).slice(0, 4);
   const weakMetrics = filteredMetrics.filter((metric) => metric.reach < averageReach * 0.7 || metric.leads === 0).slice(0, 4);
 
-  function aggregateBy(items: PostMetric[], key: keyof PostMetric, labels: Map<string, { name: string; color?: string }>) {
+  type MetricBreakdownItem = { id: string; name: string; value: number; color: string };
+
+  function aggregateMetricBreakdown(
+    items: PostMetric[],
+    groupBy: keyof PostMetric,
+    labels: Map<string, { name: string; color?: string }>,
+    getValue: (metric: PostMetric) => number
+  ): MetricBreakdownItem[] {
     return Object.entries(items.reduce<Record<string, number>>((acc, metric) => {
-      const id = String(metric[key] ?? "");
-      if (!id) return acc;
-      acc[id] = (acc[id] ?? 0) + metric.leads;
+      const id = String(metric[groupBy] ?? "") || "__uncategorized";
+      acc[id] = (acc[id] ?? 0) + getValue(metric);
       return acc;
-    }, {})).map(([id, value]) => ({ id, name: labels.get(id)?.name ?? "Sem categoria", value, color: labels.get(id)?.color ?? "#2563eb" }));
+    }, {}))
+      .map(([id, value]) => ({
+        id,
+        name: labels.get(id)?.name ?? "Sem categoria",
+        value,
+        color: labels.get(id)?.color ?? "#2563eb"
+      }))
+      .sort((a, b) => b.value - a.value);
   }
 
   function createImprovementTask(metric: PostMetric) {
@@ -2553,7 +3144,7 @@ function Metrics({
       priority: metric.leads === 0 ? "Alta" : "Média",
       progress: "Atenção",
       createdBy: currentUser.id,
-      assignedTo: [currentUser.id],
+      assignedTo: [],
       relatedTo: "Métricas",
       funnelStageId: metric.funnelStageId,
       dueDate: todayIso(),
@@ -2571,23 +3162,48 @@ function Metrics({
     setIdeas((current) => [{
       id: crypto.randomUUID(),
       title: `Replicar formato: ${metric.postTitle}`,
+      description: `Ideia criada a partir de uma métrica com bom resultado. Aprendizado: ${metric.learning || "sem aprendizado registrado"}.`,
       productLineId: metric.productLineId,
       vehicleTypeId: metric.vehicleTypeId,
       contentTypeId: metric.contentTypeId,
       type: "Postagem",
       channelId: metric.channelId,
+      format: defaultPostFormatForChannel(channelById.get(metric.channelId)),
       funnelStageId: metric.funnelStageId,
       createdBy: currentUser.id,
       priority: "Alta",
-      order: current.length + 1
+      order: current.length + 1,
+      attachments: []
     }, ...current]);
   }
 
-  const channelData = aggregateBy(filteredMetrics, "channelId", new Map(channels.map((item) => [item.id, item])));
-  const lineData = aggregateBy(filteredMetrics, "productLineId", new Map(productLines.map((item) => [item.id, item])));
-  const vehicleData = aggregateBy(filteredMetrics, "vehicleTypeId", new Map(vehicleTypes.map((item) => [item.id, item])));
-  const contentData = aggregateBy(filteredMetrics, "contentTypeId", new Map(contentTypes.map((item) => [item.id, item])));
-  const funnelData = aggregateBy(filteredMetrics, "funnelStageId", new Map(funnelStages.map((item) => [item.id, item])));
+  const metricBreakdowns = [
+    {
+      title: "Leads por canal",
+      unit: "leads",
+      data: aggregateMetricBreakdown(filteredMetrics, "channelId", new Map(channels.map((item) => [item.id, item])), (metric) => metric.leads)
+    },
+    {
+      title: "Alcance por linha",
+      unit: "alcance",
+      data: aggregateMetricBreakdown(filteredMetrics, "productLineId", new Map(productLines.map((item) => [item.id, item])), (metric) => metric.reach)
+    },
+    {
+      title: "Engajamento por veículo",
+      unit: "engaj.",
+      data: aggregateMetricBreakdown(filteredMetrics, "vehicleTypeId", new Map(vehicleTypes.map((item) => [item.id, item])), metricEngagement)
+    },
+    {
+      title: "Cliques por conteúdo",
+      unit: "cliques",
+      data: aggregateMetricBreakdown(filteredMetrics, "contentTypeId", new Map(contentTypes.map((item) => [item.id, item])), (metric) => metric.clicks)
+    },
+    {
+      title: "Conversões por funil",
+      unit: "conv.",
+      data: aggregateMetricBreakdown(filteredMetrics, "funnelStageId", new Map(funnelStages.map((item) => [item.id, item])), (metric) => metric.leads)
+    }
+  ];
 
   return (
     <Panel title="Métricas" action={<RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />}>
@@ -2621,14 +3237,19 @@ function Metrics({
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={dailyData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="date" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
+                  <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
                   <Tooltip />
-                  <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe" />
-                  <Area dataKey="leads" stroke="#0891b2" fill="#cffafe" />
+                  <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe">
+                    <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={12} fontWeight={900} />
+                  </Area>
+                  <Area dataKey="leads" stroke="#0891b2" fill="#cffafe">
+                    <LabelList dataKey="leads" position="top" fill="#0e7490" fontSize={12} fontWeight={900} />
+                  </Area>
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+            <ChartValueList data={dailyData.slice(-5).map((item) => ({ label: item.date, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />
           </div>
           <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
             <h3 className="font-black">Comparação entre posts</h3>
@@ -2636,23 +3257,26 @@ function Metrics({
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                  <YAxis tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
+                  <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
                   <Tooltip />
-                  <Bar dataKey="alcance" fill="#2563eb" radius={[8, 8, 0, 0]} />
-                  <Bar dataKey="leads" fill="#38bdf8" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="alcance" fill="#2563eb" radius={[8, 8, 0, 0]}>
+                    <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={12} fontWeight={900} />
+                  </Bar>
+                  <Bar dataKey="leads" fill="#38bdf8" radius={[8, 8, 0, 0]}>
+                    <LabelList dataKey="leads" position="top" fill="#0e7490" fontSize={12} fontWeight={900} />
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
             </div>
+            <ChartValueList data={chartData.slice(0, 5).map((item) => ({ label: item.name, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />
           </div>
         </section>
 
         <section className="grid gap-5 xl:grid-cols-5">
-          <BreakdownChart title="Leads por canal" data={channelData} />
-          <BreakdownChart title="Leads por linha" data={lineData} />
-          <BreakdownChart title="Leads por veículo" data={vehicleData} />
-          <BreakdownChart title="Leads por conteúdo" data={contentData} />
-          <BreakdownChart title="Leads por funil" data={funnelData} />
+          {metricBreakdowns.map((breakdown) => (
+            <BreakdownChart key={breakdown.title} title={breakdown.title} data={breakdown.data} unit={breakdown.unit} />
+          ))}
         </section>
 
         <section>
@@ -2722,21 +3346,61 @@ function MetricSummaryCard({ label, value }: { label: string; value: string }) {
   return <div className="rounded-[26px] border border-blue-100 bg-gradient-to-br from-blue-50 to-white p-4"><p className="text-xs font-black uppercase text-blue-600">{label}</p><p className="mt-2 text-2xl font-black text-slate-950">{value}</p></div>;
 }
 
-function BreakdownChart({ title, data }: { title: string; data: { id: string; name: string; value: number; color: string }[] }) {
+function ChartValueList({ data }: { data: { label: string; value: string }[] }) {
+  if (!data.length) return null;
+  return (
+    <div className="mt-3 grid gap-2 md:grid-cols-2">
+      {data.map((item) => (
+        <p key={`${item.label}-${item.value}`} className="flex items-center justify-between gap-3 rounded-2xl bg-white px-3 py-2 text-xs font-bold text-slate-500">
+          <span className="min-w-0 truncate">{item.label}</span>
+          <span className="shrink-0 font-black text-slate-950">{item.value}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function BreakdownChart({ title, data, unit }: { title: string; data: { id: string; name: string; value: number; color: string }[]; unit: string }) {
   return (
     <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
       <h3 className="font-black">{title}</h3>
       <div className="mt-3 h-44">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
-            <Pie data={data} dataKey="value" nameKey="name" innerRadius={34} outerRadius={62}>
+            <Pie data={data} dataKey="value" nameKey="name" innerRadius={34} outerRadius={62} labelLine={false} label={renderInsidePieLabel}>
               {data.map((item, index) => <Cell key={item.id} fill={item.color || ["#2563eb", "#38bdf8", "#64748b", "#22c55e"][index % 4]} />)}
             </Pie>
             <Tooltip />
           </PieChart>
         </ResponsiveContainer>
       </div>
+      <div className="mt-2 space-y-1">
+        {data.slice(0, 4).map((item) => <p key={item.id} className="flex justify-between gap-2 text-xs font-bold text-slate-500"><span className="truncate">{item.name}</span><span className="font-black text-slate-800">{formatNumber(item.value)} {unit}</span></p>)}
+      </div>
     </div>
+  );
+}
+
+function renderInsidePieLabel(props: {
+  cx?: number;
+  cy?: number;
+  midAngle?: number;
+  innerRadius?: number;
+  outerRadius?: number;
+  percent?: number;
+  value?: number;
+  payload?: { value?: number };
+}) {
+  const { cx = 0, cy = 0, midAngle = 0, innerRadius = 0, outerRadius = 0, percent = 0, value = 0, payload } = props;
+  const sliceValue = Number(payload?.value ?? value);
+  if (percent < 0.08 || !sliceValue) return null;
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.58;
+  const x = cx + radius * Math.cos((-midAngle * Math.PI) / 180);
+  const y = cy + radius * Math.sin((-midAngle * Math.PI) / 180);
+  return (
+    <text x={x} y={y} fill="#ffffff" textAnchor="middle" dominantBaseline="central" fontSize={13} fontWeight={900}>
+      {formatNumber(sliceValue)}
+    </text>
   );
 }
 
@@ -2781,18 +3445,24 @@ function SettingsPanel(props: {
   currentUser: Profile;
   profiles: Profile[];
   channels: Channel[];
+  campaignAudiences: CampaignAudience[];
+  postTemplates: PostTemplate[];
   productLines: ProductLine[];
   vehicleTypes: VehicleType[];
   contentTypes: ContentType[];
   funnelStages: FunnelStage[];
-  configTab: "Equipe" | "Funil" | "Filtros" | "Conta e Permissões";
-  setConfigTab: Dispatch<SetStateAction<"Equipe" | "Funil" | "Filtros" | "Conta e Permissões">>;
+  calendarDates: CalendarDate[];
+  configTab: (typeof configTabs)[number];
+  setConfigTab: Dispatch<SetStateAction<(typeof configTabs)[number]>>;
   setProfiles: Dispatch<SetStateAction<Profile[]>>;
   setChannels: Dispatch<SetStateAction<Channel[]>>;
+  setCampaignAudiences: Dispatch<SetStateAction<CampaignAudience[]>>;
+  setPostTemplates: Dispatch<SetStateAction<PostTemplate[]>>;
   setProductLines: Dispatch<SetStateAction<ProductLine[]>>;
   setVehicleTypes: Dispatch<SetStateAction<VehicleType[]>>;
   setContentTypes: Dispatch<SetStateAction<ContentType[]>>;
   setFunnelStages: Dispatch<SetStateAction<FunnelStage[]>>;
+  setCalendarDates: Dispatch<SetStateAction<CalendarDate[]>>;
   uploadProfilePhoto: (profileId: string, file: File) => void;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
@@ -2809,7 +3479,9 @@ function SettingsPanel(props: {
       </Panel>
       {props.configTab === "Equipe" && <TeamSettings {...props} />}
       {props.configTab === "Funil" && <FunnelSettings funnelStages={props.funnelStages} setFunnelStages={props.setFunnelStages} />}
-      {props.configTab === "Filtros" && <ChannelsLinesSettings channels={props.channels} productLines={props.productLines} vehicleTypes={props.vehicleTypes} contentTypes={props.contentTypes} setChannels={props.setChannels} setProductLines={props.setProductLines} setVehicleTypes={props.setVehicleTypes} setContentTypes={props.setContentTypes} />}
+      {props.configTab === "Filtros" && <ChannelsLinesSettings channels={props.channels} campaignAudiences={props.campaignAudiences} productLines={props.productLines} vehicleTypes={props.vehicleTypes} contentTypes={props.contentTypes} setChannels={props.setChannels} setCampaignAudiences={props.setCampaignAudiences} setProductLines={props.setProductLines} setVehicleTypes={props.setVehicleTypes} setContentTypes={props.setContentTypes} />}
+      {props.configTab === "Modelos" && <PostTemplateSettings templates={props.postTemplates} setTemplates={props.setPostTemplates} channels={props.channels} contentTypes={props.contentTypes} funnelStages={props.funnelStages} />}
+      {props.configTab === "Datas" && <CalendarDateSettings calendarDates={props.calendarDates} setCalendarDates={props.setCalendarDates} />}
       {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} />}
     </div>
   );
@@ -2914,19 +3586,23 @@ function FunnelStageRow({ stage, index, total, setFunnelStages }: { stage: Funne
 
 function ChannelsLinesSettings({
   channels,
+  campaignAudiences,
   productLines,
   vehicleTypes,
   contentTypes,
   setChannels,
+  setCampaignAudiences,
   setProductLines,
   setVehicleTypes,
   setContentTypes
 }: {
   channels: Channel[];
+  campaignAudiences: CampaignAudience[];
   productLines: ProductLine[];
   vehicleTypes: VehicleType[];
   contentTypes: ContentType[];
   setChannels: Dispatch<SetStateAction<Channel[]>>;
+  setCampaignAudiences: Dispatch<SetStateAction<CampaignAudience[]>>;
   setProductLines: Dispatch<SetStateAction<ProductLine[]>>;
   setVehicleTypes: Dispatch<SetStateAction<VehicleType[]>>;
   setContentTypes: Dispatch<SetStateAction<ContentType[]>>;
@@ -2937,6 +3613,7 @@ function ChannelsLinesSettings({
         <button onClick={() => { const name = window.prompt("Novo canal"); if (name) setChannels((current) => [...current, { id: slug(name), name, color: "#2563eb" }]); }} className="mb-4 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">Adicionar canal</button>
         <div className="space-y-2">{channels.map((channel) => <div key={channel.id} className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 font-black"><span>{channel.name}</span><button onClick={() => window.confirm("Excluir canal?") && setChannels((current) => current.filter((item) => item.id !== channel.id))} className="text-rose-600"><Trash2 size={16} /></button></div>)}</div>
       </Panel>
+      <SimpleConfigPanel title="Públicos" addLabel="Adicionar público" promptLabel="Novo público" deleteLabel="Excluir público?" items={campaignAudiences} setItems={setCampaignAudiences} />
       <SimpleConfigPanel title="Linhas de produto" addLabel="Adicionar linha" promptLabel="Nova linha de produto" deleteLabel="Excluir linha de produto?" items={productLines} setItems={setProductLines} />
       <SimpleConfigPanel title="Tipos de veículo" addLabel="Adicionar tipo" promptLabel="Novo tipo de veículo" deleteLabel="Excluir tipo de veículo?" items={vehicleTypes} setItems={setVehicleTypes} />
       <SimpleConfigPanel title="Tipos de conteúdo" addLabel="Adicionar tipo" promptLabel="Novo tipo de conteúdo" deleteLabel="Excluir tipo de conteúdo?" items={contentTypes} setItems={setContentTypes} />
@@ -2957,6 +3634,199 @@ function SimpleConfigPanel<T extends { id: string; name: string }>({ title, addL
         ))}
       </div>
     </Panel>
+  );
+}
+
+function PostTemplateSettings({ templates, setTemplates, channels, contentTypes, funnelStages }: { templates: PostTemplate[]; setTemplates: Dispatch<SetStateAction<PostTemplate[]>>; channels: Channel[]; contentTypes: ContentType[]; funnelStages: FunnelStage[] }) {
+  const [editingTemplate, setEditingTemplate] = useState<PostTemplate | "new" | null>(null);
+  return (
+    <Panel title="Modelos de postagem">
+      <div className="mb-5 grid place-items-center rounded-3xl border border-dashed border-blue-200 bg-blue-50/60 p-6">
+        <RoundAdd onClick={() => setEditingTemplate("new")} label="Adicionar modelo" />
+        <p className="mt-3 text-sm font-black text-blue-700">Adicionar modelo</p>
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        {templates.map((template) => (
+          <div key={template.id} className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-black">{template.name}</h3>
+                <p className="mt-1 line-clamp-2 text-sm font-bold text-slate-500">{template.description}</p>
+              </div>
+              <Badge tone="blue">{channels.find((channel) => channel.id === template.channelId)?.name ?? "Canal"}</Badge>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Badge tone="slate">{contentTypes.find((type) => type.id === template.contentTypeId)?.name ?? "Conteúdo"}</Badge>
+              <Badge tone="slate">{template.format || "Formato"}</Badge>
+              {template.suggestedTime && <Badge tone="amber">{template.suggestedTime}</Badge>}
+              <Badge tone="slate">{funnelStages.find((stage) => stage.id === template.funnelStageId)?.name ?? "Sem funil"}</Badge>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={() => setEditingTemplate(template)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Editar</button>
+              <button type="button" onClick={() => window.confirm("Excluir este modelo?") && setTemplates((current) => current.filter((item) => item.id !== template.id))} className="rounded-2xl bg-rose-100 px-3 py-2 text-rose-700"><Trash2 size={16} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {editingTemplate && <PostTemplateModal template={editingTemplate === "new" ? undefined : editingTemplate} setTemplates={setTemplates} channels={channels} contentTypes={contentTypes} funnelStages={funnelStages} close={() => setEditingTemplate(null)} />}
+    </Panel>
+  );
+}
+
+function PostTemplateModal({ template, setTemplates, channels, contentTypes, funnelStages, close }: { template?: PostTemplate; setTemplates: Dispatch<SetStateAction<PostTemplate[]>>; channels: Channel[]; contentTypes: ContentType[]; funnelStages: FunnelStage[]; close: () => void }) {
+  const [selectedChannelId, setSelectedChannelId] = useState(template?.channelId ?? channels[0]?.id ?? "");
+  const [structureItems, setStructureItems] = useState<string[]>(template?.structureItems?.length ? template.structureItems : textLines(template?.structure ?? ""));
+  const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>(template?.checklistItems?.length ? template.checklistItems : textLines(template?.checklist ?? "").map((label, index) => ({ id: `draft-check-${index + 1}`, label, done: false })));
+  const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
+  const formatOptions = postFormatOptionsForChannel(selectedChannel);
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name")).trim();
+    if (!name) return;
+    const value: PostTemplate = {
+      id: template?.id ?? `${slug(name)}-${crypto.randomUUID().slice(0, 6)}`,
+      name,
+      description: String(form.get("description")),
+      contentTypeId: String(form.get("contentTypeId")),
+      channelId: String(form.get("channelId")),
+      format: String(form.get("format")),
+      suggestedTime: String(form.get("suggestedTime")),
+      funnelStageId: String(form.get("funnelStageId")),
+      structure: structureItems.join("\n"),
+      checklist: checklistItems.map((item) => item.label).join("\n"),
+      structureItems,
+      checklistItems,
+      visualGuidance: String(form.get("visualGuidance")),
+      captionExample: String(form.get("captionExample"))
+    };
+    setTemplates((current) => template ? current.map((item) => item.id === template.id ? value : item) : [value, ...current]);
+    close();
+  }
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm animate-fade-in-up">
+      <section className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl animate-soft-pop">
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-black text-blue-700">Padrão editorial</p>
+            <h3 className="text-2xl font-black">{template ? "Editar modelo" : "Novo modelo"}</h3>
+          </div>
+          <button type="button" onClick={close} className="rounded-2xl bg-slate-100 p-2 text-slate-600"><X size={18} /></button>
+        </div>
+        <EntityForm onSubmit={submit}>
+          <TextInput name="name" label="Nome do modelo" required defaultValue={template?.name} />
+          <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={template?.contentTypeId ?? ""} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} />
+          <label className="block text-sm font-bold text-slate-600">Canal recomendado<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+          <Select key={selectedChannelId} name="format" label="Formato recomendado" defaultValue={template?.format ?? defaultPostFormatForChannel(selectedChannel)} options={formatOptions.map((item) => [item, item])} />
+          <TextInput name="suggestedTime" label="Horário sugerido" type="time" defaultValue={template?.suggestedTime ?? ""} />
+          <Select name="funnelStageId" label="Funil recomendado" defaultValue={template?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />
+          <TextArea name="description" label="Descrição" defaultValue={template?.description} />
+          <ListEditor title="Roteiro/estrutura" items={structureItems} setItems={setStructureItems} />
+          <ChecklistEditor title="Checklist de produção" items={checklistItems} setItems={setChecklistItems} />
+          <TextArea name="visualGuidance" label="Orientação para arte/vídeo" defaultValue={template?.visualGuidance} />
+          <TextArea name="captionExample" label="Exemplo de legenda/copy" defaultValue={template?.captionExample} />
+          <SubmitButton>{template ? "Salvar" : "Criar"}</SubmitButton>
+        </EntityForm>
+      </section>
+    </div>
+  );
+}
+
+function ListEditor({ title, items, setItems }: { title: string; items: string[]; setItems: Dispatch<SetStateAction<string[]>> }) {
+  return (
+    <div className="space-y-2 rounded-3xl border border-slate-100 bg-slate-50 p-3 md:col-span-2">
+      <p className="text-sm font-black text-slate-600">{title}</p>
+      {items.map((item, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <span className="grid h-7 w-7 place-items-center rounded-full bg-blue-100 text-xs font-black text-blue-700">{index + 1}</span>
+          <input value={item} onChange={(event) => setItems((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" />
+          <button type="button" onClick={() => setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
+        </div>
+      ))}
+      <button type="button" onClick={() => setItems((current) => [...current, ""])} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Adicionar item</button>
+    </div>
+  );
+}
+
+function ChecklistEditor({ title, items, setItems }: { title: string; items: ChecklistItem[]; setItems: Dispatch<SetStateAction<ChecklistItem[]>> }) {
+  return (
+    <div className="space-y-2 rounded-3xl border border-slate-100 bg-slate-50 p-3 md:col-span-2">
+      <p className="text-sm font-black text-slate-600">{title}</p>
+      {items.map((item) => (
+        <div key={item.id} className="flex items-center gap-2">
+          <input type="checkbox" checked={item.done} onChange={(event) => setItems((current) => current.map((value) => value.id === item.id ? { ...value, done: event.target.checked } : value))} />
+          <input value={item.label} onChange={(event) => setItems((current) => current.map((value) => value.id === item.id ? { ...value, label: event.target.value } : value))} className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" />
+          <button type="button" onClick={() => setItems((current) => current.filter((value) => value.id !== item.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
+        </div>
+      ))}
+      <button type="button" onClick={() => setItems((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Adicionar item</button>
+    </div>
+  );
+}
+
+function CalendarDateSettings({ calendarDates, setCalendarDates }: { calendarDates: CalendarDate[]; setCalendarDates: Dispatch<SetStateAction<CalendarDate[]>> }) {
+  const [editingDate, setEditingDate] = useState<CalendarDate | "new" | null>(null);
+  const sorted = calendarDates.slice().sort((a, b) => a.date.localeCompare(b.date));
+  return (
+    <Panel title="Datas comemorativas e feriados">
+      <div className="mb-5 grid place-items-center rounded-3xl border border-dashed border-blue-200 bg-blue-50/60 p-6">
+        <RoundAdd onClick={() => setEditingDate("new")} label="Adicionar data" />
+        <p className="mt-3 text-sm font-black text-blue-700">Adicionar data</p>
+      </div>
+      <div className="grid gap-3">
+        {sorted.map((item) => (
+          <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
+            <div className="min-w-0">
+              <p className="font-black">{item.name}</p>
+              <p className="mt-1 text-sm font-bold text-slate-500">{formatDateOnly(new Date(`${item.date}T12:00:00`))} · {item.type}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="h-4 w-4 rounded-full" style={{ backgroundColor: item.color }} />
+              <button type="button" onClick={() => setEditingDate(item)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Editar</button>
+              <button type="button" onClick={() => window.confirm("Excluir esta data?") && setCalendarDates((current) => current.filter((date) => date.id !== item.id))} className="rounded-2xl bg-rose-100 px-3 py-2 text-rose-700"><Trash2 size={16} /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+      {editingDate && <CalendarDateModal date={editingDate === "new" ? undefined : editingDate} setCalendarDates={setCalendarDates} close={() => setEditingDate(null)} />}
+    </Panel>
+  );
+}
+
+function CalendarDateModal({ date, setCalendarDates, close }: { date?: CalendarDate; setCalendarDates: Dispatch<SetStateAction<CalendarDate[]>>; close: () => void }) {
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const name = String(form.get("name")).trim();
+    if (!name) return;
+    const value: CalendarDate = {
+      id: date?.id ?? `${slug(name)}-${crypto.randomUUID().slice(0, 6)}`,
+      name,
+      date: String(form.get("date")),
+      type: String(form.get("type")) as CalendarDate["type"],
+      color: String(form.get("color")),
+      notes: String(form.get("notes"))
+    };
+    setCalendarDates((current) => date ? current.map((item) => item.id === date.id ? value : item) : [...current, value]);
+    close();
+  }
+  return (
+    <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm animate-fade-in-up">
+      <section className="w-full max-w-2xl rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl animate-soft-pop">
+        <div className="mb-5 flex items-center justify-between gap-4">
+          <h3 className="text-2xl font-black">{date ? "Editar data" : "Nova data"}</h3>
+          <button type="button" onClick={close} className="rounded-2xl bg-slate-100 p-2 text-slate-600"><X size={18} /></button>
+        </div>
+        <EntityForm onSubmit={submit}>
+          <TextInput name="name" label="Nome da data" required defaultValue={date?.name} />
+          <TextInput name="date" label="Data" type="date" required defaultValue={date?.date ?? todayIso()} />
+          <Select name="type" label="Tipo" defaultValue={date?.type} options={["Feriado", "Data comemorativa", "Interno", "Outro"].map((item) => [item, item])} />
+          <label className="block text-sm font-bold text-slate-600">Cor<input name="color" type="color" defaultValue={date?.color ?? "#2563eb"} className="mt-1 h-10 w-full rounded-2xl border border-slate-200 bg-white p-1" /></label>
+          <TextArea name="notes" label="Observações" defaultValue={date?.notes} />
+          <SubmitButton>{date ? "Salvar" : "Adicionar"}</SubmitButton>
+        </EntityForm>
+      </section>
+    </div>
   );
 }
 
@@ -2993,15 +3863,23 @@ function EntityModal(props: {
   contentTypes: ContentType[];
   funnelStages: FunnelStage[];
   campaigns: Campaign[];
+  campaignAudiences: CampaignAudience[];
+  postTemplates: PostTemplate[];
   posts: EditorialPost[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   postReviewAssets: PostReviewAsset[];
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
   addPostReviewExternalAsset: (post: EditorialPost, url: string) => void;
+  deletePostReviewAsset: (assetId: string) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
   ideas: Idea[];
   setIdeas: Dispatch<SetStateAction<Idea[]>>;
+  addIdeaAttachment: (ideaId: string, file: File) => void;
+  addIdeaExternalLink: (ideaId: string, url: string) => void;
+  prepareIdeaAttachment: (ideaId: string, file: File) => Promise<TaskAttachment>;
+  openMediaPreview: (item: MediaPreviewItem) => void;
+  createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void;
   setCampaigns: Dispatch<SetStateAction<Campaign[]>>;
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
@@ -3057,7 +3935,35 @@ function modalTitle(modal: NonNullable<ModalState>) {
   return modal.id ? "Editar métrica" : "Nova métrica";
 }
 
-function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
+function MediaPreviewModal({ item, close }: { item: MediaPreviewItem; close: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-950/75 p-4 backdrop-blur-sm animate-fade-in-up">
+      <section className="w-full max-w-5xl rounded-[34px] bg-white p-4 shadow-2xl animate-soft-pop">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="line-clamp-1 font-black">{item.name}</h3>
+          <button type="button" onClick={close} className="rounded-2xl bg-slate-100 p-2 text-slate-600"><X size={18} /></button>
+        </div>
+        <MediaPreviewContent item={item} large />
+      </section>
+    </div>
+  );
+}
+
+function MediaPreviewContent({ item, large = false }: { item: MediaPreviewItem; large?: boolean }) {
+  const source = item.previewUrl || item.url;
+  if (item.source === "external") {
+    return <iframe src={source} allow="autoplay; encrypted-media; picture-in-picture" allowFullScreen className={`${large ? "h-[72vh]" : "aspect-video"} w-full rounded-3xl border border-slate-200 bg-white`} />;
+  }
+  if (item.type === "foto") {
+    return <img src={source} alt={item.name} className={`${large ? "max-h-[72vh]" : "max-h-64"} w-full rounded-3xl object-contain bg-slate-50`} />;
+  }
+  if (item.type === "video") {
+    return <video src={source} controls className={`${large ? "max-h-[72vh]" : "max-h-64"} w-full rounded-3xl bg-black`} />;
+  }
+  return <a href={item.url} target="_blank" className="block rounded-3xl bg-slate-50 p-8 text-center font-black text-blue-700">Abrir arquivo: {item.name}</a>;
+}
+
+function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const subtasks = tasks.filter((item) => item.parentTaskId === task.id);
   const parentTask = task.parentTaskId ? tasks.find((item) => item.id === task.parentTaskId) : undefined;
@@ -3077,7 +3983,7 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
 
   function isCompletedTask(item: Task) {
     const doneColumn = completedColumnFor(item);
-    return item.progress === "Finalizando" || Boolean(doneColumn && item.columnId === doneColumn.id);
+    return Boolean(doneColumn && item.columnId === doneColumn.id);
   }
 
   function toggleTaskCompletedById(taskId: string) {
@@ -3140,6 +4046,22 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           >
             <CheckCircle2 size={17} /> {isTaskCompleted ? "Concluída" : "Marcar como concluída"}
           </button>
+          <InlineTagSelect
+            label="Prioridade"
+            value={task.priority}
+            options={priorities}
+            tone={priorityToneMap[task.priority] ?? "slate"}
+            toneForOption={(value) => priorityToneMap[value] ?? "slate"}
+            onChange={(value) => updateTask(task.id, (current) => ({ ...current, priority: value as TaskPriority }))}
+          />
+          <InlineTagSelect
+            label="Andamento"
+            value={task.progress}
+            options={progresses}
+            tone={progressToneMap[task.progress] ?? "slate"}
+            toneForOption={(value) => progressToneMap[value] ?? "slate"}
+            onChange={(value) => updateTask(task.id, (current) => ({ ...current, progress: value as TaskProgress }))}
+          />
           {parentTask && (
             <button type="button" onClick={() => setModal({ kind: "task", id: parentTask.id })} className="rounded-2xl border border-blue-100 bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 transition hover:border-blue-300 hover:bg-blue-100">
               Voltar para tarefa anterior
@@ -3159,11 +4081,13 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
 
       <div className="grid gap-3 lg:grid-cols-2">
         <DetailRow label="Criado por"><span className="font-bold text-slate-600">{profileById.get(task.createdBy)?.name}</span></DetailRow>
-        <DetailRow label="Responsáveis"><MultiSelect label="" values={task.assignedTo} profiles={profiles} onChange={(values) => updateTask(task.id, (current) => ({ ...current, assignedTo: values }))} /></DetailRow>
+        <DetailRow label="Responsáveis"><MultiSelect label="" values={task.assignedTo} profiles={profiles} onChange={(values) => {
+          const added = values.filter((id) => !task.assignedTo.includes(id) && id !== currentUser.id);
+          if (added.length) createNotifications(added, "Tarefa atribuída", task.title, "task", task.id);
+          updateTask(task.id, (current) => ({ ...current, assignedTo: values }));
+        }} /></DetailRow>
         <DetailRow label="Data de conclusão"><input value={task.dueDate} type="date" onChange={(event) => updateTask(task.id, (current) => ({ ...current, dueDate: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /></DetailRow>
-        <DetailRow label="Prioridade"><SelectControlled label="" value={task.priority} options={priorities.map((item) => [item, item])} onChange={(value) => updateTask(task.id, (current) => ({ ...current, priority: value as TaskPriority }))} /></DetailRow>
-        <DetailRow label="Andamento"><SelectControlled label="" value={task.progress} options={progresses.map((item) => [item, item])} onChange={(value) => updateTask(task.id, (current) => ({ ...current, progress: value as TaskProgress }))} /></DetailRow>
-        <DetailRow label="Funil"><SelectControlled label="" value={task.funnelStageId} options={funnelStages.map((stage) => [stage.id, stage.name])} onChange={(value) => updateTask(task.id, (current) => ({ ...current, funnelStageId: value }))} /></DetailRow>
+        <DetailRow label="Funil"><SelectControlled label="" value={task.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((stage) => [stage.id, stage.name])]} onChange={(value) => updateTask(task.id, (current) => ({ ...current, funnelStageId: value }))} /></DetailRow>
       </div>
 
       <section className="space-y-2">
@@ -3232,14 +4156,16 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           <input type="file" className="hidden" onChange={(event) => event.target.files?.[0] && addTaskAttachment(task.id, event.target.files[0])} />
         </label>
         <form onSubmit={addExternalAttachment} className="flex gap-2">
-          <input name="externalUrl" required placeholder="Cole um link do Google Drive" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+          <input name="externalUrl" required placeholder="Cole um link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
           <button className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white">Adicionar link</button>
         </form>
         <div className="space-y-2">{task.attachments.map((attachment) => (
           <div key={attachment.id} className="rounded-2xl bg-slate-50 p-3 text-sm font-black">
             <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.type}: {attachment.name}</a>
-            <p className="mt-1 text-xs font-bold text-slate-400">{attachment.source === "external" ? "Google Drive" : `${formatBytes(attachment.compressedSize || attachment.originalSize)}${attachment.originalSize && attachment.compressedSize && attachment.originalSize !== attachment.compressedSize ? ` após compressão de ${formatBytes(attachment.originalSize)}` : ""}`}</p>
-            {attachment.source === "external" && attachment.previewUrl && <iframe src={attachment.previewUrl} allow="autoplay" className="mt-3 aspect-video w-full rounded-2xl border border-slate-200 bg-white" />}
+            <p className="mt-1 text-xs font-bold text-slate-400">{attachment.source === "external" ? externalMediaLabel(attachment) : `${formatBytes(attachment.compressedSize || attachment.originalSize)}${attachment.originalSize && attachment.compressedSize && attachment.originalSize !== attachment.compressedSize ? ` após compressão de ${formatBytes(attachment.originalSize)}` : ""}`}</p>
+            <button type="button" onClick={() => openMediaPreview(attachment)} className="mt-3 block w-full overflow-hidden rounded-2xl text-left">
+              <MediaPreviewContent item={attachment} />
+            </button>
           </div>
         ))}</div>
       </section>
@@ -3260,17 +4186,99 @@ function DetailRow({ label, children }: { label: string; children: ReactNode }) 
   return <div className="grid gap-2 rounded-3xl border border-slate-100 bg-slate-50/70 px-4 py-3 md:grid-cols-[150px_1fr] md:items-center"><p className="text-sm font-black text-slate-600">{label}</p><div className="min-w-0">{children}</div></div>;
 }
 
+function InlineTagSelect({ label, value, options, tone, toneForOption, onChange }: { label: string; value: string; options: string[]; tone: BadgeTone; toneForOption?: (value: string) => BadgeTone; onChange: (value: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const tones = { blue: "border-blue-200 bg-blue-100 text-blue-700", cyan: "border-cyan-200 bg-cyan-100 text-cyan-700", slate: "border-slate-200 bg-slate-100 text-slate-700", red: "border-rose-200 bg-rose-100 text-rose-700", green: "border-emerald-200 bg-emerald-100 text-emerald-700", amber: "border-amber-200 bg-amber-100 text-amber-700", purple: "border-violet-200 bg-violet-100 text-violet-700" };
+  return (
+    <div className="relative">
+      <button type="button" onClick={() => setOpen((current) => !current)} className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-black transition hover:shadow-sm ${tones[tone]}`}>
+        <span className="text-[11px] uppercase opacity-70">{label}</span>
+        {value}
+        <ChevronDown size={15} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-12 z-40 w-52 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+        {options.map((option) => (
+          <button key={option} type="button" onClick={() => { onChange(option); setOpen(false); }} className={`mb-1 block w-full rounded-xl px-3 py-2 text-left text-sm font-black last:mb-0 ${tones[toneForOption?.(option) ?? tone]}`}>
+            <span className="inline-flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-current" />{option}</span>
+          </button>
+        ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function normalizeText(value: string) {
   return value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 }
-function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, setReviewAssetStatus, addReviewComment, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+
+function templateDescription(template: PostTemplate) {
+  const structure = template.structureItems?.length ? template.structureItems.map((item, index) => `${index + 1}. ${item}`).join("\n") : template.structure;
+  const checklist = template.checklistItems?.length ? template.checklistItems.map((item) => `- ${item.label}`).join("\n") : template.checklist;
+  return [
+    template.description,
+    structure ? `Roteiro/estrutura:\n${structure}` : "",
+    checklist ? `Checklist de produção:\n${checklist}` : "",
+    template.visualGuidance ? `Orientação para arte/vídeo:\n${template.visualGuidance}` : "",
+    template.captionExample ? `Exemplo de legenda/copy:\n${template.captionExample}` : ""
+  ].filter(Boolean).join("\n\n");
+}
+
+function textLines(value: string) {
+  return value.split(/\r?\n/).map((line) => line.replace(/^[-*]\s*/, "").replace(/^\d+\.\s*/, "").trim()).filter(Boolean);
+}
+
+function externalMediaLabel(item: MediaPreviewItem) {
+  if (youtubePreviewUrl(item.url) || item.previewUrl.includes("youtube.com/embed")) return "YouTube";
+  if (item.previewUrl.includes("drive.google.com")) return "Google Drive";
+  return "Link externo";
+}
+
+function setFormValueIfEmpty(form: HTMLFormElement, name: string, value?: string) {
+  if (!value) return;
+  const field = form.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  if (field && !field.value) field.value = value;
+}
+
+function setFormValue(form: HTMLFormElement, name: string, value?: string) {
+  const field = form.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  if (field) field.value = value ?? "";
+}
+
+function cloneChecklist(items?: ChecklistItem[]) {
+  return (items ?? []).filter((item) => item.label.trim()).map((item) => ({ id: crypto.randomUUID(), label: item.label, done: false }));
+}
+
+function applyTimeToDateTimeLocal(currentValue: string, time: string) {
+  if (!time) return currentValue;
+  const base = currentValue || toDateTimeLocalValue(new Date());
+  const [datePart] = base.split("T");
+  return `${datePart}T${time}`;
+}
+
+function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
+  const initialIdea = editing?.ideaId ?? (modal?.kind === "post" ? modal.ideaId ?? "" : "");
+  const ideaPrefill = ideas.find((idea) => idea.id === initialIdea);
+  const initialTemplate = editing?.templateId ?? ideaPrefill?.templateId ?? "";
   const defaultPublishAt = editing?.publishAt ?? (modal?.kind === "post" && modal.date ? toDateTimeLocalValue(modal.date) : "");
   const neutralCampaign = campaigns.find((campaign) => normalizeText(campaign.name) === "campanha neutra");
-  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? channels[0]?.id ?? "");
+  const postIdeas = ideas.filter((idea) => idea.type === "Postagem");
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const [selectedIdeaId, setSelectedIdeaId] = useState(initialIdea);
+  const [selectedTemplateId, setSelectedTemplateId] = useState(initialTemplate);
+  const [creationMode, setCreationMode] = useState<"zero" | "idea" | "template">(initialIdea ? "idea" : initialTemplate ? "template" : "zero");
+  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? ideaPrefill?.channelId ?? channels[0]?.id ?? "");
+  const [productionChecklist, setProductionChecklist] = useState<ChecklistItem[]>(editing?.productionChecklist ?? []);
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
   const postFormatOptions = postFormatOptionsForChannel(selectedChannel);
-  const defaultFormat = editing?.format && postFormatOptions.includes(editing.format) ? editing.format : defaultPostFormatForChannel(selectedChannel);
+  const selectedTemplate = postTemplates.find((template) => template.id === selectedTemplateId);
+  const defaultFormat = editing?.format && postFormatOptions.includes(editing.format)
+    ? editing.format
+    : selectedTemplate?.format && postFormatOptions.includes(selectedTemplate.format)
+      ? selectedTemplate.format
+      : defaultPostFormatForChannel(selectedChannel);
   const [reviewOpen, setReviewOpen] = useState(false);
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
   const [selectedAssetId, setSelectedAssetId] = useState("");
@@ -3280,30 +4288,142 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
   const approvedCount = assets.filter((asset) => asset.status === "Aprovado").length;
   const reviewSummary = !assets.length ? "Nenhuma arte enviada" : `${assets.length} arquivo(s) · ${approvedCount} aprovado(s) · ${pendingCount} pendente(s)`;
 
+  function changeCreationMode(mode: "zero" | "idea" | "template") {
+    setCreationMode(mode);
+    if (mode === "zero") {
+      setSelectedIdeaId("");
+      setSelectedTemplateId("");
+      if (!editing) resetPostDraft();
+    }
+  }
+
+  function applyIdea(ideaId: string) {
+    setSelectedIdeaId(ideaId);
+    if (!ideaId) {
+      if (!editing) resetPostDraft();
+      return;
+    }
+    const idea = ideas.find((item) => item.id === ideaId);
+    if (!idea || !formRef.current) return;
+    const form = formRef.current;
+    setFormValue(form, "title", idea.title);
+    setFormValue(form, "description", idea.description);
+    for (const [name, value] of Object.entries({ productLineId: idea.productLineId, vehicleTypeId: idea.vehicleTypeId, contentTypeId: idea.contentTypeId, funnelStageId: idea.funnelStageId, channelId: idea.channelId })) {
+      setFormValue(form, name, value);
+    }
+    if (idea.channelId) setSelectedChannelId(idea.channelId);
+    if (idea.format) setFormValue(form, "format", idea.format);
+    if (idea.templateId) {
+      applyTemplate(idea.templateId, { keepTitleAndDescription: true });
+    } else {
+      setSelectedTemplateId("");
+      setProductionChecklist([]);
+      setFormValue(form, "templateId", "");
+    }
+  }
+
+  function applyTemplate(templateId: string, options: { keepTitleAndDescription?: boolean } = {}) {
+    setSelectedTemplateId(templateId);
+    if (!templateId) {
+      if (formRef.current) setFormValue(formRef.current, "templateId", "");
+      if (!editing) {
+        setProductionChecklist([]);
+        if (!selectedIdeaId) resetPostDraft();
+      }
+      return;
+    }
+    const template = postTemplates.find((item) => item.id === templateId);
+    if (!template || !formRef.current) return;
+    const form = formRef.current;
+    setFormValue(form, "templateId", templateId);
+    setFormValue(form, "contentTypeId", template.contentTypeId);
+    setFormValue(form, "funnelStageId", template.funnelStageId);
+    setFormValue(form, "channelId", template.channelId);
+    setFormValue(form, "format", template.format);
+    if (!options.keepTitleAndDescription) setFormValue(form, "description", templateDescription(template));
+    if (template.channelId) setSelectedChannelId(template.channelId);
+    const publishField = form.elements.namedItem("publishAt") as HTMLInputElement | null;
+    if (publishField && template.suggestedTime) publishField.value = applyTimeToDateTimeLocal(publishField.value, template.suggestedTime);
+    setProductionChecklist(cloneChecklist(template.checklistItems));
+  }
+
+  function resetPostDraft() {
+    if (!formRef.current) return;
+    const form = formRef.current;
+    const fallbackChannelId = channels[0]?.id ?? "";
+    setSelectedTemplateId("");
+    setSelectedChannelId(fallbackChannelId);
+    setProductionChecklist([]);
+    setFormValue(form, "ideaId", "");
+    setFormValue(form, "templateId", "");
+    setFormValue(form, "title", "");
+    setFormValue(form, "description", "");
+    setFormValue(form, "productLineId", "");
+    setFormValue(form, "vehicleTypeId", "");
+    setFormValue(form, "contentTypeId", "");
+    setFormValue(form, "funnelStageId", "");
+    setFormValue(form, "channelId", fallbackChannelId);
+    setFormValue(form, "format", defaultPostFormatForChannel(channels.find((channel) => channel.id === fallbackChannelId)));
+    setFormValue(form, "campaignId", neutralCampaign?.id ?? campaigns[0]?.id ?? "");
+    setFormValue(form, "publishAt", defaultPublishAt);
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const status = editing?.status ?? "Ideia";
-    const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), title: String(form.get("title")), channelId: String(form.get("channelId")), campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel), order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")) };
+    const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), ideaId: String(form.get("ideaId") ?? "") || undefined, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), channelId: String(form.get("channelId")), campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel), order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")), productionChecklist };
     setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
+    const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
+    if (newAssignees.length) createNotifications(newAssignees, "Post atribuído", value.title, "post", value.id);
+    if (editing && editing.status !== value.status) {
+      if (value.status === "Revisão") createNotifications(value.assignedTo.filter((id) => id !== currentUser.id), "Post entrou em revisão", value.title, "post", value.id);
+      if (value.status === "Aprovado") createNotifications([value.createdBy, ...value.assignedTo].filter((id) => id !== currentUser.id), "Post aprovado", value.title, "post", value.id);
+      if (value.status === "Publicado") createNotifications([value.createdBy, ...value.assignedTo].filter((id) => id !== currentUser.id), "Post publicado", value.title, "post", value.id);
+    }
     close();
   }
 
   return (
     <div className={`grid gap-5 ${reviewOpen && editing ? "xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}>
       <div>
-        <EntityForm onSubmit={submit}>
-          <TextInput name="title" label="Título" required defaultValue={editing?.title} />
+        <EntityForm onSubmit={submit} formRef={formRef}>
+          <div className="flex gap-2 rounded-2xl bg-slate-100 p-1 md:col-span-2">
+            {(["zero", "idea", "template"] as const).map((mode) => (
+              <button key={mode} type="button" onClick={() => changeCreationMode(mode)} className={`flex-1 rounded-xl px-3 py-2 text-sm font-black ${creationMode === mode ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"}`}>
+                {mode === "zero" ? "Criar do zero" : mode === "idea" ? "Usar ideia" : "Usar modelo"}
+              </button>
+            ))}
+          </div>
+          {creationMode === "idea" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Ideia de origem<select name="ideaId" value={selectedIdeaId} onChange={(event) => applyIdea(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem ideia vinculada</option>{postIdeas.map((idea) => <option key={idea.id} value={idea.id}>{idea.title}</option>)}</select></label> : <input type="hidden" name="ideaId" value={selectedIdeaId} />}
+          {creationMode === "template" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Usar modelo<select name="templateId" value={selectedTemplateId} onChange={(event) => applyTemplate(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem modelo</option>{postTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label> : <input type="hidden" name="templateId" value={selectedTemplateId} />}
+          <TextInput name="title" label="Título" required defaultValue={editing?.title ?? ideaPrefill?.title} />
           <label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <Select key={selectedChannelId} name="format" label="Formato" defaultValue={defaultFormat} options={postFormatOptions.map((item) => [item, item])} />
           <Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId ?? neutralCampaign?.id} options={campaigns.map((item) => [item.id, item.name])} />
-          <Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} />
-          <Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} />
-          <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} />
-          <Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />
-          <MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} />
+          <Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId ?? ideaPrefill?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} />
+          <Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId ?? ideaPrefill?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} />
+          <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId ?? ideaPrefill?.contentTypeId ?? ""} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} />
+          <Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId ?? ideaPrefill?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />
+          <MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? []} />
           <TextInput name="publishAt" label="Data e hora" type="datetime-local" required defaultValue={defaultPublishAt} />
-          <TextArea name="description" label="Descrição" defaultValue={editing?.description} />
+          <TextArea name="description" label="Descrição" defaultValue={editing?.description ?? ideaPrefill?.description} />
+          <section className="space-y-3 rounded-3xl border border-slate-100 bg-slate-50 p-4 md:col-span-2">
+            <div className="flex items-center gap-2">
+              <h3 className="font-black">Checklist de produção</h3>
+              <Badge tone="slate">{productionChecklist.filter((item) => item.done).length}/{productionChecklist.length}</Badge>
+            </div>
+            <div className="space-y-2">
+              {productionChecklist.map((item) => (
+                <div key={item.id} className="flex items-center gap-3 rounded-2xl bg-white p-3">
+                  <input type="checkbox" checked={item.done} onChange={(event) => setProductionChecklist((current) => current.map((check) => check.id === item.id ? { ...check, done: event.target.checked } : check))} />
+                  <input value={item.label} onChange={(event) => setProductionChecklist((current) => current.map((check) => check.id === item.id ? { ...check, label: event.target.value } : check))} className="min-w-0 flex-1 bg-transparent font-bold outline-none" />
+                  <button type="button" onClick={() => setProductionChecklist((current) => current.filter((check) => check.id !== item.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700" title="Excluir item"><Trash2 size={15} /></button>
+                </div>
+              ))}
+            </div>
+            <button type="button" onClick={() => setProductionChecklist((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Adicionar item</button>
+          </section>
           {editing && (
             <button type="button" onClick={() => setReviewOpen(true)} className="rounded-3xl border border-blue-100 bg-blue-50 p-4 text-left transition hover:border-blue-300 md:col-span-2">
               <p className="font-black text-blue-900">Artes para revisão</p>
@@ -3326,6 +4446,8 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
           canReview={canReview}
           addPostReviewAssets={addPostReviewAssets}
           addPostReviewExternalAsset={addPostReviewExternalAsset}
+          deletePostReviewAsset={deletePostReviewAsset}
+          openMediaPreview={openMediaPreview}
           setReviewAssetStatus={setReviewAssetStatus}
           addReviewComment={addReviewComment}
           close={() => setReviewOpen(false)}
@@ -3344,6 +4466,8 @@ function PostReviewPanel({
   canReview,
   addPostReviewAssets,
   addPostReviewExternalAsset,
+  deletePostReviewAsset,
+  openMediaPreview,
   setReviewAssetStatus,
   addReviewComment,
   close
@@ -3356,6 +4480,8 @@ function PostReviewPanel({
   canReview: boolean;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
   addPostReviewExternalAsset: (post: EditorialPost, url: string) => void;
+  deletePostReviewAsset: (assetId: string) => void;
+  openMediaPreview: (item: MediaPreviewItem) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
   close: () => void;
@@ -3383,6 +4509,14 @@ function PostReviewPanel({
     setExternalUrl("");
   }
 
+  function removeSelectedAsset() {
+    if (!selectedAsset) return;
+    if (!window.confirm("Excluir este arquivo de revisão?")) return;
+    deletePostReviewAsset(selectedAsset.id);
+    const nextAsset = assets.find((asset) => asset.id !== selectedAsset.id);
+    setSelectedAssetId(nextAsset?.id ?? "");
+  }
+
   return (
     <aside className="rounded-[28px] border border-slate-200 bg-slate-50 p-4">
       <div className="mb-4 flex items-start justify-between gap-3">
@@ -3400,7 +4534,7 @@ function PostReviewPanel({
         <input type="file" multiple className="hidden" onChange={(event) => event.target.files && addPostReviewAssets(post, event.target.files)} />
       </label>
       <form onSubmit={submitExternalAsset} className="mb-4 flex gap-2">
-        <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Link do Google Drive" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+        <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
         <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar link</button>
       </form>
 
@@ -3417,20 +4551,17 @@ function PostReviewPanel({
       {selectedAsset ? (
         <div className="space-y-4">
           <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
-            {selectedAsset.source === "external" ? (
-              <iframe src={selectedAsset.previewUrl} allow="autoplay" className="aspect-video w-full bg-white" />
-            ) : selectedAsset.type === "foto" ? (
-              <img src={selectedAsset.previewUrl || selectedAsset.url} alt={selectedAsset.name} className="max-h-80 w-full object-contain" />
-            ) : selectedAsset.type === "video" ? (
-              <video src={selectedAsset.previewUrl || selectedAsset.url} controls className="max-h-80 w-full bg-black" />
-            ) : (
-              <a href={selectedAsset.url} target="_blank" className="block p-8 text-center font-black text-blue-700">Abrir arquivo: {selectedAsset.name}</a>
-            )}
+            <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full">
+              <MediaPreviewContent item={selectedAsset} />
+            </button>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={selectedAsset.status === "Aprovado" ? "green" : selectedAsset.status === "Ajustes solicitados" ? "red" : "blue"}>{selectedAsset.status}</Badge>
-            <Badge tone="slate">{selectedAsset.source === "external" ? "Google Drive" : formatBytes(selectedAsset.compressedSize || selectedAsset.originalSize)}</Badge>
+            <Badge tone="slate">{selectedAsset.source === "external" ? externalMediaLabel(selectedAsset) : formatBytes(selectedAsset.compressedSize || selectedAsset.originalSize)}</Badge>
             <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name}</span>
+            <button type="button" onClick={removeSelectedAsset} className="ml-auto rounded-2xl bg-rose-100 px-3 py-1.5 text-xs font-black text-rose-700 transition hover:bg-rose-200">
+              Excluir arquivo
+            </button>
           </div>
           {canReview && (
             <div className="space-y-2 rounded-3xl bg-white p-3">
@@ -3459,31 +4590,139 @@ function PostReviewPanel({
   );
 }
 
-function IdeaModalV2({ modal, currentUser, channels, productLines, vehicleTypes, contentTypes, funnelStages, ideas, setIdeas, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, vehicleTypes, contentTypes, funnelStages, postTemplates, ideas, setIdeas, prepareIdeaAttachment, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "idea" && modal.id ? ideas.find((idea) => idea.id === modal.id) : undefined;
+  const [externalUrl, setExternalUrl] = useState("");
+  const formRef = useRef<HTMLFormElement | null>(null);
+  const draftIdeaId = useRef(editing?.id ?? crypto.randomUUID());
+  const [selectedTemplateId, setSelectedTemplateId] = useState(editing?.templateId ?? "");
+  const [creationMode, setCreationMode] = useState<"zero" | "template">("zero");
+  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? channels[0]?.id ?? "");
+  const [attachments, setAttachments] = useState<TaskAttachment[]>(editing?.attachments ?? []);
+  const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
+  const formatOptions = postFormatOptionsForChannel(selectedChannel);
+
+  function applyTemplate(templateId: string) {
+    setSelectedTemplateId(templateId);
+    const template = postTemplates.find((item) => item.id === templateId);
+    if (!template || !formRef.current) return;
+    const form = formRef.current;
+    setFormValue(form, "description", templateDescription(template));
+    if (template.channelId && !editing) setSelectedChannelId(template.channelId);
+    for (const [name, value] of Object.entries({ contentTypeId: template.contentTypeId, channelId: template.channelId, funnelStageId: template.funnelStageId, format: template.format })) {
+      setFormValue(form, name, value);
+    }
+  }
+
+  async function addDraftFile(file: File) {
+    try {
+      const attachment = await prepareIdeaAttachment(draftIdeaId.current, file);
+      setAttachments((current) => [attachment, ...current]);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Erro ao enviar arquivo.");
+    }
+  }
+
+  function addDraftLink(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const previewUrl = drivePreviewUrl(externalUrl);
+    if (!previewUrl) {
+      window.alert("Link inválido. Use um link de compartilhamento do Google Drive ou YouTube.");
+      return;
+    }
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: youtubePreviewUrl(externalUrl) ? "Exemplo do YouTube" : "Exemplo do Google Drive", type: "video", source: "external", url: externalUrl, previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
+    setAttachments((current) => [attachment, ...current]);
+    setExternalUrl("");
+  }
+
+  function changeCreationMode(mode: "zero" | "template") {
+    setCreationMode(mode);
+    if (mode === "zero") setSelectedTemplateId("");
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const value: Idea = { id: editing?.id ?? crypto.randomUUID(), title: String(form.get("title")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), type: String(form.get("type")) as Idea["type"], channelId: String(form.get("channelId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, priority: String(form.get("priority")) as Idea["priority"], order: editing?.order ?? ideas.length + 1 };
+    const creating = !editing;
+    const value: Idea = { id: draftIdeaId.current, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), description: String(form.get("description")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), type: String(form.get("type")) as Idea["type"], channelId: String(form.get("channelId")), format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, priority: String(form.get("priority")) as Idea["priority"], order: editing?.order ?? ideas.length + 1, attachments };
     setIdeas((current) => editing ? current.map((idea) => idea.id === value.id ? value : idea) : [value, ...current]);
+    if (creating) {
+      createNotifications(profiles.filter((profile) => profile.id !== currentUser.id && profile.active).map((profile) => profile.id), "Nova ideia cadastrada", value.title, "idea", value.id);
+    }
     close();
   }
-  return <><EntityForm onSubmit={submit}><TextInput name="title" label="Ideia" required defaultValue={editing?.title} /><Select name="type" label="Tipo" defaultValue={editing?.type} options={ideaTypes.map((item) => [item, item])} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} /><Select name="channelId" label="Canal" defaultValue={editing?.channelId} options={channels.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={funnelStages.map((item) => [item.id, item.name])} /><Select name="priority" label="Prioridade" defaultValue={editing?.priority} options={["Alta", "Média", "Baixa"].map((item) => [item, item])} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir ideia" onDelete={() => { setIdeas((current) => current.filter((idea) => idea.id !== editing.id)); close(); }} />}</>;
+  return (
+    <div className="space-y-5">
+      <EntityForm onSubmit={submit} formRef={formRef}>
+        <div className="flex gap-2 rounded-2xl bg-slate-100 p-1 md:col-span-2">
+          <button type="button" onClick={() => changeCreationMode("zero")} className={`flex-1 rounded-xl px-3 py-2 text-sm font-black ${creationMode === "zero" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"}`}>Criar do zero</button>
+          <button type="button" onClick={() => changeCreationMode("template")} className={`flex-1 rounded-xl px-3 py-2 text-sm font-black ${creationMode === "template" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"}`}>Usar modelo</button>
+        </div>
+        {creationMode === "template" && <label className="block text-sm font-bold text-slate-600 md:col-span-2">Usar modelo<select name="templateId" value={selectedTemplateId} onChange={(event) => applyTemplate(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem modelo</option>{postTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label>}
+        {creationMode !== "template" && <input type="hidden" name="templateId" value={selectedTemplateId} />}
+        <TextInput name="title" label="Ideia" required defaultValue={editing?.title} />
+        <Select name="type" label="Tipo" defaultValue={editing?.type} options={ideaTypes.map((item) => [item, item])} />
+        <TextArea name="description" label="Descrição da ideia" defaultValue={editing?.description} />
+        <Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} />
+        <Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} />
+        <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} />
+        <label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <Select key={selectedChannelId} name="format" label="Formato" defaultValue={editing?.format ?? defaultPostFormatForChannel(selectedChannel)} options={formatOptions.map((item) => [item, item])} />
+        <Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />
+        <Select name="priority" label="Prioridade" defaultValue={editing?.priority} options={["Alta", "Média", "Baixa"].map((item) => [item, item])} />
+        <SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton>
+      </EntityForm>
+      <section className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+          <h3 className="font-black">Arquivo de exemplo</h3>
+          <label className="mt-3 grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed border-blue-200 bg-white px-4 py-7 text-center text-blue-700 transition hover:border-blue-400 hover:bg-blue-50">
+            <FileUp size={28} />
+            <span className="mt-2 text-sm font-black">Adicionar imagem, vídeo ou arquivo</span>
+            <span className="mt-1 text-xs font-bold text-blue-500">Imagens até 2 MB, vídeos até 100 MB</span>
+            <input type="file" className="hidden" onChange={(event) => event.target.files?.[0] && addDraftFile(event.target.files[0])} />
+          </label>
+          <form onSubmit={addDraftLink} className="mt-3 flex gap-2">
+            <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Cole um link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+            <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white disabled:bg-slate-200">Adicionar link</button>
+          </form>
+          <div className="mt-3 grid gap-2">
+            {attachments.map((attachment) => (
+              <div key={attachment.id} className="rounded-2xl bg-white p-3 text-sm font-black">
+                <div className="flex items-center justify-between gap-2">
+                  <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.name}</a>
+                  <button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
+                </div>
+                <p className="mt-1 text-xs font-bold text-slate-400">{attachment.source === "external" ? externalMediaLabel(attachment) : formatBytes(attachment.compressedSize || attachment.originalSize)}</p>
+                <button type="button" onClick={() => openMediaPreview(attachment)} className="mt-3 block w-full overflow-hidden rounded-2xl text-left">
+                  <MediaPreviewContent item={attachment} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      {editing && <DeleteButton label="Excluir ideia" onDelete={() => { setIdeas((current) => current.filter((idea) => idea.id !== editing.id)); close(); }} />}
+    </div>
+  );
 }
 
-function CampaignModalV2({ modal, currentUser, profiles, productLines, vehicleTypes, funnelStages, campaigns, setCampaigns, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function CampaignModalV2({ modal, currentUser, profiles, campaignAudiences, productLines, vehicleTypes, funnelStages, campaigns, setCampaigns, createNotifications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "campaign" && modal.id ? campaigns.find((item) => item.id === modal.id) : undefined;
-  const initialAudience = editing?.audience && campaignAudienceOptions.includes(editing.audience) ? editing.audience : editing?.audience ? "Outros" : "Geral";
+  const audienceNames = campaignAudiences.map((item) => item.name);
+  const hasOtherAudience = audienceNames.some((item) => normalizeText(item) === "outros");
+  const defaultAudience = audienceNames[0] ?? "Geral";
+  const otherAudience = audienceNames.find((item) => normalizeText(item) === "outros") ?? "Outros";
+  const initialAudience = editing?.audience && audienceNames.includes(editing.audience) ? editing.audience : editing?.audience && hasOtherAudience ? otherAudience : defaultAudience;
   const [audienceChoice, setAudienceChoice] = useState(initialAudience);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const audience = audienceChoice === "Outros" ? String(form.get("customAudience")).trim() || "Outros" : audienceChoice;
+    const audience = normalizeText(audienceChoice) === "outros" ? String(form.get("customAudience")).trim() || audienceChoice : audienceChoice;
     const value: Campaign = { id: editing?.id ?? crypto.randomUUID(), name: String(form.get("name")), objective: String(form.get("objective")), audience, message: String(form.get("message")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), startDate: String(form.get("startDate")), endDate: String(form.get("endDate")), status: editing?.status ?? "Planejada" };
     setCampaigns((current) => editing ? current.map((item) => item.id === value.id ? value : item) : [value, ...current]);
+    const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
+    if (newAssignees.length) createNotifications(newAssignees, "Campanha atribuída", value.name, "campaign", value.id);
     close();
   }
-  return <><EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{campaignAudienceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{audienceChoice === "Outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={campaignAudienceOptions.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir campanha" onDelete={() => { setCampaigns((current) => current.filter((campaign) => campaign.id !== editing.id)); close(); }} />}</>;
+  return <><EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{audienceNames.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{normalizeText(audienceChoice) === "outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={audienceNames.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? []} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir campanha" onDelete={() => { setCampaigns((current) => current.filter((campaign) => campaign.id !== editing.id)); close(); }} />}</>;
 }
 
 function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, metrics, setMetrics, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
@@ -3496,13 +4735,13 @@ function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, con
     const value: PostMetric = {
       id: editing?.id ?? crypto.randomUUID(),
       postId: postId || undefined,
-      postTitle: String(form.get("postTitle")) || linkedPost?.title || "Métrica avulsa",
-      channelId: String(form.get("channelId")) || linkedPost?.channelId || "",
-      campaignId: String(form.get("campaignId")) || linkedPost?.campaignId || "",
-      productLineId: String(form.get("productLineId")) || linkedPost?.productLineId || "",
-      vehicleTypeId: String(form.get("vehicleTypeId")) || linkedPost?.vehicleTypeId || "",
-      contentTypeId: String(form.get("contentTypeId")) || linkedPost?.contentTypeId || "",
-      funnelStageId: String(form.get("funnelStageId")) || linkedPost?.funnelStageId || "",
+      postTitle: linkedPost?.title || String(form.get("postTitle")) || "Métrica avulsa",
+      channelId: linkedPost?.channelId || String(form.get("channelId")) || "",
+      campaignId: linkedPost?.campaignId || String(form.get("campaignId")) || "",
+      productLineId: linkedPost?.productLineId || String(form.get("productLineId")) || "",
+      vehicleTypeId: linkedPost?.vehicleTypeId || String(form.get("vehicleTypeId")) || "",
+      contentTypeId: linkedPost?.contentTypeId || String(form.get("contentTypeId")) || "",
+      funnelStageId: linkedPost?.funnelStageId || String(form.get("funnelStageId")) || "",
       date: String(form.get("date")),
       reach: Number(form.get("reach")),
       likes: Number(form.get("likes")),
@@ -3516,7 +4755,7 @@ function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, con
     setMetrics((current) => editing ? current.map((metric) => metric.id === value.id ? value : metric) : [value, ...current]);
     close();
   }
-  return <><EntityForm onSubmit={submit}><Select name="postId" label="Post vinculado" defaultValue={editing?.postId ?? ""} options={[["", "Métrica avulsa"], ...posts.map((post) => [post.id, post.title])]} /><TextInput name="postTitle" label="Nome do post/registro" required defaultValue={editing?.postTitle} /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={editing?.date ?? todayIso()} /><Select name="channelId" label="Canal" defaultValue={editing?.channelId} options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={funnelStages.map((item) => [item.id, item.name])} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required defaultValue={String((editing as unknown as Record<string, number | undefined>)?.[field] ?? "")} />)}<TextArea name="notes" label="Observações do resultado" defaultValue={editing?.notes} /><TextArea name="learning" label="Aprendizado" defaultValue={editing?.learning} /><SubmitButton>Salvar</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir métrica" onDelete={() => { setMetrics((current) => current.filter((metric) => metric.id !== editing.id)); close(); }} />}</>;
+  return <><EntityForm onSubmit={submit}><Select name="postId" label="Post vinculado" defaultValue={editing?.postId ?? ""} options={[["", "Métrica avulsa"], ...posts.map((post) => [post.id, post.title])]} /><TextInput name="postTitle" label="Nome do post/registro" required defaultValue={editing?.postTitle} /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={editing?.date ?? todayIso()} /><Select name="channelId" label="Canal" defaultValue={editing?.channelId} options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required defaultValue={String((editing as unknown as Record<string, number | undefined>)?.[field] ?? "")} />)}<TextArea name="notes" label="Observações do resultado" defaultValue={editing?.notes} /><TextArea name="learning" label="Aprendizado" defaultValue={editing?.learning} /><SubmitButton>Salvar</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir métrica" onDelete={() => { setMetrics((current) => current.filter((metric) => metric.id !== editing.id)); close(); }} />}</>;
 }
 
 function PostModal({ modal, currentUser, profiles, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, posts, setPosts, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
@@ -3545,12 +4784,13 @@ function PostModal({ modal, currentUser, profiles, channels, productLines, vehic
       format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel),
       order: editing?.order ?? posts.filter((post) => post.status === status).length + 1,
       publishAt: String(form.get("publishAt")),
-      description: String(form.get("description"))
+      description: String(form.get("description")),
+      productionChecklist: editing?.productionChecklist ?? []
     };
     setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
     close();
   }
-  return <EntityForm onSubmit={submit}><TextInput name="title" label="Título" required defaultValue={editing?.title} /><label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><Select key={selectedChannelId} name="format" label="Formato" defaultValue={defaultFormat} options={postFormatOptions.map((item) => [item, item])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId ?? neutralCampaign?.id} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={contentTypes.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} /><TextInput name="publishAt" label="Data e hora" type="datetime-local" required defaultValue={editing?.publishAt} /><TextArea name="description" label="Descrição" defaultValue={editing?.description} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>;
+  return <EntityForm onSubmit={submit}><TextInput name="title" label="Título" required defaultValue={editing?.title} /><label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><Select key={selectedChannelId} name="format" label="Formato" defaultValue={defaultFormat} options={postFormatOptions.map((item) => [item, item])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId ?? neutralCampaign?.id} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? []} /><TextInput name="publishAt" label="Data e hora" type="datetime-local" required defaultValue={editing?.publishAt} /><TextArea name="description" label="Descrição" defaultValue={editing?.description} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>;
 }
 
 function CampaignModal({ modal, currentUser, profiles, productLines, vehicleTypes, funnelStages, campaigns, setCampaigns, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
@@ -3565,7 +4805,7 @@ function CampaignModal({ modal, currentUser, profiles, productLines, vehicleType
     setCampaigns((current) => editing ? current.map((item) => item.id === value.id ? value : item) : [value, ...current]);
     close();
   }
-  return <EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{campaignAudienceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{audienceChoice === "Outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={campaignAudienceOptions.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? [currentUser.id]} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>;
+  return <EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{campaignAudienceOptions.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{audienceChoice === "Outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={campaignAudienceOptions.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? []} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>;
 }
 
 function MetricModal({ channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, setMetrics, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
@@ -3575,7 +4815,7 @@ function MetricModal({ channels, productLines, vehicleTypes, contentTypes, funne
     setMetrics((current) => [{ id: crypto.randomUUID(), postId: undefined, postTitle: String(form.get("postTitle")), channelId: String(form.get("channelId")), campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), date: String(form.get("date")), reach: Number(form.get("reach")), likes: Number(form.get("likes")), comments: Number(form.get("comments")), shares: Number(form.get("shares")), clicks: Number(form.get("clicks")), leads: Number(form.get("leads")), notes: String(form.get("notes")), learning: String(form.get("learning")) }, ...current]);
     close();
   }
-  return <EntityForm onSubmit={submit}><TextInput name="postTitle" label="Post" required /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={todayIso()} /><Select name="channelId" label="Canal" options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" options={productLines.map((item) => [item.id, item.name])} /><Select name="vehicleTypeId" label="Tipo de veículo" options={vehicleTypes.map((item) => [item.id, item.name])} /><Select name="contentTypeId" label="Tipo de conteúdo" options={contentTypes.map((item) => [item.id, item.name])} /><Select name="funnelStageId" label="Funil" options={funnelStages.map((item) => [item.id, item.name])} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required />)}<TextArea name="notes" label="Observações do resultado" /><TextArea name="learning" label="Aprendizado" /><SubmitButton>Salvar</SubmitButton></EntityForm>;
+  return <EntityForm onSubmit={submit}><TextInput name="postTitle" label="Post" required /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={todayIso()} /><Select name="channelId" label="Canal" options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="contentTypeId" label="Tipo de conteúdo" options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required />)}<TextArea name="notes" label="Observações do resultado" /><TextArea name="learning" label="Aprendizado" /><SubmitButton>Salvar</SubmitButton></EntityForm>;
 }
 
 function ProfileModal({ currentUser, setProfiles, uploadProfilePhoto, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
@@ -3694,8 +4934,8 @@ function DeleteButton({ label, onDelete }: { label: string; onDelete: () => void
   );
 }
 
-function EntityForm({ children, onSubmit }: { children: ReactNode; onSubmit: (event: FormEvent<HTMLFormElement>) => void }) {
-  return <form onSubmit={onSubmit} className="grid gap-4 md:grid-cols-2">{children}</form>;
+function EntityForm({ children, onSubmit, formRef }: { children: ReactNode; onSubmit: (event: FormEvent<HTMLFormElement>) => void; formRef?: RefObject<HTMLFormElement | null> }) {
+  return <form ref={formRef} onSubmit={onSubmit} className="grid gap-4 md:grid-cols-2">{children}</form>;
 }
 
 function YearPicker({ visibleMonth, setVisibleMonth, setCalendarMode }: { visibleMonth: Date; setVisibleMonth: Dispatch<SetStateAction<Date>>; setCalendarMode: Dispatch<SetStateAction<"Semana" | "Mês" | "Ano">> }) {
@@ -3736,8 +4976,8 @@ function RoundAdd({ onClick, label }: { onClick: () => void; label: string }) {
   return <button onClick={onClick} aria-label={label} title={label} className="grid h-11 w-11 place-items-center rounded-full bg-blue-700 text-white shadow-lg shadow-blue-700/20 motion-smooth hover:bg-blue-800"><Plus size={22} /></button>;
 }
 
-function Badge({ children, tone }: { children: ReactNode; tone: "blue" | "cyan" | "slate" | "red" | "green" }) {
-  const tones = { blue: "bg-blue-100 text-blue-700", cyan: "bg-cyan-100 text-cyan-700", slate: "bg-slate-100 text-slate-600", red: "bg-rose-100 text-rose-700", green: "bg-emerald-100 text-emerald-700" };
+function Badge({ children, tone }: { children: ReactNode; tone: BadgeTone }) {
+  const tones = { blue: "bg-blue-100 text-blue-700", cyan: "bg-cyan-100 text-cyan-700", slate: "bg-slate-100 text-slate-600", red: "bg-rose-100 text-rose-700", green: "bg-emerald-100 text-emerald-700", amber: "bg-amber-100 text-amber-700", purple: "bg-violet-100 text-violet-700" };
   return <span className={`inline-flex rounded-2xl px-2.5 py-1 text-xs font-black ${tones[tone]}`}>{children}</span>;
 }
 
@@ -3799,8 +5039,16 @@ function MultiSelect({ label, values, profiles, onChange }: { label: string; val
                 <X size={15} />
               </button>
             )}
+            {slots.length === 1 && value && (
+              <button type="button" onClick={() => onChange([])} className="rounded-2xl bg-rose-100 px-3 text-rose-700" title="Remover responsável">
+                <X size={15} />
+              </button>
+            )}
             {openIndex === index && (
               <div className="absolute left-0 top-12 z-40 w-full rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                <button type="button" onClick={() => updateSlot(index, "")} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black text-slate-500 hover:bg-slate-50">
+                  Sem responsável
+                </button>
                 {profiles.map((profile) => (
                   <button key={profile.id} type="button" onClick={() => updateSlot(index, profile.id)} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black hover:bg-blue-50">
                     {profile.name}
@@ -3818,8 +5066,9 @@ function MultiSelect({ label, values, profiles, onChange }: { label: string; val
 function MultiSelectField({ label, name, values, profiles }: { label: string; name: string; values: string[]; profiles: Profile[] }) {
   const [selected, setSelected] = useState(values.length ? values : [""]);
   const [openIndex, setOpenIndex] = useState<number | null>(null);
+  const slots = selected.length ? selected : [""];
   function updateSlot(index: number, value: string) {
-    const next = selected.slice();
+    const next = slots.slice();
     next[index] = value;
     setSelected(Array.from(new Set(next.filter(Boolean))));
     setOpenIndex(null);
@@ -3829,7 +5078,7 @@ function MultiSelectField({ label, name, values, profiles }: { label: string; na
       {label}
       {selected.filter(Boolean).map((value) => <input key={value} type="hidden" name={name} value={value} />)}
       <div className="mt-1 space-y-2 rounded-2xl border border-slate-200 p-3">
-        {selected.map((value, index) => (
+        {slots.map((value, index) => (
           <div key={`${value}-${index}`} className="relative flex gap-2">
             <button type="button" onClick={() => setOpenIndex(openIndex === index ? null : index)} className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-2xl bg-slate-50 px-3 py-2 text-left font-black text-slate-700">
               <span className="truncate">{profiles.find((profile) => profile.id === value)?.name ?? "Selecionar responsável"}</span>
@@ -3840,13 +5089,21 @@ function MultiSelectField({ label, name, values, profiles }: { label: string; na
                 <Plus size={17} />
               </button>
             )}
-            {selected.length > 1 && (
+            {slots.length > 1 && (
               <button type="button" onClick={() => setSelected(selected.filter((_, slotIndex) => slotIndex !== index).filter(Boolean))} className="rounded-2xl bg-rose-100 px-3 text-rose-700">
+                <X size={15} />
+              </button>
+            )}
+            {slots.length === 1 && value && (
+              <button type="button" onClick={() => setSelected([])} className="rounded-2xl bg-rose-100 px-3 text-rose-700" title="Remover responsável">
                 <X size={15} />
               </button>
             )}
             {openIndex === index && (
               <div className="absolute left-0 top-12 z-40 w-full rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                <button type="button" onClick={() => updateSlot(index, "")} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black text-slate-500 hover:bg-slate-50">
+                  Sem responsável
+                </button>
                 {profiles.map((profile) => (
                   <button key={profile.id} type="button" onClick={() => updateSlot(index, profile.id)} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black hover:bg-blue-50">
                     {profile.name}

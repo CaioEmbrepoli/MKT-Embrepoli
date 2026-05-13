@@ -1,5 +1,7 @@
 ﻿import type {
   Campaign,
+  CampaignAudience,
+  CalendarDate,
   Channel,
   ContentType,
   EditorialPost,
@@ -8,6 +10,7 @@
   Notification,
   PostReviewAsset,
   PostMetric,
+  PostTemplate,
   ProductLine,
   Profile,
   Task,
@@ -166,9 +169,18 @@ export const campaigns: Campaign[] = [
   }
 ];
 
+export const campaignAudiences: CampaignAudience[] = [
+  { id: "geral", name: "Geral" },
+  { id: "clientes-atuais", name: "Clientes atuais" },
+  { id: "leads", name: "Leads" },
+  { id: "equipe-interna", name: "Equipe interna" },
+  { id: "outros", name: "Outros" }
+];
+
 export const posts: EditorialPost[] = [
   {
     id: "post-1",
+    templateId: "template-antes-depois-tecnico",
     title: "Antes e depois: resposta do turbo em trator de trabalho",
     channelId: "instagram",
     campaignId: "safra-forte",
@@ -180,12 +192,15 @@ export const posts: EditorialPost[] = [
     assignedTo: ["user-gestor"],
     status: "Revisão",
     format: "Feed",
+    ideaId: "",
     order: 1,
     publishAt: "2026-05-14T10:00",
-    description: "Carrossel com sintomas, solução instalada e resultado percebido."
+    description: "Carrossel com sintomas, solução instalada e resultado percebido.",
+    productionChecklist: []
   },
   {
     id: "post-2",
+    templateId: "template-duvida-tecnica",
     title: "Como escolher kit turbo para caminhonete diesel",
     channelId: "youtube",
     campaignId: "pickup-performance",
@@ -197,12 +212,15 @@ export const posts: EditorialPost[] = [
     assignedTo: ["user-design"],
     status: "Produção",
     format: "Vídeo",
+    ideaId: "",
     order: 1,
     publishAt: "2026-05-18T18:30",
-    description: "Vídeo curto explicando uso, potência esperada e cuidados na instalação."
+    description: "Vídeo curto explicando uso, potência esperada e cuidados na instalação.",
+    productionChecklist: []
   },
   {
     id: "post-3",
+    templateId: "template-oferta-produto",
     title: "Checklist de instalação de intercooler",
     channelId: "linkedin",
     campaignId: "safra-forte",
@@ -214,9 +232,11 @@ export const posts: EditorialPost[] = [
     assignedTo: ["user-conteudo"],
     status: "Aprovado",
     format: "Post",
+    ideaId: "",
     order: 1,
     publishAt: "2026-05-22T09:15",
-    description: "Post técnico para oficinas parceiras e compradores B2B."
+    description: "Post técnico para oficinas parceiras e compradores B2B.",
+    productionChecklist: []
   }
 ];
 
@@ -224,32 +244,200 @@ export const postReviewAssets: PostReviewAsset[] = [];
 
 export const notifications: Notification[] = [];
 
+export const calendarDates: CalendarDate[] = [
+  { id: "ano-novo-2026", name: "Ano Novo", date: "2026-01-01", type: "Feriado", color: "#2563eb", notes: "" },
+  { id: "tiradentes-2026", name: "Tiradentes", date: "2026-04-21", type: "Feriado", color: "#2563eb", notes: "" },
+  { id: "dia-do-trabalho-2026", name: "Dia do Trabalho", date: "2026-05-01", type: "Feriado", color: "#2563eb", notes: "" },
+  { id: "dia-dos-namorados-2026", name: "Dia dos Namorados", date: "2026-06-12", type: "Data comemorativa", color: "#e25588", notes: "Possível gancho para campanhas leves." },
+  { id: "dia-do-cliente-2026", name: "Dia do Cliente", date: "2026-09-15", type: "Data comemorativa", color: "#0891b2", notes: "Bom para provas sociais e pós-venda." },
+  { id: "black-friday-2026", name: "Black Friday", date: "2026-11-27", type: "Data comemorativa", color: "#111827", notes: "Planejar ofertas e criativos com antecedência." },
+  { id: "natal-2026", name: "Natal", date: "2026-12-25", type: "Feriado", color: "#16a34a", notes: "" }
+];
+
+export const postTemplates: PostTemplate[] = [
+  {
+    id: "template-antes-depois-tecnico",
+    name: "Antes/depois técnico",
+    description: "Mostrar a condição inicial, a solução aplicada e o resultado percebido.",
+    contentTypeId: "antes-depois",
+    channelId: "instagram",
+    format: "Feed",
+    suggestedTime: "10:00",
+    funnelStageId: "meio",
+    structure: "1. Problema inicial\n2. Peça/kit aplicado\n3. Resultado após instalação\n4. Chamada para tirar dúvidas",
+    checklist: "Foto do antes\nFoto do depois\nAplicação correta identificada\nLegenda sem promessa exagerada",
+    structureItems: ["Problema inicial", "Peça/kit aplicado", "Resultado após instalação", "Chamada para tirar dúvidas"],
+    checklistItems: [
+      { id: "template-antes-check-1", label: "Foto do antes", done: false },
+      { id: "template-antes-check-2", label: "Foto do depois", done: false },
+      { id: "template-antes-check-3", label: "Aplicação correta identificada", done: false },
+      { id: "template-antes-check-4", label: "Legenda sem promessa exagerada", done: false }
+    ],
+    visualGuidance: "Usar comparação clara, setas ou marcações simples e foco na aplicação real.",
+    captionExample: "Antes e depois de uma aplicação diesel com upgrade bem dimensionado. O foco é melhorar resposta e confiabilidade dentro do uso correto."
+  },
+  {
+    id: "template-duvida-tecnica",
+    name: "Dúvida técnica",
+    description: "Responder uma pergunta frequente de forma simples, técnica e direta.",
+    contentTypeId: "duvidas-tecnicas",
+    channelId: "youtube",
+    format: "Shorts",
+    suggestedTime: "18:30",
+    funnelStageId: "topo",
+    structure: "1. Pergunta do cliente\n2. Resposta curta\n3. Explicação técnica\n4. Quando procurar a Embrepoli",
+    checklist: "Pergunta clara\nResposta sem termos confusos\nExemplo prático\nCTA leve",
+    structureItems: ["Pergunta do cliente", "Resposta curta", "Explicação técnica", "Quando procurar a Embrepoli"],
+    checklistItems: [
+      { id: "template-duvida-check-1", label: "Pergunta clara", done: false },
+      { id: "template-duvida-check-2", label: "Resposta sem termos confusos", done: false },
+      { id: "template-duvida-check-3", label: "Exemplo prático", done: false },
+      { id: "template-duvida-check-4", label: "CTA leve", done: false }
+    ],
+    visualGuidance: "Usar close da peça, texto curto na tela e fala objetiva.",
+    captionExample: "Essa é uma dúvida comum em motores diesel. O melhor kit depende da aplicação, uso e objetivo do veículo."
+  },
+  {
+    id: "template-bastidor-instalacao",
+    name: "Bastidor de instalação",
+    description: "Mostrar o processo de montagem ou preparação como conteúdo de confiança.",
+    contentTypeId: "bastidores",
+    channelId: "tiktok",
+    format: "Vídeo",
+    suggestedTime: "19:00",
+    funnelStageId: "topo",
+    structure: "1. Cena rápida da oficina\n2. Detalhe técnico\n3. Cuidados na montagem\n4. Resultado final",
+    checklist: "Ambiente organizado\nPeça em destaque\nMostrar cuidado técnico\nEvitar informação sensível do cliente",
+    structureItems: ["Cena rápida da oficina", "Detalhe técnico", "Cuidados na montagem", "Resultado final"],
+    checklistItems: [
+      { id: "template-bastidor-check-1", label: "Ambiente organizado", done: false },
+      { id: "template-bastidor-check-2", label: "Peça em destaque", done: false },
+      { id: "template-bastidor-check-3", label: "Mostrar cuidado técnico", done: false },
+      { id: "template-bastidor-check-4", label: "Evitar informação sensível do cliente", done: false }
+    ],
+    visualGuidance: "Vídeo dinâmico, cortes curtos e áudio/legenda explicando o detalhe técnico.",
+    captionExample: "Um pouco dos bastidores de uma instalação diesel feita com atenção em cada detalhe."
+  },
+  {
+    id: "template-prova-resultado",
+    name: "Prova de resultado",
+    description: "Evidenciar resultado, aplicação real ou feedback de cliente.",
+    contentTypeId: "provas-resultados",
+    channelId: "instagram",
+    format: "Reels",
+    suggestedTime: "12:00",
+    funnelStageId: "fundo",
+    structure: "1. Contexto da aplicação\n2. O que foi instalado\n3. Resultado/feedback\n4. Próximo passo para orçamento",
+    checklist: "Resultado verificável\nContexto do veículo/máquina\nAutorização para uso\nCTA para atendimento",
+    structureItems: ["Contexto da aplicação", "O que foi instalado", "Resultado/feedback", "Próximo passo para orçamento"],
+    checklistItems: [
+      { id: "template-prova-check-1", label: "Resultado verificável", done: false },
+      { id: "template-prova-check-2", label: "Contexto do veículo/máquina", done: false },
+      { id: "template-prova-check-3", label: "Autorização para uso", done: false },
+      { id: "template-prova-check-4", label: "CTA para atendimento", done: false }
+    ],
+    visualGuidance: "Priorizar imagens reais, depoimento curto e texto destacando a aplicação.",
+    captionExample: "Aplicação real, resultado na prática e solução pensada para o uso do cliente."
+  },
+  {
+    id: "template-cliente-aplicacao-real",
+    name: "Cliente/aplicação real",
+    description: "Apresentar uma aplicação real de cliente com foco em contexto e confiança.",
+    contentTypeId: "clientes",
+    channelId: "facebook",
+    format: "Post",
+    suggestedTime: "09:00",
+    funnelStageId: "meio",
+    structure: "1. Tipo de cliente/aplicação\n2. Necessidade\n3. Solução Embrepoli\n4. Benefício percebido",
+    checklist: "Cliente autorizado\nAplicação bem explicada\nLinha de produto correta\nFoto ou vídeo real",
+    structureItems: ["Tipo de cliente/aplicação", "Necessidade", "Solução Embrepoli", "Benefício percebido"],
+    checklistItems: [
+      { id: "template-cliente-check-1", label: "Cliente autorizado", done: false },
+      { id: "template-cliente-check-2", label: "Aplicação bem explicada", done: false },
+      { id: "template-cliente-check-3", label: "Linha de produto correta", done: false },
+      { id: "template-cliente-check-4", label: "Foto ou vídeo real", done: false }
+    ],
+    visualGuidance: "Mostrar veículo, máquina ou peça aplicada sem poluir a arte.",
+    captionExample: "Cada aplicação tem uma necessidade. Por isso, o dimensionamento correto faz diferença no resultado."
+  },
+  {
+    id: "template-oferta-produto",
+    name: "Oferta de produto",
+    description: "Divulgar produto/linha com chamada comercial sem perder clareza técnica.",
+    contentTypeId: "instalacao",
+    channelId: "instagram",
+    format: "Story",
+    suggestedTime: "16:00",
+    funnelStageId: "fundo",
+    structure: "1. Produto ou kit\n2. Aplicação indicada\n3. Diferencial\n4. Chamada para orçamento",
+    checklist: "Produto correto\nAplicações claras\nPreço só se autorizado\nCTA direto",
+    structureItems: ["Produto ou kit", "Aplicação indicada", "Diferencial", "Chamada para orçamento"],
+    checklistItems: [
+      { id: "template-oferta-check-1", label: "Produto correto", done: false },
+      { id: "template-oferta-check-2", label: "Aplicações claras", done: false },
+      { id: "template-oferta-check-3", label: "Preço só se autorizado", done: false },
+      { id: "template-oferta-check-4", label: "CTA direto", done: false }
+    ],
+    visualGuidance: "Arte limpa com produto em destaque, pouco texto e botão/chamada visível.",
+    captionExample: "Kit indicado para quem busca uma solução bem dimensionada para aplicação diesel."
+  },
+  {
+    id: "template-educativo-diesel-performance",
+    name: "Conteúdo educativo diesel performance",
+    description: "Explicar conceitos de performance diesel e posicionar a Embrepoli como referência técnica.",
+    contentTypeId: "duvidas-tecnicas",
+    channelId: "youtube",
+    format: "Vídeo",
+    suggestedTime: "18:00",
+    funnelStageId: "topo",
+    structure: "1. Conceito principal\n2. Erro comum\n3. Explicação técnica simples\n4. Aplicação prática",
+    checklist: "Tema útil\nLinguagem simples\nExemplo real\nEvitar promessa absoluta",
+    structureItems: ["Conceito principal", "Erro comum", "Explicação técnica simples", "Aplicação prática"],
+    checklistItems: [
+      { id: "template-educativo-check-1", label: "Tema útil", done: false },
+      { id: "template-educativo-check-2", label: "Linguagem simples", done: false },
+      { id: "template-educativo-check-3", label: "Exemplo real", done: false },
+      { id: "template-educativo-check-4", label: "Evitar promessa absoluta", done: false }
+    ],
+    visualGuidance: "Misturar fala técnica com imagens de peças, gráficos simples ou exemplos reais.",
+    captionExample: "Performance diesel não é só potência. Dimensionamento, aplicação e confiabilidade caminham juntos."
+  }
+];
+
 export const ideas: Idea[] = [
   {
     id: "idea-1",
+    templateId: "template-duvida-tecnica",
     title: "Mitos sobre turbina maior em motor diesel",
+    description: "Explicar dúvidas comuns sobre turbina maior, lag, durabilidade e aplicação correta.",
     productLineId: "pickup-turbo",
     vehicleTypeId: "diesel-performance",
     contentTypeId: "duvidas-tecnicas",
     type: "Postagem",
     channelId: "instagram",
+    format: "Feed",
     funnelStageId: "topo",
     createdBy: "user-conteudo",
     priority: "Alta",
-    order: 1
+    order: 1,
+    attachments: []
   },
   {
     id: "idea-2",
+    templateId: "template-bastidor-instalacao",
     title: "Bastidores da montagem de um kit intercooler",
+    description: "Mostrar a sequência de montagem, acabamento e cuidados antes da entrega.",
     productLineId: "intercooler",
     vehicleTypeId: "caminhonetes",
     contentTypeId: "bastidores",
     type: "Postagem",
     channelId: "tiktok",
+    format: "Vídeo",
     funnelStageId: "topo",
     createdBy: "user-design",
     priority: "Média",
-    order: 2
+    order: 2,
+    attachments: []
   }
 ];
 

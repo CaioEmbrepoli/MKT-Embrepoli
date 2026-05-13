@@ -71,10 +71,17 @@ export type Campaign = {
   status: "Planejada" | "Ativa" | "Pausada" | "Encerrada";
 };
 
+export type CampaignAudience = {
+  id: string;
+  name: string;
+};
+
 export type PostStatus = string;
 
 export type EditorialPost = {
   id: string;
+  ideaId?: string;
+  templateId?: string;
   title: string;
   channelId: string;
   campaignId: string;
@@ -89,6 +96,19 @@ export type EditorialPost = {
   order?: number;
   publishAt: string;
   description: string;
+  productionChecklist: ChecklistItem[];
+};
+
+export type FileAttachment = {
+  id: string;
+  name: string;
+  type: "arquivo" | "foto" | "video";
+  source: "upload" | "external";
+  url: string;
+  previewUrl: string;
+  originalSize: number;
+  compressedSize: number;
+  mimeType: string;
 };
 
 export type ReviewAssetStatus = "Aguardando revisão" | "Aprovado" | "Ajustes solicitados";
@@ -122,16 +142,37 @@ export type PostReviewAsset = {
 
 export type Idea = {
   id: string;
+  templateId?: string;
   title: string;
+  description: string;
   productLineId: string;
   vehicleTypeId: string;
   contentTypeId: string;
   type: "Postagem" | "Melhoria" | "Sistema" | "Outros";
   channelId: string;
+  format: string;
   funnelStageId: string;
   createdBy: string;
   priority: string;
   order: number;
+  attachments: FileAttachment[];
+};
+
+export type PostTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  contentTypeId: string;
+  channelId: string;
+  format: string;
+  suggestedTime: string;
+  funnelStageId: string;
+  structure: string;
+  checklist: string;
+  structureItems: string[];
+  checklistItems: ChecklistItem[];
+  visualGuidance: string;
+  captionExample: string;
 };
 
 export type TaskPriority = string;
@@ -150,16 +191,15 @@ export type TaskComment = {
   createdAt: string;
 };
 
-export type TaskAttachment = {
+export type TaskAttachment = FileAttachment;
+
+export type CalendarDate = {
   id: string;
   name: string;
-  type: "arquivo" | "foto" | "video";
-  source: "upload" | "external";
-  url: string;
-  previewUrl: string;
-  originalSize: number;
-  compressedSize: number;
-  mimeType: string;
+  date: string;
+  type: "Feriado" | "Data comemorativa" | "Interno" | "Outro";
+  color: string;
+  notes: string;
 };
 
 export type Task = {
@@ -210,7 +250,7 @@ export type Notification = {
   description: string;
   createdAt: string;
   read: boolean;
-  targetKind: "post" | "task" | "review";
+  targetKind: "post" | "task" | "review" | "idea" | "campaign" | "metric" | "calendar" | "system";
   targetId: string;
 };
 

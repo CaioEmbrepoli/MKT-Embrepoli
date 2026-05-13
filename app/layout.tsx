@@ -6,9 +6,9 @@ export const metadata: Metadata = {
   title: "Embrepoli Marketing",
   description: "Organização interna de marketing da Embrepoli",
   icons: {
-    icon: "/embrepoli-logo.png",
-    shortcut: "/embrepoli-logo.png",
-    apple: "/embrepoli-logo.png"
+    icon: "/favicon.png",
+    shortcut: "/favicon.png",
+    apple: "/favicon.png"
   }
 };
 
