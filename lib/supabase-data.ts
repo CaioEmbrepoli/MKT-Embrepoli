@@ -403,7 +403,9 @@ export async function replacePosts(client: SupabaseClient, posts: EditorialPost[
     sort_order: item.order ?? 1,
     publish_at: item.publishAt,
     description: item.description,
-    production_checklist: item.productionChecklist ?? []
+    production_checklist: item.productionChecklist ?? [],
+    published_video_id: item.publishedVideoId ?? null,
+    published_at: item.publishedAt ?? null
   }));
   await replaceAssignees(client, "post_assignees", "post_id", organizationId, posts.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
 }
@@ -491,6 +493,7 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
   await replaceSimple(client, "post_metrics", metrics, previous, (item, organizationId) => ({
     id: item.id,
     organization_id: organizationId,
+    external_id: item.externalId ?? null,
     post_id: item.postId || null,
     post_title: item.postTitle,
     channel_id: item.channelId,
@@ -507,7 +510,8 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
     clicks: item.clicks,
     leads: item.leads,
     notes: item.notes,
-    learning: item.learning
+    learning: item.learning,
+    video_type: item.videoType ?? null
   }));
 }
 
@@ -683,7 +687,7 @@ function mapPostTemplate(row: any): PostTemplate {
 }
 
 function mapPost(row: any, assignees: any[]): EditorialPost {
-  return { id: row.id, ideaId: row.idea_id ?? "", templateId: row.template_id ?? "", title: row.title, channelId: row.channel_id ?? "", campaignId: row.campaign_id ?? "", productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), status: row.status, format: row.format ?? "Post", order: row.sort_order ?? 1, publishAt: String(row.publish_at ?? "").slice(0, 16), description: row.description ?? "", productionChecklist: row.production_checklist ?? [] };
+  return { id: row.id, ideaId: row.idea_id ?? "", templateId: row.template_id ?? "", title: row.title, channelId: row.channel_id ?? "", campaignId: row.campaign_id ?? "", productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), status: row.status, format: row.format ?? "Post", order: row.sort_order ?? 1, publishAt: String(row.publish_at ?? "").slice(0, 16), description: row.description ?? "", productionChecklist: row.production_checklist ?? [], publishedVideoId: row.published_video_id ?? undefined, publishedAt: row.published_at ?? undefined };
 }
 
 function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {
@@ -757,6 +761,7 @@ function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], 
 function mapMetric(row: any): PostMetric {
   return {
     id: row.id,
+    externalId: row.external_id ?? undefined,
     postId: row.post_id ?? undefined,
     postTitle: row.post_title,
     channelId: row.channel_id ?? "",
@@ -773,7 +778,8 @@ function mapMetric(row: any): PostMetric {
     clicks: row.clicks,
     leads: row.leads,
     notes: row.notes ?? "",
-    learning: row.learning ?? ""
+    learning: row.learning ?? "",
+    videoType: row.video_type ?? undefined
   };
 }
 

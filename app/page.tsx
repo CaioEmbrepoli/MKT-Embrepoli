@@ -26,9 +26,15 @@ import {
   Camera,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   ClipboardList,
+  File,
+  FileImage,
   FileUp,
+  FileVideo,
+  Folder,
   GripVertical,
+  HardDrive,
   Bell,
   Eye,
   EyeOff,
@@ -44,31 +50,14 @@ import {
   UserRound,
   Users,
   X,
+  Youtube,
   type LucideIcon
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  campaigns as seedCampaigns,
-  campaignAudiences as seedCampaignAudiences,
-  calendarDates as seedCalendarDates,
-  channels as seedChannels,
-  contentTypes as seedContentTypes,
-  funnelStages as seedFunnelStages,
-  ideas as seedIdeas,
-  metrics as seedMetrics,
-  notifications as seedNotifications,
-  postTemplates as seedPostTemplates,
-  postReviewAssets as seedPostReviewAssets,
-  posts as seedPosts,
-  productLines as seedProductLines,
-  profiles as seedProfiles,
-  taskBoards as seedTaskBoards,
-  taskColumns as seedTaskColumns,
-  tasks as seedTasks,
-  vehicleTypes as seedVehicleTypes
-} from "@/lib/seed-data";
+import { campaignAudiences as seedCampaignAudiences } from "@/lib/seed-data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { getDriveToken, getYouTubeReadToken, listDriveFolder, listMyYouTubeChannelVideos, searchYouTube, type DriveFile, type DriveItem, type YouTubeChannelVideo, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import {
   type AppData,
   deleteCampaign,
@@ -192,7 +181,6 @@ const roles: Role[] = ["admin", "gestor", "colaborador"];
 const ideaTypes: Idea["type"][] = ["Postagem", "Melhoria", "Sistema", "Outros"];
 const configTabs = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões"] as const;
 const calendarTaskBoardId = "__calendar_posts__";
-const localDataKey = "embrepoli-marketing:v1";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 const maxImageBytes = 2 * 1024 * 1024;
 const maxVideoBytes = 100 * 1024 * 1024;
@@ -344,6 +332,77 @@ const metricEngagementRate = (metric: PostMetric) => metric.reach ? (metricEngag
 
 const metricConversionRate = (metric: PostMetric) => metric.clicks ? (metric.leads / metric.clicks) * 100 : 0;
 
+function thumbnailFor(metric: PostMetric): string | null {
+  const ext = metric.externalId;
+  if (ext?.startsWith("yt:")) return `https://i.ytimg.com/vi/${ext.slice(3)}/mqdefault.jpg`;
+  return null;
+}
+
+function metricMatchesFilter(value: string | undefined, filter: string): boolean {
+  return filter === "all" || !value || value === filter;
+}
+
+type MetricTotals = { reach: number; engagement: number; clicks: number; leads: number; likes: number; comments: number; shares: number };
+
+function computeMetricTotals(items: PostMetric[]): MetricTotals {
+  return items.reduce<MetricTotals>((acc, metric) => ({
+    reach: acc.reach + metric.reach,
+    engagement: acc.engagement + metricEngagement(metric),
+    clicks: acc.clicks + metric.clicks,
+    leads: acc.leads + metric.leads,
+    likes: acc.likes + metric.likes,
+    comments: acc.comments + metric.comments,
+    shares: acc.shares + metric.shares,
+  }), { reach: 0, engagement: 0, clicks: 0, leads: 0, likes: 0, comments: 0, shares: 0 });
+}
+
+type MetricBreakdownItem = { id: string; name: string; value: number; color: string };
+
+function aggregateMetricBreakdown(
+  items: PostMetric[],
+  groupBy: keyof PostMetric,
+  labels: Map<string, { name: string; color?: string }>,
+  getValue: (metric: PostMetric) => number
+): MetricBreakdownItem[] {
+  return Object.entries(items.reduce<Record<string, number>>((acc, metric) => {
+    const id = String(metric[groupBy] ?? "") || "__uncategorized";
+    acc[id] = (acc[id] ?? 0) + getValue(metric);
+    return acc;
+  }, {}))
+    .map(([id, value]) => ({
+      id,
+      name: labels.get(id)?.name ?? "Sem categoria",
+      value,
+      color: labels.get(id)?.color ?? "#2563eb"
+    }))
+    .sort((a, b) => b.value - a.value);
+}
+
+type ChannelKpi = { label: string; value: string };
+
+function channelKpiConfig(channelId: string, totals: MetricTotals, count: number): ChannelKpi[] {
+  if (channelId === "youtube") {
+    const avgViews = count ? Math.round(totals.reach / count) : 0;
+    const likeRate = totals.reach ? (totals.likes / totals.reach) * 100 : 0;
+    return [
+      { label: "Visualizações",       value: formatNumber(totals.reach) },
+      { label: "Vídeos publicados",   value: formatNumber(count) },
+      { label: "Média views/vídeo",   value: formatNumber(avgViews) },
+      { label: "Curtidas",            value: formatNumber(totals.likes) },
+      { label: "Comentários",         value: formatNumber(totals.comments) },
+      { label: "Taxa de curtidas",    value: formatPercent(likeRate) },
+    ];
+  }
+  return [
+    { label: "Alcance",       value: formatNumber(totals.reach) },
+    { label: "Engajamento",   value: formatNumber(totals.engagement) },
+    { label: "Cliques",       value: formatNumber(totals.clicks) },
+    { label: "Leads",         value: formatNumber(totals.leads) },
+    { label: "Taxa engaj.",   value: formatPercent(totals.reach ? (totals.engagement / totals.reach) * 100 : 0) },
+    { label: "Taxa conv.",    value: formatPercent(totals.clicks ? (totals.leads / totals.clicks) * 100 : 0) },
+  ];
+}
+
 const slug = (value: string) =>
   value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -402,26 +461,26 @@ function playNotificationSound() {
 export default function Home() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [activeSection, setActiveSection] = useState("painel");
-  const [profiles, setProfiles] = useState<Profile[]>(seedProfiles);
-  const [currentUserId, setCurrentUserId] = useState(seedProfiles[0].id);
-  const [channels, setChannels] = useState<Channel[]>(seedChannels);
-  const [productLines, setProductLines] = useState<ProductLine[]>(seedProductLines);
-  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>(seedVehicleTypes);
-  const [contentTypes, setContentTypes] = useState<ContentType[]>(seedContentTypes);
-  const [funnelStages, setFunnelStages] = useState<FunnelStage[]>(seedFunnelStages);
-  const [taskBoards, setTaskBoards] = useState<TaskBoard[]>(seedTaskBoards);
-  const [activeTaskBoardId, setActiveTaskBoardId] = useState(seedTaskBoards[0]?.id ?? "tarefas");
-  const [taskColumns, setTaskColumns] = useState<TaskColumn[]>(seedTaskColumns);
-  const [campaigns, setCampaigns] = useState<Campaign[]>(seedCampaigns);
-  const [campaignAudiences, setCampaignAudiences] = useState<CampaignAudience[]>(seedCampaignAudiences);
-  const [postTemplates, setPostTemplates] = useState<PostTemplate[]>(seedPostTemplates);
-  const [posts, setPosts] = useState<EditorialPost[]>(seedPosts);
-  const [postReviewAssets, setPostReviewAssets] = useState<PostReviewAsset[]>(seedPostReviewAssets);
-  const [ideas, setIdeas] = useState<Idea[]>(seedIdeas);
-  const [calendarDates, setCalendarDates] = useState<CalendarDate[]>(seedCalendarDates);
-  const [tasks, setTasks] = useState<Task[]>(seedTasks);
-  const [metrics, setMetrics] = useState<PostMetric[]>(seedMetrics);
-  const [notifications, setNotifications] = useState<Notification[]>(seedNotifications);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [currentUserId, setCurrentUserId] = useState("");
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [productLines, setProductLines] = useState<ProductLine[]>([]);
+  const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
+  const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
+  const [funnelStages, setFunnelStages] = useState<FunnelStage[]>([]);
+  const [taskBoards, setTaskBoards] = useState<TaskBoard[]>([]);
+  const [activeTaskBoardId, setActiveTaskBoardId] = useState("tarefas");
+  const [taskColumns, setTaskColumns] = useState<TaskColumn[]>([]);
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignAudiences, setCampaignAudiences] = useState<CampaignAudience[]>([]);
+  const [postTemplates, setPostTemplates] = useState<PostTemplate[]>([]);
+  const [posts, setPosts] = useState<EditorialPost[]>([]);
+  const [postReviewAssets, setPostReviewAssets] = useState<PostReviewAsset[]>([]);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [calendarDates, setCalendarDates] = useState<CalendarDate[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [metrics, setMetrics] = useState<PostMetric[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [modal, setModal] = useState<ModalState>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authLoading, setAuthLoading] = useState(false);
@@ -440,10 +499,9 @@ export default function Home() {
   const realtimeReloading = useRef(false);
   const pendingSaveCount = useRef(0);
   const realtimeReloadTimer = useRef<number | null>(null);
-  const remoteReady = useRef(!isSupabaseConfigured);
-  const localReady = useRef(isSupabaseConfigured);
+  const remoteReady = useRef(false);
 
-  const currentUser = profiles.find((profile) => profile.id === currentUserId) ?? profiles[0];
+  const currentUser = profiles.find((profile) => profile.id === currentUserId) ?? profiles[0] ?? { id: "", role: "colaborador" as const, name: "", email: "", phone: "", active: false, notificationSound: false, organizationId: "", avatarUrl: "" };
   const profileById = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile])), [profiles]);
   const channelById = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
   const lineById = useMemo(() => new Map(productLines.map((line) => [line.id, line])), [productLines]);
@@ -562,47 +620,10 @@ export default function Home() {
     seenNotificationIds.current = new Set(unreadIds);
   }, [currentNotifications, currentUser.notificationSound]);
 
-  function readLocalData(): Partial<AppData> {
-    if (typeof window === "undefined") return {};
-    try {
-      return JSON.parse(window.localStorage.getItem(localDataKey) || "{}") as Partial<AppData>;
-    } catch (error) {
-      console.error("Erro ao carregar dados locais do Embrepoli Marketing", error);
-      return {};
-    }
-  }
-
-  function writeLocalDataPatch<K extends keyof AppData>(key: K, value: AppData[K]) {
-    if (typeof window === "undefined") return;
-    const current = readLocalData();
-    window.localStorage.setItem(localDataKey, JSON.stringify({ ...current, [key]: value }));
-  }
-
   useEffect(() => {
-    if (isSupabaseConfigured) return;
-    const data = readLocalData();
-    if (data.profiles?.length) setProfiles(data.profiles);
-    if (data.channels?.length) setChannels(data.channels);
-    if (data.productLines?.length) setProductLines(data.productLines);
-    if (data.vehicleTypes?.length) setVehicleTypes(data.vehicleTypes);
-    if (data.contentTypes?.length) setContentTypes(data.contentTypes);
-    if (data.funnelStages?.length) setFunnelStages(data.funnelStages);
-    if (data.taskBoards?.length) {
-      setTaskBoards(data.taskBoards);
-      setActiveTaskBoardId(data.taskBoards[0]?.id ?? "tarefas");
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem("embrepoli-marketing:v1");
     }
-    if (data.taskColumns?.length) setTaskColumns(data.taskColumns);
-    if (data.campaigns) setCampaigns(data.campaigns);
-    if (data.campaignAudiences?.length) setCampaignAudiences(data.campaignAudiences);
-    if (data.postTemplates?.length) setPostTemplates(data.postTemplates);
-    if (data.posts) setPosts(data.posts);
-    if (data.postReviewAssets) setPostReviewAssets(data.postReviewAssets);
-    if (data.ideas) setIdeas(data.ideas);
-    if (data.calendarDates) setCalendarDates(data.calendarDates);
-    if (data.tasks) setTasks(data.tasks);
-    if (data.metrics) setMetrics(data.metrics);
-    if (data.notifications) setNotifications(data.notifications);
-    localReady.current = true;
   }, []);
 
   function scheduleRealtimeReload() {
@@ -630,7 +651,7 @@ export default function Home() {
       scheduleRealtimeReload();
       return;
     }
-    setProfiles(data.profiles.length ? data.profiles : seedProfiles);
+    setProfiles(data.profiles);
     setChannels(data.channels);
     setProductLines(data.productLines);
     setVehicleTypes(data.vehicleTypes);
@@ -639,8 +660,8 @@ export default function Home() {
     setTaskBoards(data.taskBoards);
     setTaskColumns(data.taskColumns);
     setCampaigns(data.campaigns);
-    setCampaignAudiences(data.campaignAudiences.length ? data.campaignAudiences : seedCampaignAudiences);
-    setPostTemplates(data.postTemplates.length ? data.postTemplates : seedPostTemplates);
+    setCampaignAudiences(data.campaignAudiences);
+    setPostTemplates(data.postTemplates);
     setPosts(data.posts);
     setPostReviewAssets(data.postReviewAssets);
     setIdeas(data.ideas);
@@ -735,16 +756,6 @@ export default function Home() {
               pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
               if (pendingSaveCount.current === 0) scheduleRealtimeReload();
             });
-        } else if (!isSupabaseConfigured && localReady.current) {
-          try {
-            writeLocalDataPatch(key, next);
-            setSaveStatus("saved");
-            setSaveError("");
-          } catch (error) {
-            console.error(`Erro ao salvar ${String(key)} localmente`, error);
-            setSaveStatus("error");
-            setSaveError("Erro ao salvar localmente.");
-          }
         }
         return next;
       });
@@ -1133,18 +1144,18 @@ export default function Home() {
     createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
   }
 
-  function addPostReviewExternalAsset(post: EditorialPost, url: string) {
-    const previewUrl = drivePreviewUrl(url);
+  function addPostReviewExternalAsset(post: EditorialPost, url: string, previewUrlOverride?: string) {
+    const isYoutube = Boolean(youtubePreviewUrl(url));
+    const previewUrl = previewUrlOverride ?? drivePreviewUrl(url);
     if (!previewUrl) {
       window.alert("Link inválido. Use um link de compartilhamento do Google Drive ou YouTube.");
       return;
     }
-    const isYoutube = Boolean(youtubePreviewUrl(url));
     const asset: PostReviewAsset = {
       id: crypto.randomUUID(),
       postId: post.id,
-      name: isYoutube ? "Vídeo do YouTube" : "Vídeo do Google Drive",
-      type: "video",
+      name: isYoutube ? "Vídeo do YouTube" : "Arquivo do Google Drive",
+      type: isYoutube ? "video" : "arquivo",
       source: "external",
       url,
       previewUrl,
@@ -1385,6 +1396,7 @@ export default function Home() {
           {activeSection === "metricas" && (
             <Metrics
               metrics={metrics}
+              setMetrics={syncMetrics}
               posts={posts}
               campaigns={campaigns}
               channels={channels}
@@ -3077,6 +3089,7 @@ function Campaigns({ campaigns, lineById, vehicleTypeById, funnelById, profileBy
 
 function Metrics({
   metrics,
+  setMetrics,
   posts,
   campaigns,
   channels,
@@ -3096,6 +3109,7 @@ function Metrics({
   setModal
 }: {
   metrics: PostMetric[];
+  setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
   posts: EditorialPost[];
   campaigns: Campaign[];
   channels: Channel[];
@@ -3114,17 +3128,37 @@ function Metrics({
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
-  const [period, setPeriod] = useState("30");
-  const [channelFilter, setChannelFilter] = useState("all");
+  const [period, setPeriod] = useState("all");
+  const [youtubeImportOpen, setYoutubeImportOpen] = useState(false);
+  const [activeChannel, setActiveChannel] = useState<string>("all");
+  const [allVideosOpen, setAllVideosOpen] = useState(false);
   const [lineFilter, setLineFilter] = useState("all");
   const [vehicleFilter, setVehicleFilter] = useState("all");
   const [contentFilter, setContentFilter] = useState("all");
   const [campaignFilter, setCampaignFilter] = useState("all");
   const [funnelFilter, setFunnelFilter] = useState("all");
-  const postById = new Map(posts.map((post) => [post.id, post]));
+  const [videoTypeFilter, setVideoTypeFilter] = useState("all");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filtersRef = useRef<HTMLDivElement>(null);
+  const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
   const today = new Date();
+  const todayMs = today.getTime();
 
-  function resolveMetric(metric: PostMetric): PostMetric {
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (filtersRef.current && !filtersRef.current.contains(e.target as Node)) {
+        setFiltersOpen(false);
+      }
+    }
+    if (filtersOpen) document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [filtersOpen]);
+
+  const isYoutubeChannel = useMemo(() =>
+    activeChannel !== "all" && (activeChannel === "youtube" || channelById.get(activeChannel)?.name.toLowerCase().includes("youtube")),
+  [activeChannel, channelById]);
+
+  const resolvedMetrics = useMemo(() => metrics.map((metric) => {
     const post = metric.postId ? postById.get(metric.postId) : undefined;
     return {
       ...metric,
@@ -3135,66 +3169,73 @@ function Metrics({
       vehicleTypeId: metric.vehicleTypeId || post?.vehicleTypeId || "",
       contentTypeId: metric.contentTypeId || post?.contentTypeId || "",
       funnelStageId: metric.funnelStageId || post?.funnelStageId || ""
-    };
-  }
+    } as PostMetric;
+  }), [metrics, postById]);
 
-  const filteredMetrics = metrics.map(resolveMetric).filter((metric) => {
+  const channelMetrics = useMemo(() =>
+    activeChannel === "all"
+      ? resolvedMetrics
+      : resolvedMetrics.filter((m) => m.channelId === activeChannel),
+  [resolvedMetrics, activeChannel]);
+
+  const filteredMetrics = useMemo(() => resolvedMetrics.filter((metric) => {
     const date = new Date(`${metric.date || todayIso()}T12:00:00`);
-    const diffDays = Math.floor((today.getTime() - date.getTime()) / 86400000);
+    const diffDays = Math.floor((todayMs - date.getTime()) / 86400000);
     if (period !== "all" && diffDays > Number(period)) return false;
-    if (channelFilter !== "all" && metric.channelId !== channelFilter) return false;
-    if (lineFilter !== "all" && metric.productLineId !== lineFilter) return false;
-    if (vehicleFilter !== "all" && metric.vehicleTypeId !== vehicleFilter) return false;
-    if (contentFilter !== "all" && metric.contentTypeId !== contentFilter) return false;
-    if (campaignFilter !== "all" && metric.campaignId !== campaignFilter) return false;
-    if (funnelFilter !== "all" && metric.funnelStageId !== funnelFilter) return false;
+    if (activeChannel !== "all" && metric.channelId !== activeChannel) return false;
+    if (!metricMatchesFilter(metric.productLineId, lineFilter)) return false;
+    if (!metricMatchesFilter(metric.vehicleTypeId, vehicleFilter)) return false;
+    if (!metricMatchesFilter(metric.contentTypeId, contentFilter)) return false;
+    if (!metricMatchesFilter(metric.campaignId, campaignFilter)) return false;
+    if (!metricMatchesFilter(metric.funnelStageId, funnelFilter)) return false;
+    if (videoTypeFilter !== "all" && metric.videoType !== videoTypeFilter) return false;
     return true;
-  });
+  }), [resolvedMetrics, period, activeChannel, lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, todayMs]);
 
-  const totals = filteredMetrics.reduce((acc, metric) => ({
-    reach: acc.reach + metric.reach,
-    engagement: acc.engagement + metricEngagement(metric),
-    clicks: acc.clicks + metric.clicks,
-    leads: acc.leads + metric.leads
-  }), { reach: 0, engagement: 0, clicks: 0, leads: 0 });
+  const totals = useMemo(() => computeMetricTotals(filteredMetrics), [filteredMetrics]);
+  const kpis = useMemo(() => channelKpiConfig(activeChannel, totals, filteredMetrics.length), [activeChannel, totals, filteredMetrics.length]);
   const averageReach = filteredMetrics.length ? totals.reach / filteredMetrics.length : 0;
-  const chartData = filteredMetrics.map((metric) => ({ name: metric.postTitle.slice(0, 16), alcance: metric.reach, leads: metric.leads }));
-  const dailyData = Object.values(filteredMetrics.reduce<Record<string, { date: string; alcance: number; leads: number }>>((acc, metric) => {
+
+  const top20 = useMemo(() => filteredMetrics.slice().sort((a, b) => b.reach - a.reach).slice(0, 20), [filteredMetrics]);
+  const top10Chart = useMemo(() => top20.slice(0, 10).map((metric) => ({
+    name: metric.postTitle.length > 32 ? metric.postTitle.slice(0, 32) + "…" : metric.postTitle,
+    alcance: metric.reach
+  })), [top20]);
+  const dailyData = useMemo(() => Object.values(filteredMetrics.reduce<Record<string, { date: string; alcance: number; leads: number }>>((acc, metric) => {
     const key = metric.date || todayIso();
     acc[key] = acc[key] ?? { date: key.slice(5), alcance: 0, leads: 0 };
     acc[key].alcance += metric.reach;
     acc[key].leads += metric.leads;
     return acc;
-  }, {})).sort((a, b) => a.date.localeCompare(b.date));
-  const topReach = filteredMetrics.slice().sort((a, b) => b.reach - a.reach).slice(0, 3);
-  const topLeads = filteredMetrics.slice().sort((a, b) => b.leads - a.leads).slice(0, 3);
-  const topEngagement = filteredMetrics.slice().sort((a, b) => metricEngagement(b) - metricEngagement(a)).slice(0, 3);
-  const metricPostIds = new Set(metrics.map((metric) => metric.postId).filter(Boolean));
-  const postsWithoutMetric = posts.filter((post) => !metricPostIds.has(post.id) && !metrics.some((metric) => metric.postTitle === post.title)).slice(0, 5);
-  const winners = filteredMetrics.filter((metric) => metric.leads > 0 && metricEngagementRate(metric) >= 5).slice(0, 4);
-  const weakMetrics = filteredMetrics.filter((metric) => metric.reach < averageReach * 0.7 || metric.leads === 0).slice(0, 4);
+  }, {})).sort((a, b) => a.date.localeCompare(b.date)), [filteredMetrics]);
 
-  type MetricBreakdownItem = { id: string; name: string; value: number; color: string };
+  const top5PeriodData = useMemo(() =>
+    filteredMetrics.slice().sort((a, b) => b.reach - a.reach).slice(0, 5).map((m) => ({
+      name: m.postTitle.length > 28 ? m.postTitle.slice(0, 28) + "…" : m.postTitle,
+      alcance: m.reach
+    })),
+  [filteredMetrics]);
 
-  function aggregateMetricBreakdown(
-    items: PostMetric[],
-    groupBy: keyof PostMetric,
-    labels: Map<string, { name: string; color?: string }>,
-    getValue: (metric: PostMetric) => number
-  ): MetricBreakdownItem[] {
-    return Object.entries(items.reduce<Record<string, number>>((acc, metric) => {
-      const id = String(metric[groupBy] ?? "") || "__uncategorized";
-      acc[id] = (acc[id] ?? 0) + getValue(metric);
-      return acc;
-    }, {}))
-      .map(([id, value]) => ({
-        id,
-        name: labels.get(id)?.name ?? "Sem categoria",
-        value,
-        color: labels.get(id)?.color ?? "#2563eb"
-      }))
-      .sort((a, b) => b.value - a.value);
-  }
+  const topReach = useMemo(() => filteredMetrics.slice().sort((a, b) => b.reach - a.reach).slice(0, 3), [filteredMetrics]);
+  const topLeads = useMemo(() => filteredMetrics.slice().sort((a, b) => b.leads - a.leads).slice(0, 3), [filteredMetrics]);
+  const topEngagement = useMemo(() => filteredMetrics.slice().sort((a, b) => metricEngagement(b) - metricEngagement(a)).slice(0, 3), [filteredMetrics]);
+  const previewMetrics = useMemo(() => top20.slice(0, 10), [top20]);
+
+  const metricPostIds = useMemo(() => new Set(metrics.map((m) => m.postId).filter(Boolean)), [metrics]);
+  const postsWithoutMetric = useMemo(() => posts.filter((post) => !metricPostIds.has(post.id) && !metrics.some((m) => m.postTitle === post.title)).slice(0, 5), [posts, metricPostIds, metrics]);
+  const winners = useMemo(() => filteredMetrics.filter((m) => m.leads > 0 && metricEngagementRate(m) >= 5).slice(0, 4), [filteredMetrics]);
+  const weakMetrics = useMemo(() => filteredMetrics.filter((m) => m.reach < averageReach * 0.7 || m.leads === 0).slice(0, 4), [filteredMetrics, averageReach]);
+
+  const activeFilterCount = [lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter].filter((f) => f !== "all").length;
+
+  const channelCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const m of resolvedMetrics) {
+      map.set(m.channelId, (map.get(m.channelId) ?? 0) + 1);
+    }
+    return map;
+  }, [resolvedMetrics]);
+  const activeChannelName = activeChannel === "all" ? "Geral" : (channelById.get(activeChannel)?.name ?? activeChannel);
 
   function createImprovementTask(metric: PostMetric) {
     const column = taskColumns.slice().sort((a, b) => a.order - b.order)[0];
@@ -3240,103 +3281,142 @@ function Metrics({
     }, ...current]);
   }
 
-  const metricBreakdowns = [
-    {
-      title: "Leads por canal",
-      unit: "leads",
-      data: aggregateMetricBreakdown(filteredMetrics, "channelId", new Map(channels.map((item) => [item.id, item])), (metric) => metric.leads)
-    },
-    {
+  const metricBreakdowns = useMemo(() => {
+    const list: { title: string; unit: string; data: MetricBreakdownItem[] }[] = [];
+    if (activeChannel === "all") {
+      list.push({
+        title: "Leads por canal",
+        unit: "leads",
+        data: aggregateMetricBreakdown(filteredMetrics, "channelId", new Map(channels.map((item) => [item.id, item])), (m) => m.leads)
+      });
+    }
+    list.push({
       title: "Alcance por linha",
       unit: "alcance",
-      data: aggregateMetricBreakdown(filteredMetrics, "productLineId", new Map(productLines.map((item) => [item.id, item])), (metric) => metric.reach)
-    },
-    {
-      title: "Engajamento por veículo",
-      unit: "engaj.",
-      data: aggregateMetricBreakdown(filteredMetrics, "vehicleTypeId", new Map(vehicleTypes.map((item) => [item.id, item])), metricEngagement)
-    },
-    {
-      title: "Cliques por conteúdo",
-      unit: "cliques",
-      data: aggregateMetricBreakdown(filteredMetrics, "contentTypeId", new Map(contentTypes.map((item) => [item.id, item])), (metric) => metric.clicks)
-    },
-    {
+      data: aggregateMetricBreakdown(filteredMetrics, "productLineId", new Map(productLines.map((item) => [item.id, item])), (m) => m.reach)
+    });
+    list.push({
       title: "Conversões por funil",
       unit: "conv.",
-      data: aggregateMetricBreakdown(filteredMetrics, "funnelStageId", new Map(funnelStages.map((item) => [item.id, item])), (metric) => metric.leads)
-    }
-  ];
+      data: aggregateMetricBreakdown(filteredMetrics, "funnelStageId", new Map(funnelStages.map((item) => [item.id, item])), (m) => m.leads)
+    });
+    return list;
+  }, [filteredMetrics, activeChannel, channels, productLines, funnelStages]);
 
   return (
-    <Panel title="Métricas" action={<RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />}>
-      <div className="mb-5 grid gap-3 md:grid-cols-4 xl:grid-cols-7">
+    <Panel title="Métricas" action={
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => setYoutubeImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100">
+          <Youtube size={15} /> Importar do YouTube
+        </button>
+        <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
+      </div>
+    }>
+      <div className="mb-4 -mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1">
+        {[{ id: "all", name: "Geral", color: "#0f172a" } as Channel, ...channels].map((ch) => {
+          const count = ch.id === "all" ? resolvedMetrics.length : (channelCounts.get(ch.id) ?? 0);
+          const isActive = activeChannel === ch.id;
+          return (
+            <button key={ch.id} type="button" onClick={() => setActiveChannel(ch.id)}
+              className={`shrink-0 border-b-2 px-4 py-2 text-sm font-black transition ${isActive ? "text-slate-950" : "border-transparent text-slate-500 hover:text-slate-700"}`}
+              style={isActive ? { borderColor: ch.color } : undefined}
+            >
+              {ch.name} <span className="ml-1 text-xs font-bold text-slate-400">({count})</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mb-5 flex flex-wrap items-end gap-3">
         <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["30", "Últimos 30 dias"], ["7", "Últimos 7 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
-        <FilterSelect label="Canal" value={channelFilter} onChange={setChannelFilter} options={[["all", "Todos"], ...channels.map((item) => [item.id, item.name])]} />
-        <FilterSelect label="Linha" value={lineFilter} onChange={setLineFilter} options={[["all", "Todas"], ...productLines.map((item) => [item.id, item.name])]} />
-        <FilterSelect label="Veículo" value={vehicleFilter} onChange={setVehicleFilter} options={[["all", "Todos"], ...vehicleTypes.map((item) => [item.id, item.name])]} />
-        <FilterSelect label="Conteúdo" value={contentFilter} onChange={setContentFilter} options={[["all", "Todos"], ...contentTypes.map((item) => [item.id, item.name])]} />
-        <FilterSelect label="Campanha" value={campaignFilter} onChange={setCampaignFilter} options={[["all", "Todas"], ...campaigns.map((item) => [item.id, item.name])]} />
-        <FilterSelect label="Funil" value={funnelFilter} onChange={setFunnelFilter} options={[["all", "Todos"], ...funnelStages.map((item) => [item.id, item.name])]} />
+        <div ref={filtersRef} className="relative">
+          <button type="button" onClick={() => setFiltersOpen((v) => !v)}
+            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:border-blue-400 hover:bg-slate-50"
+          >
+            Filtros
+            {activeFilterCount > 0 && <span className="flex h-5 w-5 items-center justify-center rounded-full bg-blue-600 text-xs font-black text-white">{activeFilterCount}</span>}
+            <span className="text-slate-400">{filtersOpen ? "▴" : "▾"}</span>
+          </button>
+          {filtersOpen && (
+            <div className="absolute left-0 top-full z-30 mt-2 w-72 rounded-[24px] border border-slate-200 bg-white p-4 shadow-xl">
+              <div className="grid gap-3">
+                <FilterSelect label="Linha" value={lineFilter} onChange={setLineFilter} options={[["all", "Todas"], ...productLines.map((item) => [item.id, item.name])]} />
+                <FilterSelect label="Veículo" value={vehicleFilter} onChange={setVehicleFilter} options={[["all", "Todos"], ...vehicleTypes.map((item) => [item.id, item.name])]} />
+                <FilterSelect label="Conteúdo" value={contentFilter} onChange={setContentFilter} options={[["all", "Todos"], ...contentTypes.map((item) => [item.id, item.name])]} />
+                <FilterSelect label="Campanha" value={campaignFilter} onChange={setCampaignFilter} options={[["all", "Todas"], ...campaigns.map((item) => [item.id, item.name])]} />
+                <FilterSelect label="Funil" value={funnelFilter} onChange={setFunnelFilter} options={[["all", "Todos"], ...funnelStages.map((item) => [item.id, item.name])]} />
+                {isYoutubeChannel && (
+                  <FilterSelect label="Tipo" value={videoTypeFilter} onChange={setVideoTypeFilter} options={[["all", "Todos"], ["video", "Vídeo"], ["short", "Shorts"]]} />
+                )}
+                {activeFilterCount > 0 && (
+                  <button type="button" onClick={() => { setLineFilter("all"); setVehicleFilter("all"); setContentFilter("all"); setCampaignFilter("all"); setFunnelFilter("all"); setVideoTypeFilter("all"); }}
+                    className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-200"
+                  >
+                    Limpar filtros
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-5">
         <section>
-          <h3 className="mb-3 font-black">Resumo</h3>
-          <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <MetricSummaryCard label="Alcance" value={formatNumber(totals.reach)} />
-            <MetricSummaryCard label="Engajamento" value={formatNumber(totals.engagement)} />
-            <MetricSummaryCard label="Cliques" value={formatNumber(totals.clicks)} />
-            <MetricSummaryCard label="Leads" value={formatNumber(totals.leads)} />
-            <MetricSummaryCard label="Taxa de engajamento" value={formatPercent(totals.reach ? (totals.engagement / totals.reach) * 100 : 0)} />
-            <MetricSummaryCard label="Taxa de conversão" value={formatPercent(totals.clicks ? (totals.leads / totals.clicks) * 100 : 0)} />
+          <h3 className="mb-3 font-black">Resumo · {activeChannelName}</h3>
+          <div className={`grid gap-3 md:grid-cols-2 ${kpis.length >= 6 ? "xl:grid-cols-6" : "xl:grid-cols-4"}`}>
+            {kpis.map((kpi) => <MetricSummaryCard key={kpi.label} label={kpi.label} value={kpi.value} />)}
           </div>
         </section>
 
         <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
           <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
-            <h3 className="font-black">Evolução diária</h3>
+            <h3 className="font-black">Evolução do período</h3>
             <div className="mt-4 h-64">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={dailyData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="date" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
-                  <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
-                  <Tooltip />
-                  <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe">
-                    <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={12} fontWeight={900} />
-                  </Area>
-                  <Area dataKey="leads" stroke="#0891b2" fill="#cffafe">
-                    <LabelList dataKey="leads" position="top" fill="#0e7490" fontSize={12} fontWeight={900} />
-                  </Area>
-                </AreaChart>
+                {period === "all" ? (
+                  <BarChart data={top5PeriodData} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={(value) => formatNumber(Number(value))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                    <Tooltip formatter={(value: number) => formatNumber(value)} />
+                    <Bar dataKey="alcance" fill="#2563eb" radius={[0, 6, 6, 0]} />
+                  </BarChart>
+                ) : (
+                  <AreaChart data={dailyData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="date" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
+                    <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
+                    <Tooltip />
+                    <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe">
+                      <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={12} fontWeight={900} />
+                    </Area>
+                    <Area dataKey="leads" stroke="#0891b2" fill="#cffafe">
+                      <LabelList dataKey="leads" position="top" fill="#0e7490" fontSize={12} fontWeight={900} />
+                    </Area>
+                  </AreaChart>
+                )}
               </ResponsiveContainer>
             </div>
-            <ChartValueList data={dailyData.slice(-5).map((item) => ({ label: item.date, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />
+            {period !== "all" && <ChartValueList data={dailyData.slice(-5).map((item) => ({ label: item.date, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />}
           </div>
           <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
-            <h3 className="font-black">Comparação entre posts</h3>
-            <div className="mt-4 h-64">
+            <h3 className="font-black">Top 10 mais visualizados</h3>
+            <div className="mt-4 h-80">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData}>
+                <BarChart data={top10Chart} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
-                  <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
-                  <Tooltip />
-                  <Bar dataKey="alcance" fill="#2563eb" radius={[8, 8, 0, 0]}>
-                    <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={12} fontWeight={900} />
-                  </Bar>
-                  <Bar dataKey="leads" fill="#38bdf8" radius={[8, 8, 0, 0]}>
-                    <LabelList dataKey="leads" position="top" fill="#0e7490" fontSize={12} fontWeight={900} />
-                  </Bar>
+                  <XAxis type="number" tickFormatter={(value) => formatNumber(Number(value))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                  <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                  <Tooltip formatter={(value: number) => formatNumber(value)} />
+                  <Bar dataKey="alcance" fill="#2563eb" radius={[0, 6, 6, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
-            <ChartValueList data={chartData.slice(0, 5).map((item) => ({ label: item.name, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />
           </div>
         </section>
 
-        <section className="grid gap-5 xl:grid-cols-5">
+        <section className={`grid gap-5 ${metricBreakdowns.length === 3 ? "xl:grid-cols-3" : "xl:grid-cols-2"}`}>
           {metricBreakdowns.map((breakdown) => (
             <BreakdownChart key={breakdown.title} title={breakdown.title} data={breakdown.data} unit={breakdown.unit} />
           ))}
@@ -3344,52 +3424,88 @@ function Metrics({
 
         <section>
           <h3 className="mb-3 font-black">Análise</h3>
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className={`grid gap-4 ${isYoutubeChannel ? "lg:grid-cols-2" : "lg:grid-cols-3"}`}>
             <RankingCard title="Mais alcance" metrics={topReach} value={(metric) => formatNumber(metric.reach)} />
-            <RankingCard title="Mais leads" metrics={topLeads} value={(metric) => `${metric.leads} leads`} />
+            {!isYoutubeChannel && <RankingCard title="Mais leads" metrics={topLeads} value={(metric) => `${metric.leads} leads`} />}
             <RankingCard title="Mais engajamento" metrics={topEngagement} value={(metric) => formatNumber(metricEngagement(metric))} />
           </div>
         </section>
 
-        <section className="grid gap-4 lg:grid-cols-3">
-          <ActionList title="Conteúdos vencedores" empty="Nenhum destaque ainda." items={winners} actionLabel="Criar ideia parecida" onAction={createPostIdea} description={(metric) => `${formatPercent(metricEngagementRate(metric))} engajamento · ${metric.leads} leads`} />
-          <ActionList title="Precisam de ajuste" empty="Nada crítico no filtro atual." items={weakMetrics} actionLabel="Criar tarefa" onAction={createImprovementTask} description={(metric) => `${formatNumber(metric.reach)} alcance · ${metric.leads} leads`} />
-          <div className="rounded-[28px] border border-amber-100 bg-amber-50 p-4">
-            <h3 className="font-black text-amber-900">Posts sem métrica</h3>
-            <div className="mt-3 space-y-2">
-              {postsWithoutMetric.map((post) => (
-                <div key={post.id} className="rounded-2xl bg-white/70 p-3">
-                  <p className="line-clamp-2 text-sm font-black">{post.title}</p>
-                  <p className="mt-1 text-xs font-bold text-amber-700">{channelById.get(post.channelId)?.name} · {new Date(post.publishAt).toLocaleDateString("pt-BR")}</p>
-                </div>
-              ))}
-              {!postsWithoutMetric.length && <p className="text-sm font-bold text-amber-700">Todos os posts têm métrica registrada.</p>}
+        {!isYoutubeChannel && (
+          <section className="grid gap-4 lg:grid-cols-3">
+            <ActionList title="Conteúdos vencedores" empty="Nenhum destaque ainda." items={winners} actionLabel="Criar ideia parecida" onAction={createPostIdea} description={(metric) => `${formatPercent(metricEngagementRate(metric))} engajamento · ${metric.leads} leads`} />
+            <ActionList title="Precisam de ajuste" empty="Nada crítico no filtro atual." items={weakMetrics} actionLabel="Criar tarefa" onAction={createImprovementTask} description={(metric) => `${formatNumber(metric.reach)} alcance · ${metric.leads} leads`} />
+            <div className="rounded-[28px] border border-amber-100 bg-amber-50 p-4">
+              <h3 className="font-black text-amber-900">Posts sem métrica</h3>
+              <div className="mt-3 space-y-2">
+                {postsWithoutMetric.map((post) => (
+                  <div key={post.id} className="rounded-2xl bg-white/70 p-3">
+                    <p className="line-clamp-2 text-sm font-black">{post.title}</p>
+                    <p className="mt-1 text-xs font-bold text-amber-700">{channelById.get(post.channelId)?.name} · {new Date(post.publishAt).toLocaleDateString("pt-BR")}</p>
+                  </div>
+                ))}
+                {!postsWithoutMetric.length && <p className="text-sm font-bold text-amber-700">Todos os posts têm métrica registrada.</p>}
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )}
       </div>
 
       <section className="mt-6">
-        <h3 className="mb-3 font-black">Registros</h3>
-        <div className="grid gap-3">
-          {filteredMetrics.map((metric) => (
-            <button key={metric.id} onClick={() => setModal({ kind: "metric", id: metric.id })} className="rounded-3xl bg-white p-4 text-left shadow-sm motion-smooth hover:shadow-md">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3 className="font-black">{metric.postTitle}</h3>
-                  <p className="mt-2 text-sm text-slate-500">
-                    {channelById.get(metric.channelId)?.name} · {lineById.get(metric.productLineId)?.name} · {vehicleTypeById.get(metric.vehicleTypeId)?.name} · {contentTypeById.get(metric.contentTypeId)?.name} · {funnelById.get(metric.funnelStageId)?.name}
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h3 className="font-black">Top 10 mais visualizados · {activeChannelName}</h3>
+          <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
+            Ver todos os {channelMetrics.length} vídeos →
+          </button>
+        </div>
+        <div className="grid gap-2">
+          {previewMetrics.map((metric) => {
+            const thumb = thumbnailFor(metric);
+            return (
+              <button key={metric.id} onClick={() => setModal({ kind: "metric", id: metric.id })} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left transition hover:border-blue-200 hover:bg-slate-50">
+                {thumb ? (
+                  <img src={thumb} alt="" className="h-14 w-24 shrink-0 rounded-lg object-cover" />
+                ) : (
+                  <div className="flex h-14 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                    <FileVideo size={20} className="text-slate-400" />
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="line-clamp-1 font-black">{metric.postTitle}</p>
+                  <p className="text-xs font-bold text-slate-500">
+                    {metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}
+                    {metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}
+                  </p>
+                  <p className="mt-0.5 text-xs font-bold text-slate-700">
+                    {formatNumber(metric.reach)} views · {formatNumber(metric.likes)} curtidas · {formatNumber(metric.comments)} coment.
                   </p>
                 </div>
-                <Badge tone={metricEngagementRate(metric) >= 5 ? "green" : "slate"}>{metricEngagementRate(metric) >= 5 ? "Conteúdo vencedor" : "Em análise"}</Badge>
-              </div>
-              <p className="mt-2 text-sm font-black text-blue-700">{formatNumber(metric.reach)} alcance · {metricEngagement(metric)} engajamentos · {metric.leads} leads · {formatPercent(metricConversionRate(metric))} conversão</p>
-              {(metric.learning || metric.notes) && <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{metric.learning || metric.notes}</p>}
-            </button>
-          ))}
-          {!filteredMetrics.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>}
+              </button>
+            );
+          })}
+          {!previewMetrics.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>}
         </div>
       </section>
+      {youtubeImportOpen && (
+        <YouTubeImportModal
+          metrics={metrics}
+          setMetrics={setMetrics}
+          posts={posts}
+          channels={channels}
+          productLines={productLines}
+          funnelStages={funnelStages}
+          onClose={() => setYoutubeImportOpen(false)}
+        />
+      )}
+      {allVideosOpen && (
+        <AllVideosModal
+          metrics={channelMetrics}
+          channelLabel={activeChannelName}
+          channelById={channelById}
+          onClose={() => setAllVideosOpen(false)}
+          onPick={(id) => { setAllVideosOpen(false); setModal({ kind: "metric", id }); }}
+        />
+      )}
     </Panel>
   );
 }
@@ -3932,7 +4048,7 @@ function EntityModal(props: {
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   postReviewAssets: PostReviewAsset[];
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
-  addPostReviewExternalAsset: (post: EditorialPost, url: string) => void;
+  addPostReviewExternalAsset: (post: EditorialPost, url: string, thumbnailUrl?: string) => void;
   deletePostReviewAsset: (assetId: string) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
@@ -4026,6 +4142,579 @@ function MediaPreviewContent({ item, large = false }: { item: MediaPreviewItem; 
   return <a href={item.url} target="_blank" className="block rounded-3xl bg-slate-50 p-8 text-center font-black text-blue-700">Abrir arquivo: {item.name}</a>;
 }
 
+const SELECTABLE_MIME_TYPES = new Set([
+  "image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml",
+  "video/mp4", "video/quicktime", "video/avi", "video/webm", "video/mov",
+  "application/pdf",
+]);
+
+function driveItemIcon(item: DriveItem) {
+  if (item.isFolder) return <Folder size={20} className="shrink-0 text-yellow-500" />;
+  if (item.mimeType.startsWith("image/")) return <FileImage size={20} className="shrink-0 text-blue-400" />;
+  if (item.mimeType.startsWith("video/")) return <FileVideo size={20} className="shrink-0 text-purple-400" />;
+  return <File size={20} className="shrink-0 text-slate-400" />;
+}
+
+function DriveThumb({ src, token, alt, className, fallback }: {
+  src: string; token: string; alt: string; className?: string; fallback: React.ReactNode;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (!src || !token || failed) return <>{fallback}</>;
+  const proxySrc = `/api/drive-thumb?url=${encodeURIComponent(src)}&token=${encodeURIComponent(token)}`;
+  return <img src={proxySrc} alt={alt} className={className} onError={() => setFailed(true)} />;
+}
+
+function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile) => void; onClose: () => void }) {
+  const [token, setToken] = useState("");
+  const [items, setItems] = useState<DriveItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [breadcrumb, setBreadcrumb] = useState<{ id: string; name: string }[]>([{ id: "root", name: "Meu Drive" }]);
+  const currentFolder = breadcrumb[breadcrumb.length - 1];
+
+  useEffect(() => {
+    let active = true;
+    async function init() {
+      try {
+        const t = await getDriveToken();
+        if (!active) return;
+        setToken(t);
+        const files = await listDriveFolder("root", t);
+        if (!active) return;
+        setItems(files);
+      } catch (err) {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : "Erro ao acessar o Google Drive.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    }
+    init();
+    return () => { active = false; };
+  }, []);
+
+  async function openFolder(folder: DriveItem) {
+    setLoading(true);
+    setError("");
+    setBreadcrumb((prev) => [...prev, { id: folder.id, name: folder.name }]);
+    try {
+      const files = await listDriveFolder(folder.id, token);
+      setItems(files);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao abrir pasta.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function navigateTo(index: number) {
+    const target = breadcrumb[index];
+    setLoading(true);
+    setError("");
+    setBreadcrumb((prev) => prev.slice(0, index + 1));
+    try {
+      const files = await listDriveFolder(target.id, token);
+      setItems(files);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao navegar.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function selectFile(item: DriveItem) {
+    onSelect({
+      id: item.id,
+      name: item.name,
+      mimeType: item.mimeType,
+      url: `https://drive.google.com/file/d/${item.id}/view`,
+      previewUrl: `https://drive.google.com/file/d/${item.id}/preview`,
+      thumbnailUrl: item.thumbnailLink,
+    });
+    onClose();
+  }
+
+  const folders = items.filter((i) => i.isFolder);
+  const files = items.filter((i) => !i.isFolder && SELECTABLE_MIME_TYPES.has(i.mimeType));
+  const others = items.filter((i) => !i.isFolder && !SELECTABLE_MIME_TYPES.has(i.mimeType));
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="flex h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
+          <div className="flex items-center gap-2">
+            <HardDrive size={20} className="text-blue-600" />
+            <h2 className="font-black">Google Drive</h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200"><X size={18} /></button>
+        </div>
+
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-0.5 overflow-x-auto border-b border-slate-100 px-4 py-2">
+          {breadcrumb.map((crumb, i) => (
+            <div key={crumb.id} className="flex shrink-0 items-center gap-0.5">
+              {i > 0 && <ChevronRight size={14} className="text-slate-400" />}
+              <button
+                type="button"
+                onClick={() => i < breadcrumb.length - 1 && navigateTo(i)}
+                className={`rounded-lg px-2 py-1 text-sm font-bold transition ${i === breadcrumb.length - 1 ? "text-slate-900" : "cursor-pointer text-blue-600 hover:bg-blue-50"}`}
+              >
+                {crumb.name}
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-5">
+          {loading && (
+            <div className="flex h-full items-center justify-center">
+              <p className="text-sm font-bold text-slate-400">Carregando...</p>
+            </div>
+          )}
+          {error && <div className="rounded-2xl bg-rose-50 p-4 text-sm font-bold text-rose-700">{error}</div>}
+          {!loading && !error && items.length === 0 && (
+            <p className="py-10 text-center text-sm font-bold text-slate-400">Pasta vazia.</p>
+          )}
+          {!loading && !error && (
+            <div className="space-y-5">
+              {folders.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Pastas</p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {folders.map((folder) => (
+                      <button key={folder.id} type="button" onClick={() => openFolder(folder)}
+                        className="flex items-center gap-2 rounded-2xl border border-slate-200 p-3 text-left transition hover:border-yellow-300 hover:bg-yellow-50">
+                        <Folder size={22} className="shrink-0 text-yellow-500" />
+                        <span className="min-w-0 truncate text-sm font-bold">{folder.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {files.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Arquivos</p>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {files.map((file) => (
+                      <button key={file.id} type="button" onClick={() => selectFile(file)}
+                        className="flex flex-col overflow-hidden rounded-2xl border border-slate-200 text-left transition hover:border-blue-400 hover:shadow-md">
+                        <div className="aspect-video w-full overflow-hidden bg-slate-50">
+                          {file.thumbnailLink ? (
+                            <DriveThumb
+                              src={file.thumbnailLink}
+                              token={token}
+                              alt={file.name}
+                              className="h-full w-full object-cover"
+                              fallback={
+                                <div className="flex h-full items-center justify-center">
+                                  {driveItemIcon(file)}
+                                </div>
+                              }
+                            />
+                          ) : (
+                            <div className="flex h-full items-center justify-center">
+                              {driveItemIcon(file)}
+                            </div>
+                          )}
+                        </div>
+                        <div className="p-2">
+                          <p className="line-clamp-2 text-xs font-bold leading-snug">{file.name}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {others.length > 0 && (
+                <div>
+                  <p className="mb-2 text-xs font-black uppercase tracking-wide text-slate-400">Outros arquivos</p>
+                  <div className="space-y-1">
+                    {others.map((file) => (
+                      <div key={file.id} className="flex items-center gap-2 rounded-2xl border border-slate-100 px-3 py-2 text-sm text-slate-400">
+                        {driveItemIcon(file)}
+                        <span className="truncate text-xs font-bold">{file.name}</span>
+                        <span className="ml-auto text-xs">não suportado</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-slate-100 px-6 py-3">
+          <p className="text-xs font-bold text-slate-400">
+            {currentFolder.name} · {folders.length} pasta{folders.length !== 1 ? "s" : ""}, {files.length} arquivo{files.length !== 1 ? "s" : ""}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type AllVideosSort = "views" | "recent" | "oldest" | "engagement" | "leads" | "az";
+
+function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }: {
+  metrics: PostMetric[];
+  channelLabel: string;
+  channelById: Map<string, Channel>;
+  onClose: () => void;
+  onPick: (id: string) => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<AllVideosSort>("views");
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 30;
+
+  const searched = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? metrics.filter((m) => m.postTitle.toLowerCase().includes(q)) : metrics;
+  }, [metrics, search]);
+
+  const sorted = useMemo(() => {
+    const arr = searched.slice();
+    if (sortBy === "views") return arr.sort((a, b) => b.reach - a.reach);
+    if (sortBy === "recent") return arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    if (sortBy === "oldest") return arr.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    if (sortBy === "engagement") return arr.sort((a, b) => metricEngagement(b) - metricEngagement(a));
+    if (sortBy === "leads") return arr.sort((a, b) => b.leads - a.leads);
+    return arr.sort((a, b) => a.postTitle.localeCompare(b.postTitle, "pt-BR"));
+  }, [searched, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * PAGE_SIZE;
+  const pageItems = useMemo(() => sorted.slice(start, start + PAGE_SIZE), [sorted, start]);
+
+  useEffect(() => { setPage(1); }, [search, sortBy]);
+
+  function pageWindow(): (number | "…")[] {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1);
+    const set = new Set<number>([1, totalPages, safePage, safePage - 1, safePage + 1]);
+    const sortedNums = Array.from(set).filter((n) => n >= 1 && n <= totalPages).sort((a, b) => a - b);
+    const out: (number | "…")[] = [];
+    sortedNums.forEach((n, i) => {
+      if (i > 0 && n - sortedNums[i - 1] > 1) out.push("…");
+      out.push(n);
+    });
+    return out;
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="flex h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl">
+        <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
+          <div>
+            <h2 className="font-black">Todos os vídeos · {channelLabel}</h2>
+            <p className="text-xs font-bold text-slate-500">{sorted.length} registro{sorted.length === 1 ? "" : "s"}</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200"><X size={18} /></button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-6 py-3">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por título…"
+            className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+          />
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as AllVideosSort)}
+            className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 outline-none focus:border-blue-500"
+          >
+            <option value="views">Mais visualizados</option>
+            <option value="recent">Mais recentes</option>
+            <option value="oldest">Mais antigos</option>
+            <option value="engagement">Mais engajamento</option>
+            <option value="leads">Mais leads</option>
+            <option value="az">A–Z</option>
+          </select>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5">
+          {pageItems.length === 0 ? (
+            <p className="py-10 text-center text-sm font-bold text-slate-400">Nenhum vídeo encontrado.</p>
+          ) : (
+            <div className="grid gap-2 md:grid-cols-2">
+              {pageItems.map((metric) => {
+                const thumb = thumbnailFor(metric);
+                return (
+                  <button key={metric.id} onClick={() => onPick(metric.id)} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left transition hover:border-blue-200 hover:bg-slate-50">
+                    {thumb ? (
+                      <img src={thumb} alt="" className="h-14 w-24 shrink-0 rounded-lg object-cover" />
+                    ) : (
+                      <div className="flex h-14 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
+                        <FileVideo size={20} className="text-slate-400" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-1 font-black">{metric.postTitle}</p>
+                      <p className="text-xs font-bold text-slate-500">
+                        {metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}
+                        {metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}
+                      </p>
+                      <p className="mt-0.5 text-xs font-bold text-slate-700">
+                        {formatNumber(metric.reach)} views · {formatNumber(metric.likes)} curtidas · {formatNumber(metric.comments)} coment.
+                      </p>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-6 py-3">
+          <p className="text-xs font-bold text-slate-500">
+            {sorted.length === 0 ? "0 resultados" : `Mostrando ${start + 1}–${Math.min(start + PAGE_SIZE, sorted.length)} de ${sorted.length}`}
+          </p>
+          <div className="flex items-center gap-1">
+            <button type="button" disabled={safePage === 1} onClick={() => setPage(1)} className="rounded-xl bg-slate-100 px-2 py-1 text-xs font-black text-slate-700 disabled:opacity-40">«</button>
+            <button type="button" disabled={safePage === 1} onClick={() => setPage(safePage - 1)} className="rounded-xl bg-slate-100 px-2 py-1 text-xs font-black text-slate-700 disabled:opacity-40">‹</button>
+            {pageWindow().map((p, i) =>
+              p === "…" ? (
+                <span key={`gap-${i}`} className="px-1 text-xs font-bold text-slate-400">…</span>
+              ) : (
+                <button key={p} type="button" onClick={() => setPage(p)} className={`min-w-[2rem] rounded-xl px-2 py-1 text-xs font-black ${p === safePage ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{p}</button>
+              )
+            )}
+            <button type="button" disabled={safePage === totalPages} onClick={() => setPage(safePage + 1)} className="rounded-xl bg-slate-100 px-2 py-1 text-xs font-black text-slate-700 disabled:opacity-40">›</button>
+            <button type="button" disabled={safePage === totalPages} onClick={() => setPage(totalPages)} className="rounded-xl bg-slate-100 px-2 py-1 text-xs font-black text-slate-700 disabled:opacity-40">»</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose }: {
+  metrics: PostMetric[];
+  setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
+  posts: EditorialPost[];
+  channels: Channel[];
+  productLines: ProductLine[];
+  funnelStages: FunnelStage[];
+  onClose: () => void;
+}) {
+  const [phase, setPhase] = useState<"auth" | "fetching" | "importing" | "done" | "error">("auth");
+  const [progress, setProgress] = useState<YouTubeImportProgress | null>(null);
+  const [error, setError] = useState("");
+  const [summary, setSummary] = useState({ created: 0, updated: 0 });
+  const ran = useRef(false);
+
+  async function run() {
+    setError("");
+    setPhase("auth");
+    try {
+      const token = await getYouTubeReadToken();
+      setPhase("fetching");
+      const videos = await listMyYouTubeChannelVideos(token, setProgress);
+      setPhase("importing");
+
+      const youtubeChannelId =
+        channels.find((c) => c.id === "youtube")?.id ??
+        channels.find((c) => c.name.toLowerCase().includes("youtube"))?.id ??
+        "youtube";
+      const defaultLineId = productLines[0]?.id ?? "";
+      const defaultFunnelId = funnelStages[0]?.id ?? "";
+
+      const byExt = new Map(
+        metrics.filter((m) => m.externalId).map((m) => [m.externalId!, m] as const)
+      );
+
+      let created = 0;
+      let updated = 0;
+      const importedRows: PostMetric[] = videos.map((v) => {
+        const externalId = `yt:${v.videoId}`;
+        const existing = byExt.get(externalId);
+        if (existing) updated += 1;
+        else created += 1;
+        const linkedPost = posts.find((p) => p.publishedVideoId === v.videoId);
+        return {
+          id: existing?.id ?? crypto.randomUUID(),
+          externalId,
+          videoType: v.isShort ? "short" as const : "video" as const,
+          postId: linkedPost?.id,
+          postTitle: v.title,
+          channelId: youtubeChannelId,
+          campaignId: "",
+          productLineId: defaultLineId,
+          vehicleTypeId: "",
+          contentTypeId: "",
+          funnelStageId: defaultFunnelId,
+          date: v.publishedAt,
+          reach: v.viewCount,
+          likes: v.likeCount,
+          comments: v.commentCount,
+          shares: 0,
+          clicks: 0,
+          leads: 0,
+          notes: "",
+          learning: "",
+        };
+      });
+
+      const untouched = metrics.filter((m) => !m.externalId);
+      const next = [...untouched, ...importedRows];
+      setMetrics(next);
+      setSummary({ created, updated });
+      setPhase("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar.");
+      setPhase("error");
+    }
+  }
+
+  useEffect(() => {
+    if (ran.current) return;
+    ran.current = true;
+    run();
+  }, []);
+
+  const progressLabel = (() => {
+    if (phase === "auth") return "Aguardando autorização do Google…";
+    if (phase === "fetching") {
+      if (!progress) return "Conectando ao YouTube…";
+      if (progress.phase === "fetching-channel") return "Buscando informações do canal…";
+      if (progress.phase === "listing") return `Listando vídeos (${progress.collected} encontrados)…`;
+      if (progress.phase === "stats") return `Buscando estatísticas (${progress.done}/${progress.total})…`;
+    }
+    if (phase === "importing") return "Salvando no banco de dados…";
+    if (phase === "done") return `${summary.created} novos · ${summary.updated} atualizados`;
+    if (phase === "error") return "Erro";
+    return "";
+  })();
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && phase !== "fetching" && phase !== "importing" && onClose()}>
+      <div className="w-full max-w-md rounded-[28px] bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Youtube size={22} className="text-red-600" />
+            <h2 className="font-black">Importar do YouTube</h2>
+          </div>
+          {(phase === "done" || phase === "error") && (
+            <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200">
+              <X size={18} />
+            </button>
+          )}
+        </div>
+
+        {phase !== "done" && phase !== "error" && (
+          <div className="space-y-3">
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full animate-pulse rounded-full bg-red-500" style={{ width: "100%" }} />
+            </div>
+            <p className="text-sm font-bold text-slate-600">{progressLabel}</p>
+          </div>
+        )}
+
+        {phase === "done" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-green-50 p-4">
+              <p className="text-sm font-black text-green-800">Importação concluída!</p>
+              <p className="mt-1 text-sm font-bold text-green-700">{summary.created} vídeos novos · {summary.updated} atualizados</p>
+            </div>
+            <button type="button" onClick={onClose} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+              Fechar
+            </button>
+          </div>
+        )}
+
+        {phase === "error" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-rose-50 p-4">
+              <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
+              <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={() => { ran.current = false; run(); ran.current = true; }} className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+                Tentar novamente
+              </button>
+              <button type="button" onClick={onClose} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function YouTubeSearchModal({ onSelect, onClose }: { onSelect: (video: YouTubeVideo) => void; onClose: () => void }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<YouTubeVideo[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function search(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!query.trim()) return;
+    setLoading(true);
+    setError("");
+    try {
+      const videos = await searchYouTube(query.trim());
+      setResults(videos);
+      if (!videos.length) setError("Nenhum vídeo encontrado. Tente outra busca.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao buscar vídeos.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="w-full max-w-2xl rounded-[34px] bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Youtube size={20} className="text-red-600" />
+            <h2 className="font-black">Buscar no YouTube</h2>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200"><X size={18} /></button>
+        </div>
+        <form onSubmit={search} className="mb-4 flex gap-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Pesquisar vídeos no YouTube..."
+            autoFocus
+            className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-4 py-2 outline-none focus:border-red-400"
+          />
+          <button disabled={loading || !query.trim()} className="rounded-2xl bg-red-600 px-4 font-black text-white disabled:bg-slate-200 disabled:text-slate-400">
+            {loading ? "..." : "Buscar"}
+          </button>
+        </form>
+        {error && <p className="mb-3 rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-700">{error}</p>}
+        {!results.length && !loading && !error && (
+          <p className="py-6 text-center text-sm font-bold text-slate-400">Digite uma busca para encontrar vídeos.</p>
+        )}
+        <div className="grid max-h-[55vh] grid-cols-2 gap-3 overflow-y-auto">
+          {results.map((video) => (
+            <button
+              key={video.videoId}
+              type="button"
+              onClick={() => { onSelect(video); onClose(); }}
+              className="rounded-2xl border border-slate-200 p-3 text-left transition hover:border-red-300 hover:bg-red-50"
+            >
+              <img src={video.thumbnail} alt={video.title} className="mb-2 w-full rounded-xl object-cover aspect-video" />
+              <p className="line-clamp-2 text-sm font-black leading-snug">{video.title}</p>
+              <p className="mt-1 text-xs font-bold text-slate-500">{video.channelTitle}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const subtasks = tasks.filter((item) => item.parentTaskId === task.id);
@@ -4096,6 +4785,19 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
     const form = new FormData(event.currentTarget);
     addTaskExternalLink(task.id, String(form.get("externalUrl")));
     event.currentTarget.reset();
+  }
+
+  const [ytOpen, setYtOpen] = useState(false);
+  const [driveOpen, setDriveOpen] = useState(false);
+
+  function addDriveFileToTask(file: DriveFile) {
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: file.name, type: file.mimeType.startsWith("image/") ? "foto" : file.mimeType.startsWith("video/") ? "video" : "arquivo", source: "external", url: file.url, previewUrl: file.previewUrl, originalSize: 0, compressedSize: 0, mimeType: file.mimeType };
+    updateTask(task.id, (current) => ({ ...current, attachments: [attachment, ...current.attachments] }));
+  }
+
+  function addYouTubeToTask(video: YouTubeVideo) {
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: video.title, type: "video", source: "external", url: video.url, previewUrl: video.previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
+    updateTask(task.id, (current) => ({ ...current, attachments: [attachment, ...current.attachments] }));
   }
 
   return (
@@ -4218,10 +4920,20 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           hint="Imagens até 2 MB, vídeos até 100 MB"
           onFiles={(files) => files[0] && addTaskAttachment(task.id, files[0])}
         />
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setDriveOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
+            <HardDrive size={15} /> Selecionar do Drive
+          </button>
+          <button type="button" onClick={() => setYtOpen(true)} className="flex items-center gap-2 rounded-2xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100">
+            <Youtube size={15} /> Buscar no YouTube
+          </button>
+        </div>
         <form onSubmit={addExternalAttachment} className="flex gap-2">
-          <input name="externalUrl" required placeholder="Cole um link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-          <button className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white">Adicionar link</button>
+          <input name="externalUrl" required placeholder="Ou cole um link do Google Drive / YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+          <button className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white">Adicionar</button>
         </form>
+        {driveOpen && <DriveExplorerModal onSelect={addDriveFileToTask} onClose={() => setDriveOpen(false)} />}
+        {ytOpen && <YouTubeSearchModal onSelect={addYouTubeToTask} onClose={() => setYtOpen(false)} />}
         <div className="space-y-2">{task.attachments.map((attachment) => (
           <div key={attachment.id} className="rounded-2xl bg-slate-50 p-3 text-sm font-black">
             <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.type}: {attachment.name}</a>
@@ -4542,7 +5254,7 @@ function PostReviewPanel({
   profileById: Map<string, Profile>;
   canReview: boolean;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
-  addPostReviewExternalAsset: (post: EditorialPost, url: string) => void;
+  addPostReviewExternalAsset: (post: EditorialPost, url: string, thumbnailUrl?: string) => void;
   deletePostReviewAsset: (assetId: string) => void;
   openMediaPreview: (item: MediaPreviewItem) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
@@ -4552,6 +5264,8 @@ function PostReviewPanel({
   const [adjustmentMessage, setAdjustmentMessage] = useState("");
   const [comment, setComment] = useState("");
   const [externalUrl, setExternalUrl] = useState("");
+  const [ytOpen, setYtOpen] = useState(false);
+  const [driveOpen, setDriveOpen] = useState(false);
 
   function submitComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -4570,6 +5284,14 @@ function PostReviewPanel({
     event.preventDefault();
     addPostReviewExternalAsset(post, externalUrl);
     setExternalUrl("");
+  }
+
+  function addDriveFileToReview(file: DriveFile) {
+    addPostReviewExternalAsset(post, file.url, file.previewUrl);
+  }
+
+  function addYouTubeToReview(video: YouTubeVideo) {
+    addPostReviewExternalAsset(post, video.url);
   }
 
   function removeSelectedAsset() {
@@ -4598,10 +5320,20 @@ function PostReviewPanel({
         hint="Imagens até 2 MB, vídeos até 100 MB"
         onFiles={(files) => addPostReviewAssets(post, files)}
       />
+      <div className="mb-3 flex flex-wrap gap-2">
+        <button type="button" onClick={() => setDriveOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
+          <HardDrive size={15} /> Selecionar do Drive
+        </button>
+        <button type="button" onClick={() => setYtOpen(true)} className="flex items-center gap-2 rounded-2xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100">
+          <Youtube size={15} /> Buscar no YouTube
+        </button>
+      </div>
       <form onSubmit={submitExternalAsset} className="mb-4 flex gap-2">
-        <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-        <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar link</button>
+        <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Ou cole um link do Google Drive / YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+        <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar</button>
       </form>
+      {driveOpen && <DriveExplorerModal onSelect={addDriveFileToReview} onClose={() => setDriveOpen(false)} />}
+      {ytOpen && <YouTubeSearchModal onSelect={addYouTubeToReview} onClose={() => setYtOpen(false)} />}
 
       {assets.length > 0 && (
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
@@ -4658,6 +5390,8 @@ function PostReviewPanel({
 function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, vehicleTypes, contentTypes, funnelStages, postTemplates, ideas, setIdeas, prepareIdeaAttachment, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "idea" && modal.id ? ideas.find((idea) => idea.id === modal.id) : undefined;
   const [externalUrl, setExternalUrl] = useState("");
+  const [ytOpen, setYtOpen] = useState(false);
+  const [driveOpen, setDriveOpen] = useState(false);
   const formRef = useRef<HTMLFormElement | null>(null);
   const draftIdeaId = useRef(editing?.id ?? crypto.randomUUID());
   const [selectedTemplateId, setSelectedTemplateId] = useState(editing?.templateId ?? "");
@@ -4698,6 +5432,16 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
     const attachment: TaskAttachment = { id: crypto.randomUUID(), name: youtubePreviewUrl(externalUrl) ? "Exemplo do YouTube" : "Exemplo do Google Drive", type: "video", source: "external", url: externalUrl, previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
     setAttachments((current) => [attachment, ...current]);
     setExternalUrl("");
+  }
+
+  function addDriveFileToIdea(file: DriveFile) {
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: file.name, type: file.mimeType.startsWith("image/") ? "foto" : file.mimeType.startsWith("video/") ? "video" : "arquivo", source: "external", url: file.url, previewUrl: file.previewUrl, originalSize: 0, compressedSize: 0, mimeType: file.mimeType };
+    setAttachments((current) => [attachment, ...current]);
+  }
+
+  function addYouTubeToIdea(video: YouTubeVideo) {
+    const attachment: TaskAttachment = { id: crypto.randomUUID(), name: video.title, type: "video", source: "external", url: video.url, previewUrl: video.previewUrl, originalSize: 0, compressedSize: 0, mimeType: "text/html" };
+    setAttachments((current) => [attachment, ...current]);
   }
 
   function changeCreationMode(mode: "zero" | "template") {
@@ -4746,10 +5490,20 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
             hint="Imagens até 2 MB, vídeos até 100 MB"
             onFiles={(files) => files[0] && addDraftFile(files[0])}
           />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => setDriveOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
+              <HardDrive size={15} /> Selecionar do Drive
+            </button>
+            <button type="button" onClick={() => setYtOpen(true)} className="flex items-center gap-2 rounded-2xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100">
+              <Youtube size={15} /> Buscar no YouTube
+            </button>
+          </div>
           <form onSubmit={addDraftLink} className="mt-3 flex gap-2">
-            <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Cole um link do Google Drive ou YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-            <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white disabled:bg-slate-200">Adicionar link</button>
+            <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Ou cole um link do Google Drive / YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+            <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white disabled:bg-slate-200">Adicionar</button>
           </form>
+          {driveOpen && <DriveExplorerModal onSelect={addDriveFileToIdea} onClose={() => setDriveOpen(false)} />}
+          {ytOpen && <YouTubeSearchModal onSelect={addYouTubeToIdea} onClose={() => setYtOpen(false)} />}
           <div className="mt-3 grid gap-2">
             {attachments.map((attachment) => (
               <div key={attachment.id} className="rounded-2xl bg-white p-3 text-sm font-black">
@@ -4800,6 +5554,8 @@ function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, con
     const linkedPost = posts.find((post) => post.id === postId);
     const value: PostMetric = {
       id: editing?.id ?? crypto.randomUUID(),
+      externalId: editing?.externalId,
+      videoType: editing?.videoType,
       postId: postId || undefined,
       postTitle: linkedPost?.title || String(form.get("postTitle")) || "Métrica avulsa",
       channelId: linkedPost?.channelId || String(form.get("channelId")) || "",

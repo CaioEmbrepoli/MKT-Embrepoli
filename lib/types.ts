@@ -97,6 +97,8 @@ export type EditorialPost = {
   publishAt: string;
   description: string;
   productionChecklist: ChecklistItem[];
+  publishedVideoId?: string;
+  publishedAt?: string;
 };
 
 export type FileAttachment = {
@@ -224,6 +226,7 @@ export type Task = {
 
 export type PostMetric = {
   id: string;
+  externalId?: string;
   postId?: string;
   postTitle: string;
   channelId: string;
@@ -241,6 +244,7 @@ export type PostMetric = {
   leads: number;
   notes: string;
   learning: string;
+  videoType?: 'video' | 'short';
 };
 
 export type Notification = {
