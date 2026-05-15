@@ -915,24 +915,31 @@ export default function Home() {
     setAuthError("");
     setAuthMessage("");
     if (supabase && isSupabaseConfigured) {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error || !data.user) {
-        setAuthError("Email ou senha incorretos. Verifique os dados e tente novamente.");
+      try {
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error || !data.user) {
+          setAuthError(error?.message === "Email not confirmed"
+            ? "Email ainda não confirmado. Verifique sua caixa de entrada."
+            : "Email ou senha incorretos. Verifique os dados e tente novamente.");
+          setAuthLoading(false);
+          return;
+        }
+        const profile = await ensureCurrentProfile(supabase);
+        if (!profile?.active) {
+          setCurrentUserId(profile?.id ?? data.user.id);
+          setAuthMode("pending");
+          setAuthMessage("Sua conta está aguardando aprovação de um Gestor ou Administrador.");
+          setAuthLoading(false);
+          return;
+        }
+        setCurrentUserId(profile.id);
         setAuthLoading(false);
-        return;
-      }
-      const profile = await ensureCurrentProfile(supabase);
-      if (!profile?.active) {
-        setCurrentUserId(profile?.id ?? data.user.id);
-        setAuthMode("pending");
-        setAuthMessage("Sua conta está aguardando aprovação de um Gestor ou Administrador.");
+        setAuthMode("login");
+        setLoggedIn(true);
+      } catch (err) {
+        setAuthError(`Erro ao conectar: ${err instanceof Error ? err.message : "tente novamente."}`);
         setAuthLoading(false);
-        return;
       }
-      setCurrentUserId(profile.id);
-      setAuthLoading(false);
-      setAuthMode("login");
-      setLoggedIn(true);
       return;
     }
 
