@@ -259,7 +259,8 @@ async function compressImageFile(file: File) {
     quality -= 0.08;
     blob = await canvasToBlob(canvas, "image/jpeg", quality);
   }
-  return new File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+  const FileClass = File as unknown as new (bits: BlobPart[], name: string, options?: FilePropertyBag) => File;
+  return new FileClass([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
 }
 
 function loadImage(file: File): Promise<HTMLImageElement> {
