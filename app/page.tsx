@@ -126,6 +126,7 @@ import type {
   TaskColumn,
   TaskPriority,
   TaskProgress,
+  TaskResetFrequency,
   VehicleType
 } from "@/lib/types";
 import {
@@ -175,6 +176,13 @@ const campaignAudienceOptions = seedCampaignAudiences.map((audience) => audience
 const fallbackPostFormats = ["Post", "Vídeo", "Story"];
 const priorities: TaskPriority[] = ["Alta", "Média", "Baixa"];
 const progresses: TaskProgress[] = ["Bloqueada", "No prazo", "Atenção", "Finalizando"];
+const resetFrequencies: { value: TaskResetFrequency; label: string }[] = [
+  { value: "none", label: "Nenhum" },
+  { value: "daily", label: "Diário" },
+  { value: "weekly", label: "Semanal" },
+  { value: "monthly", label: "Mensal" }
+];
+const weekDays = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 const priorityToneMap: Record<string, BadgeTone> = { Alta: "red", Média: "amber", Baixa: "blue" };
 const progressToneMap: Record<string, BadgeTone> = { Bloqueada: "red", "No prazo": "blue", Atenção: "amber", Finalizando: "green" };
 const roles: Role[] = ["admin", "gestor", "colaborador"];
@@ -203,6 +211,79 @@ function postFormatOptionsForChannel(channel?: Channel) {
 
 function defaultPostFormatForChannel(channel?: Channel) {
   return postFormatOptionsForChannel(channel)[0] ?? "Post";
+}
+
+function defaultTaskResetFields(): Pick<Task, "resetFrequency" | "resetTime" | "resetMonthLastDay"> {
+  return { resetFrequency: "none", resetTime: "23:59", resetMonthLastDay: false };
+}
+
+function saoPauloLocalDate(value = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(value);
+  const part = (type: string) => Number(parts.find((item) => item.type === type)?.value ?? 0);
+  return { year: part("year"), month: part("month"), day: part("day") };
+}
+
+function localSaoPauloToUtcIso(year: number, month: number, day: number, time: string) {
+  const [hour = 23, minute = 59] = time.split(":").map(Number);
+  return new Date(Date.UTC(year, month - 1, day, hour + 3, minute, 0, 0)).toISOString();
+}
+
+function lastDayOfMonth(year: number, month: number) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function calculateNextResetAt(task: Pick<Task, "resetFrequency" | "resetTime" | "resetWeekday" | "resetMonthDay" | "resetMonthLastDay">, from = new Date()) {
+  if (!task.resetFrequency || task.resetFrequency === "none") return "";
+  const local = saoPauloLocalDate(from);
+  const time = task.resetTime || "23:59";
+  const candidates: string[] = [];
+
+  if (task.resetFrequency === "daily") {
+    candidates.push(localSaoPauloToUtcIso(local.year, local.month, local.day, time));
+    const tomorrow = new Date(Date.UTC(local.year, local.month - 1, local.day + 1, 12));
+    const next = saoPauloLocalDate(tomorrow);
+    candidates.push(localSaoPauloToUtcIso(next.year, next.month, next.day, time));
+  }
+
+  if (task.resetFrequency === "weekly") {
+    const target = task.resetWeekday ?? 0;
+    const base = new Date(Date.UTC(local.year, local.month - 1, local.day, 12));
+    for (let offset = 0; offset <= 7; offset += 1) {
+      const candidate = new Date(base);
+      candidate.setUTCDate(base.getUTCDate() + offset);
+      if (candidate.getUTCDay() === target) {
+        const next = saoPauloLocalDate(candidate);
+        candidates.push(localSaoPauloToUtcIso(next.year, next.month, next.day, time));
+      }
+    }
+  }
+
+  if (task.resetFrequency === "monthly") {
+    for (let offset = 0; offset <= 1; offset += 1) {
+      const month = local.month + offset;
+      const year = local.year + Math.floor((month - 1) / 12);
+      const normalizedMonth = ((month - 1) % 12) + 1;
+      const day = task.resetMonthLastDay
+        ? lastDayOfMonth(year, normalizedMonth)
+        : Math.min(task.resetMonthDay ?? 1, lastDayOfMonth(year, normalizedMonth));
+      candidates.push(localSaoPauloToUtcIso(year, normalizedMonth, day, time));
+    }
+  }
+
+  return candidates.filter((candidate) => new Date(candidate).getTime() > from.getTime()).sort()[0] ?? "";
+}
+
+function resetScheduleLabel(task: Task) {
+  if (!task.resetFrequency || task.resetFrequency === "none") return "Sem reset automático";
+  if (task.resetFrequency === "daily") return `Diário às ${task.resetTime || "23:59"}`;
+  if (task.resetFrequency === "weekly") return `Semanal: ${weekDays[task.resetWeekday ?? 0]} às ${task.resetTime || "23:59"}`;
+  const day = task.resetMonthLastDay ? "último dia do mês" : `dia ${task.resetMonthDay ?? 1}`;
+  return `Mensal: ${day} às ${task.resetTime || "23:59"}`;
 }
 
 function stableCollisionDetection(args: Parameters<typeof pointerWithin>[0]) {
@@ -493,7 +574,7 @@ export default function Home() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem | null>(null);
   const [calendarMode, setCalendarMode] = useState<"Semana" | "Mês" | "Ano">("Mês");
-  const [visibleMonth, setVisibleMonth] = useState(new Date(2026, 4, 1));
+  const [visibleMonth, setVisibleMonth] = useState(new Date());
   const [configTab, setConfigTab] = useState<(typeof configTabs)[number]>("Equipe");
   const [ideasView, setIdeasView] = useState<"Quadro" | "Lista">("Quadro");
   const [ideasTab, setIdeasTab] = useState<"Todos" | "Estatísticas" | Idea["type"]>("Todos");
@@ -606,10 +687,21 @@ export default function Home() {
         })),
     [visiblePosts, currentUser.id, today]
   );
-  const currentNotifications = useMemo(
-    () => [...notifications.filter((item) => item.userId === currentUser.id), ...derivedTaskNotifications, ...derivedPostNotifications, ...derivedCampaignNotifications, ...derivedDeadlineNotifications, ...derivedCalendarNotifications].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
-    [notifications, derivedTaskNotifications, derivedPostNotifications, derivedCampaignNotifications, derivedDeadlineNotifications, derivedCalendarNotifications, currentUser.id]
-  );
+  const currentNotifications = useMemo(() => {
+    const merged = new Map<string, Notification>();
+    const derived = [
+      ...derivedTaskNotifications,
+      ...derivedPostNotifications,
+      ...derivedCampaignNotifications,
+      ...derivedDeadlineNotifications,
+      ...derivedCalendarNotifications
+    ];
+    for (const item of derived) merged.set(item.id, item);
+    for (const item of notifications.filter((notification) => notification.userId === currentUser.id)) {
+      merged.set(item.id, item);
+    }
+    return Array.from(merged.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }, [notifications, derivedTaskNotifications, derivedPostNotifications, derivedCampaignNotifications, derivedDeadlineNotifications, derivedCalendarNotifications, currentUser.id]);
   const seenNotificationIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -706,6 +798,7 @@ export default function Home() {
       "task_checklist_items",
       "task_comments",
       "task_attachments",
+      "task_reset_history",
       "post_metrics",
       "notifications"
     ];
@@ -1010,6 +1103,15 @@ export default function Home() {
     return supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl;
   }
 
+  async function removeFileFromStorage(bucket: string, url: string) {
+    if (!supabase || !url.includes("/storage/v1/object/public/")) return;
+    const marker = `/storage/v1/object/public/${bucket}/`;
+    const path = decodeURIComponent(url.split(marker)[1] ?? "");
+    if (!path || path === url) return;
+    const { error } = await supabase.storage.from(bucket).remove([path]);
+    if (error) console.warn("Não foi possível remover arquivo do Storage", error);
+  }
+
   async function prepareIdeaAttachment(ideaId: string, file: File) {
     setSaveStatus("saving");
     setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
@@ -1038,6 +1140,12 @@ export default function Home() {
       setSaveError(message);
       window.alert(message);
     }
+  }
+
+  async function deleteTaskAttachment(taskId: string, attachment: TaskAttachment) {
+    if (!window.confirm(`Excluir o anexo "${attachment.name}"?`)) return;
+    if (attachment.source === "upload") await removeFileFromStorage("task-attachments", attachment.url);
+    updateTask(taskId, (task) => ({ ...task, attachments: task.attachments.filter((item) => item.id !== attachment.id) }));
   }
 
   function addTaskExternalLink(taskId: string, url: string) {
@@ -1224,7 +1332,8 @@ export default function Home() {
         description: "",
         checklist: [],
         comments: [],
-        attachments: []
+        attachments: [],
+        ...defaultTaskResetFields()
       }
     ]);
   }
@@ -1248,7 +1357,8 @@ export default function Home() {
       description: "",
       checklist: [],
       comments: [],
-      attachments: []
+      attachments: [],
+      ...defaultTaskResetFields()
     };
     syncTasks((current) => [...current, subtask]);
   }
@@ -1486,6 +1596,7 @@ export default function Home() {
         taskColumns={taskColumns}
         updateTask={updateTask}
         addTaskAttachment={addTaskAttachment}
+        deleteTaskAttachment={deleteTaskAttachment}
         addTaskExternalLink={addTaskExternalLink}
         addSubtask={addSubtask}
       />
@@ -1768,11 +1879,26 @@ function Header({
   logout: () => void;
 }) {
   const title = menu.find((item) => item.id === activeSection)?.label ?? "Painel";
-  const unreadCount = notifications.filter((item) => !item.read && !item.id.startsWith("task-assigned:")).length;
+  const unreadCount = notifications.filter((item) => !item.read).length;
+  function markNotificationsRead(ids: string[]) {
+    const idsToRead = new Set(ids);
+    setNotifications((current) => {
+      const visibleById = new Map(notifications.map((item) => [item.id, item]));
+      const nextById = new Map(current.map((item) => [item.id, item]));
+      for (const id of idsToRead) {
+        const existing = nextById.get(id);
+        if (existing) {
+          nextById.set(id, { ...existing, read: true });
+          continue;
+        }
+        const visible = visibleById.get(id);
+        if (visible) nextById.set(id, { ...visible, read: true });
+      }
+      return Array.from(nextById.values());
+    });
+  }
   function openNotification(notification: Notification) {
-    if (!notification.id.startsWith("task-assigned:")) {
-      setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, read: true } : item));
-    }
+    markNotificationsRead([notification.id]);
     setNotificationsOpen(false);
     if (notification.targetKind === "task") {
       setModal({ kind: "task", id: notification.targetId });
@@ -1837,13 +1963,13 @@ function Header({
             <div className="absolute right-0 z-30 mt-3 w-96 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl animate-fade-in-up">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="font-black">Notificações</h3>
-                <button onClick={() => setNotifications((current) => current.map((item) => item.userId === currentUser.id ? { ...item, read: true } : item))} className="text-xs font-black text-blue-700">Marcar lidas</button>
+                <button onClick={() => markNotificationsRead(notifications.map((notification) => notification.id))} className="text-xs font-black text-blue-700">Marcar lidas</button>
               </div>
               <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
                 {notifications.map((notification) => (
-                  <button key={notification.id} onClick={() => openNotification(notification)} className={`w-full rounded-2xl p-3 text-left transition hover:bg-blue-50 ${notification.read ? "bg-white" : "bg-blue-50"}`}>
-                    <p className="text-sm font-black">{notification.title}</p>
-                    <p className="mt-1 line-clamp-2 text-xs font-bold text-slate-500">{notification.description}</p>
+                  <button key={notification.id} onClick={() => openNotification(notification)} className={`w-full rounded-2xl p-3 text-left transition hover:bg-blue-50 ${notification.read ? "bg-slate-50" : "bg-blue-50"}`}>
+                    <p className={`text-sm font-black ${notification.read ? "text-slate-600" : "text-slate-950"}`}>{notification.title}</p>
+                    <p className={`mt-1 line-clamp-2 text-xs font-bold ${notification.read ? "text-slate-400" : "text-slate-500"}`}>{notification.description}</p>
                     <p className="mt-2 text-[11px] font-bold text-slate-400">{formatDate(notification.createdAt)}</p>
                   </button>
                 ))}
@@ -2106,6 +2232,8 @@ function EditorialCalendar(props: {
                       key={day.toISOString()}
                       day={day}
                       isToday={sameDay(day, today)}
+                      isCurrentMonth={day.getMonth() === props.visibleMonth.getMonth() && day.getFullYear() === props.visibleMonth.getFullYear()}
+                      onOtherMonthClick={() => props.setVisibleMonth(new Date(day.getFullYear(), day.getMonth(), 1))}
                       calendarDates={props.calendarDates.filter((item) => sameDay(new Date(`${item.date}T12:00:00`), day))}
                       posts={props.posts.filter((post) => sameDay(new Date(post.publishAt), day))}
                       channelById={props.channelById}
@@ -2126,6 +2254,8 @@ function EditorialCalendar(props: {
 function CalendarDay({
   day,
   isToday,
+  isCurrentMonth,
+  onOtherMonthClick,
   calendarDates,
   posts,
   channelById,
@@ -2134,6 +2264,8 @@ function CalendarDay({
 }: {
   day: Date;
   isToday: boolean;
+  isCurrentMonth: boolean;
+  onOtherMonthClick: () => void;
   calendarDates: CalendarDate[];
   posts: EditorialPost[];
   channelById: Map<string, Channel>;
@@ -2147,7 +2279,12 @@ function CalendarDay({
     setModal({ kind: "post", date });
   }
   return (
-    <div ref={setNodeRef} onClick={createPostOnDay} className={`min-h-36 cursor-pointer rounded-3xl border p-2 text-left motion-smooth ${isToday ? "border-blue-500 bg-blue-100 ring-2 ring-blue-200" : isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title="Criar post neste dia">
+    <div
+      ref={setNodeRef}
+      onClick={isCurrentMonth ? createPostOnDay : onOtherMonthClick}
+      title={isCurrentMonth ? "Criar post neste dia" : "Ir para este mês"}
+      className={`min-h-36 cursor-pointer rounded-3xl border p-2 text-left motion-smooth ${!isCurrentMonth ? "opacity-40" : ""} ${isToday ? "border-blue-500 bg-blue-100 ring-2 ring-blue-200" : isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`}
+    >
       <p className={`inline-grid h-7 min-w-7 place-items-center rounded-full px-2 text-sm font-black ${isToday ? "bg-blue-700 text-white" : "text-slate-700"}`}>{day.getDate()}</p>
       {calendarDates.length > 0 && (
         <div className="mt-1 flex flex-wrap gap-1">
@@ -2687,7 +2824,9 @@ function TaskQuickMenu({ task, columns, x, y, close, setModal, setTasks }: { tas
   return (
     <div className="fixed z-[70] w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl" style={{ left: x, top: y }} onMouseLeave={close}>
       <button type="button" onClick={() => { setModal({ kind: "task", id: task.id }); close(); }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black hover:bg-blue-50">Editar</button>
-      <button type="button" onClick={() => { setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id)); close(); }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black text-rose-700 hover:bg-rose-50">Excluir</button>
+      {!task.fixedGoalKey && (
+        <button type="button" onClick={() => { setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id)); close(); }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black text-rose-700 hover:bg-rose-50">Excluir</button>
+      )}
       <div className="my-1 border-t border-slate-100" />
       <p className="px-3 py-1 text-[11px] font-black uppercase text-slate-400">Mover para</p>
       {columns.map((column) => (
@@ -3223,7 +3362,15 @@ function Metrics({
   const previewMetrics = useMemo(() => top20.slice(0, 10), [top20]);
 
   const metricPostIds = useMemo(() => new Set(metrics.map((m) => m.postId).filter(Boolean)), [metrics]);
-  const postsWithoutMetric = useMemo(() => posts.filter((post) => !metricPostIds.has(post.id) && !metrics.some((m) => m.postTitle === post.title)).slice(0, 5), [posts, metricPostIds, metrics]);
+  const postsWithoutMetric = useMemo(() =>
+    posts
+      .filter((post) =>
+        post.status === "Publicado" &&
+        !metricPostIds.has(post.id) &&
+        !metrics.some((m) => m.postTitle === post.title)
+      )
+      .slice(0, 5),
+  [posts, metricPostIds, metrics]);
   const winners = useMemo(() => filteredMetrics.filter((m) => m.leads > 0 && metricEngagementRate(m) >= 5).slice(0, 4), [filteredMetrics]);
   const weakMetrics = useMemo(() => filteredMetrics.filter((m) => m.reach < averageReach * 0.7 || m.leads === 0).slice(0, 4), [filteredMetrics, averageReach]);
 
@@ -3259,7 +3406,8 @@ function Metrics({
         { id: crypto.randomUUID(), label: "Propor ajuste de conteúdo ou campanha", done: false }
       ],
       comments: [],
-      attachments: []
+      attachments: [],
+      ...defaultTaskResetFields()
     }, ...current]);
   }
 
@@ -4070,6 +4218,7 @@ function EntityModal(props: {
   taskColumns: TaskColumn[];
   updateTask: (taskId: string, updater: (task: Task) => Task) => void;
   addTaskAttachment: (taskId: string, file: File) => void;
+  deleteTaskAttachment: (taskId: string, attachment: TaskAttachment) => void;
   addTaskExternalLink: (taskId: string, url: string) => void;
   addSubtask: (task: Task, title?: string) => void;
 }) {
@@ -4528,15 +4677,21 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
       const byExt = new Map(
         metrics.filter((m) => m.externalId).map((m) => [m.externalId!, m] as const)
       );
+      // Métricas manuais (sem externalId) vinculadas a posts pelo publishedVideoId
+      const byPostId = new Map(
+        metrics
+          .filter((m) => !m.externalId && m.postId)
+          .map((m) => [m.postId!, m] as const)
+      );
 
       let created = 0;
       let updated = 0;
       const importedRows: PostMetric[] = videos.map((v) => {
         const externalId = `yt:${v.videoId}`;
-        const existing = byExt.get(externalId);
+        const linkedPost = posts.find((p) => p.publishedVideoId === v.videoId);
+        const existing = byExt.get(externalId) ?? (linkedPost ? byPostId.get(linkedPost.id) : undefined);
         if (existing) updated += 1;
         else created += 1;
-        const linkedPost = posts.find((p) => p.publishedVideoId === v.videoId);
         return {
           id: existing?.id ?? crypto.randomUUID(),
           externalId,
@@ -4716,7 +4871,7 @@ function YouTubeSearchModal({ onSelect, onClose }: { onSelect: (video: YouTubeVi
   );
 }
 
-function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
+function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, deleteTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const subtasks = tasks.filter((item) => item.parentTaskId === task.id);
   const parentTask = task.parentTaskId ? tasks.find((item) => item.id === task.parentTaskId) : undefined;
@@ -4801,6 +4956,16 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
     updateTask(task.id, (current) => ({ ...current, attachments: [attachment, ...current.attachments] }));
   }
 
+  function updateResetSchedule(patch: Partial<Task>) {
+    updateTask(task.id, (current) => {
+      const next = { ...current, ...patch };
+      return {
+        ...next,
+        nextResetAt: calculateNextResetAt(next)
+      };
+    });
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
@@ -4834,16 +4999,19 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
             </button>
           )}
         </div>
-        <DeleteButton
-          label="Excluir tarefa"
-          onDelete={() => {
-            setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id));
-            close();
-          }}
-        />
+        {!task.fixedGoalKey && (
+          <DeleteButton
+            label="Excluir tarefa"
+            onDelete={() => {
+              setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id));
+              close();
+            }}
+          />
+        )}
       </div>
 
       <input value={task.title} onChange={(event) => updateTask(task.id, (current) => ({ ...current, title: event.target.value }))} className="w-full rounded-2xl border-0 bg-transparent px-0 py-1 text-3xl font-black outline-none focus:ring-0" />
+      {task.fixedGoalKey && <Badge tone="purple">Card fixo de metas</Badge>}
 
       <div className="grid gap-3 lg:grid-cols-2">
         <DetailRow label="Criado por"><span className="font-bold text-slate-600">{profileById.get(task.createdBy)?.name}</span></DetailRow>
@@ -4859,6 +5027,48 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
       <section className="space-y-2">
         <h3 className="font-black">Descrição</h3>
         <textarea value={task.description} rows={7} placeholder="Do que se trata esta tarefa?" onChange={(event) => updateTask(task.id, (current) => ({ ...current, description: event.target.value }))} className="w-full resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-blue-500" />
+      </section>
+
+      <section className="space-y-3 border-t border-slate-200 pt-4">
+        <div>
+          <h3 className="font-black">Reset automático</h3>
+          <p className="mt-1 text-sm font-bold text-slate-500">{resetScheduleLabel(task)}</p>
+          {task.nextResetAt && <p className="mt-1 text-xs font-black text-blue-700">Próximo reset: {formatDate(task.nextResetAt)}</p>}
+          {task.lastResetAt && <p className="mt-1 text-xs font-bold text-slate-400">Último reset: {formatDate(task.lastResetAt)}</p>}
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <SelectControlled
+            label="Frequência"
+            value={task.resetFrequency ?? "none"}
+            options={resetFrequencies.map((item) => [item.value, item.label])}
+            onChange={(value) => {
+              const frequency = value as TaskResetFrequency;
+              updateResetSchedule({
+                resetFrequency: frequency,
+                resetTime: task.resetTime || "23:59",
+                resetWeekday: frequency === "weekly" ? task.resetWeekday ?? 0 : task.resetWeekday,
+                resetMonthDay: frequency === "monthly" && !task.resetMonthLastDay ? task.resetMonthDay ?? 1 : task.resetMonthDay,
+                resetMonthLastDay: frequency === "monthly" ? task.resetMonthLastDay ?? false : false,
+                nextResetAt: frequency === "none" ? "" : task.nextResetAt
+              });
+            }}
+          />
+          {task.resetFrequency !== "none" && <TextInputControlled label="Horário" type="time" value={task.resetTime || "23:59"} onChange={(value) => updateResetSchedule({ resetTime: value || "23:59" })} />}
+          {task.resetFrequency === "weekly" && (
+            <SelectControlled label="Dia da semana" value={String(task.resetWeekday ?? 0)} options={weekDays.map((day, index) => [String(index), day])} onChange={(value) => updateResetSchedule({ resetWeekday: Number(value) })} />
+          )}
+          {task.resetFrequency === "monthly" && (
+            <>
+              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700">
+                <input type="checkbox" checked={task.resetMonthLastDay} onChange={(event) => updateResetSchedule({ resetMonthLastDay: event.target.checked })} />
+                Último dia do mês
+              </label>
+              {!task.resetMonthLastDay && (
+                <TextInputControlled label="Dia do mês" type="number" min={1} max={31} value={String(task.resetMonthDay ?? 1)} onChange={(value) => updateResetSchedule({ resetMonthDay: Math.min(31, Math.max(1, Number(value) || 1)) })} />
+              )}
+            </>
+          )}
+        </div>
       </section>
 
       <section className="space-y-3 border-t border-slate-200 pt-4">
@@ -4937,7 +5147,12 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         {ytOpen && <YouTubeSearchModal onSelect={addYouTubeToTask} onClose={() => setYtOpen(false)} />}
         <div className="space-y-2">{task.attachments.map((attachment) => (
           <div key={attachment.id} className="rounded-2xl bg-slate-50 p-3 text-sm font-black">
-            <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.type}: {attachment.name}</a>
+            <div className="flex items-start justify-between gap-3">
+              <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.type}: {attachment.name}</a>
+              <button type="button" onClick={() => deleteTaskAttachment(task.id, attachment)} className="rounded-xl bg-rose-100 p-2 text-rose-700 transition hover:bg-rose-200" title="Excluir anexo">
+                <Trash2 size={15} />
+              </button>
+            </div>
             <p className="mt-1 text-xs font-bold text-slate-400">{attachment.source === "external" ? externalMediaLabel(attachment) : `${formatBytes(attachment.compressedSize || attachment.originalSize)}${attachment.originalSize && attachment.compressedSize && attachment.originalSize !== attachment.compressedSize ? ` após compressão de ${formatBytes(attachment.originalSize)}` : ""}`}</p>
             <button type="button" onClick={() => openMediaPreview(attachment)} className="mt-3 block w-full overflow-hidden rounded-2xl text-left">
               <MediaPreviewContent item={attachment} />
@@ -5147,7 +5362,7 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const status = editing?.status ?? "Ideia";
+    const status = editing?.status ?? "Produção";
     const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), ideaId: String(form.get("ideaId") ?? "") || undefined, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), channelId: String(form.get("channelId")), campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel), order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")), productionChecklist };
     setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
     const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
@@ -5575,7 +5790,13 @@ function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, con
       notes: String(form.get("notes")),
       learning: String(form.get("learning"))
     };
-    setMetrics((current) => editing ? current.map((metric) => metric.id === value.id ? value : metric) : [value, ...current]);
+    setMetrics((current) => {
+      if (editing) return current.map((metric) => metric.id === value.id ? value : metric);
+      // Evita duplicar: se já existe métrica com o mesmo postId, atualiza em vez de criar
+      const samePost = value.postId ? current.find((m) => m.postId === value.postId) : undefined;
+      if (samePost) return current.map((m) => m.id === samePost.id ? { ...value, id: samePost.id } : m);
+      return [value, ...current];
+    });
     close();
   }
   return <><EntityForm onSubmit={submit}><Select name="postId" label="Post vinculado" defaultValue={editing?.postId ?? ""} options={[["", "Métrica avulsa"], ...posts.map((post) => [post.id, post.title])]} /><TextInput name="postTitle" label="Nome do post/registro" required defaultValue={editing?.postTitle} /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={editing?.date ?? todayIso()} /><Select name="channelId" label="Canal" defaultValue={editing?.channelId} options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required defaultValue={String((editing as unknown as Record<string, number | undefined>)?.[field] ?? "")} />)}<TextArea name="notes" label="Observações do resultado" defaultValue={editing?.notes} /><TextArea name="learning" label="Aprendizado" defaultValue={editing?.learning} /><SubmitButton>Salvar</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir métrica" onDelete={() => { setMetrics((current) => current.filter((metric) => metric.id !== editing.id)); close(); }} />}</>;
@@ -5591,7 +5812,7 @@ function PostModal({ modal, currentUser, profiles, channels, productLines, vehic
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const status = editing?.status ?? "Ideia";
+    const status = editing?.status ?? "Produção";
     const value: EditorialPost = {
       id: editing?.id ?? crypto.randomUUID(),
       title: String(form.get("title")),
@@ -5831,6 +6052,10 @@ function Select({ label, name, options, defaultValue }: { label: string; name: s
 
 function SelectControlled({ label, value, options, onChange }: { label: string; value: string; options: string[][]; onChange: (value: string) => void }) {
   return <label className="block text-sm font-bold text-slate-600">{label}<select value={value} onChange={(event) => onChange(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{options.map(([optionValue, labelText]) => <option key={optionValue} value={optionValue}>{labelText}</option>)}</select></label>;
+}
+
+function TextInputControlled({ label, value, onChange, type = "text", min, max }: { label: string; value: string; onChange: (value: string) => void; type?: string; min?: number; max?: number }) {
+  return <label className="block text-sm font-bold text-slate-600">{label}<input value={value} onChange={(event) => onChange(event.target.value)} type={type} min={min} max={max} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
 }
 
 function FileDropZone({
