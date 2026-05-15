@@ -20,6 +20,59 @@ async function getConfig(): Promise<GoogleConfig> {
   return configCache!;
 }
 
+// ─── OAuth Token Cache (localStorage) ────────────────────────────────────────
+// Evita mostrar o seletor de conta Google a cada acesso ao Drive/YouTube.
+// Tokens do Google expiram em ~1h; guardamos com 55min de validade por segurança.
+
+const TOKEN_CACHE_KEY = "embrepoli_google_tokens";
+
+type CachedToken = {
+  token: string;
+  scope: string;
+  expiresAt: number; // timestamp ms
+};
+
+function readTokenCache(): CachedToken[] {
+  try {
+    const raw = localStorage.getItem(TOKEN_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as CachedToken[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeTokenCache(entries: CachedToken[]): void {
+  try {
+    localStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify(entries));
+  } catch {
+    // ignora erros de storage (janela privada, cota cheia, etc.)
+  }
+}
+
+function getCachedToken(scope: string): string | null {
+  const now = Date.now();
+  const entry = readTokenCache().find(
+    (c) => c.scope === scope && c.expiresAt > now + 60_000 // 1min de margem
+  );
+  return entry?.token ?? null;
+}
+
+function saveCachedToken(scope: string, token: string): void {
+  const entries = readTokenCache().filter((c) => c.scope !== scope);
+  entries.push({ token, scope, expiresAt: Date.now() + 55 * 60 * 1000 });
+  writeTokenCache(entries);
+}
+
+/** Limpa todos os tokens salvos — útil para forçar nova autenticação */
+export function clearGoogleTokenCache(): void {
+  try {
+    localStorage.removeItem(TOKEN_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) {
@@ -56,11 +109,17 @@ async function ensureGis(): Promise<void> {
   gisReady = true;
 }
 
-function requestAccessToken(clientId: string, scope: string): Promise<string> {
+function requestAccessToken(
+  clientId: string,
+  scope: string,
+  hint?: string
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const client = window.google.accounts.oauth2.initTokenClient({
       client_id: clientId,
       scope,
+      // hint preenche o campo de email automaticamente na tela de consentimento
+      ...(hint ? { login_hint: hint } : {}),
       callback: (response: { access_token?: string; error?: string }) => {
         if (response.access_token) {
           resolve(response.access_token);
@@ -73,13 +132,40 @@ function requestAccessToken(clientId: string, scope: string): Promise<string> {
   });
 }
 
+/** Email salvo da última autenticação Google bem-sucedida */
+const HINT_KEY = "embrepoli_google_hint";
+
+function getSavedHint(): string | undefined {
+  try { return localStorage.getItem(HINT_KEY) ?? undefined; } catch { return undefined; }
+}
+function saveHint(email: string): void {
+  try { localStorage.setItem(HINT_KEY, email); } catch { /* ignore */ }
+}
+
 async function getOAuthToken(scope: string): Promise<string> {
+  // 1. Retorna token em cache se ainda válido
+  const cached = getCachedToken(scope);
+  if (cached) return cached;
+
   const { clientId } = await getConfig();
   if (!clientId) {
     throw new Error("Google Client ID não configurado. Verifique GOOGLE_CLIENT_ID na Vercel.");
   }
   await ensureGis();
-  return requestAccessToken(clientId, scope);
+
+  // 2. Passa o e-mail salvo como hint → Google pula a tela de seleção de conta
+  const hint = getSavedHint();
+  const token = await requestAccessToken(clientId, scope, hint);
+
+  // 3. Persiste token e tenta salvar o e-mail para próximas sessões
+  saveCachedToken(scope, token);
+  // Tenta extrair o e-mail do token (tokeninfo endpoint) em background
+  fetch(`https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${token}`)
+    .then((r) => r.json())
+    .then((info: { email?: string }) => { if (info.email) saveHint(info.email); })
+    .catch(() => { /* não crítico */ });
+
+  return token;
 }
 
 export type DriveFile = {
