@@ -1640,23 +1640,21 @@ function LoginScreen({
   onLogout: () => void;
 }) {
   const [localError, setLocalError] = useState("");
-  const formRef = useRef<HTMLFormElement>(null);
+  const [emailValue, setEmailValue] = useState(!isSupabaseConfigured && mode === "login" ? profiles[0]?.email ?? "" : "");
+  const [passwordValue, setPasswordValue] = useState(!isSupabaseConfigured && mode === "login" ? "embrepoli" : "");
+  const [nameValue, setNameValue] = useState("");
+  const [confirmPasswordValue, setConfirmPasswordValue] = useState("");
 
   function handleSubmit() {
     setLocalError("");
-    const form = new FormData(formRef.current!);
-    const email = String(form.get("email") ?? "");
-    const password = String(form.get("password") ?? "");
-    const confirmPassword = String(form.get("confirmPassword") ?? "");
-    const name = String(form.get("name") ?? "");
-    if (mode === "signup" && password !== confirmPassword) {
+    if (mode === "signup" && passwordValue !== confirmPasswordValue) {
       setLocalError("As senhas não conferem.");
       return;
     }
-    if (mode === "login") onLogin(email, password);
-    if (mode === "signup") onSignup(name, email, password);
-    if (mode === "forgot") onForgotPassword(email);
-    if (mode === "reset") onResetPassword(password);
+    if (mode === "login") onLogin(emailValue, passwordValue);
+    if (mode === "signup") onSignup(nameValue, emailValue, passwordValue);
+    if (mode === "forgot") onForgotPassword(emailValue);
+    if (mode === "reset") onResetPassword(passwordValue);
   }
 
   const title = mode === "signup" ? "Criar conta" : mode === "forgot" ? "Recuperar senha" : mode === "reset" ? "Nova senha" : mode === "pending" ? "Aguardando aprovação" : "Entrar";
@@ -1692,11 +1690,35 @@ function LoginScreen({
             <button type="button" onClick={onLogout} className="w-full rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600">Sair desta conta</button>
           </div>
         ) : (
-          <form ref={formRef} onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="mt-6 space-y-3">
-            {mode === "signup" && <TextInput name="name" label="Nome" required />}
-            {mode !== "reset" && <TextInput name="email" label="Email" type="email" autoComplete="email" required defaultValue={!isSupabaseConfigured && mode === "login" ? profiles[0]?.email : ""} />}
-            {mode !== "forgot" && <PasswordInput name="password" label={mode === "reset" ? "Nova senha" : "Senha"} autoComplete="current-password" required defaultValue={!isSupabaseConfigured && mode === "login" ? "embrepoli" : ""} />}
-            {mode === "signup" && <PasswordInput name="confirmPassword" label="Confirmar senha" required />}
+          <div className="mt-6 space-y-3">
+            {mode === "signup" && (
+              <label className="block text-sm font-bold text-slate-600">
+                Nome
+                <input type="text" required autoComplete="name" value={nameValue} onChange={(e) => setNameValue(e.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" />
+              </label>
+            )}
+            {mode !== "reset" && (
+              <label className="block text-sm font-bold text-slate-600">
+                Email
+                <input type="email" required autoComplete="email" value={emailValue} onChange={(e) => setEmailValue(e.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" />
+              </label>
+            )}
+            {mode !== "forgot" && (
+              <PasswordInput
+                label={mode === "reset" ? "Nova senha" : "Senha"}
+                autoComplete="current-password"
+                value={passwordValue}
+                onChange={setPasswordValue}
+              />
+            )}
+            {mode === "signup" && (
+              <PasswordInput
+                label="Confirmar senha"
+                autoComplete="new-password"
+                value={confirmPasswordValue}
+                onChange={setConfirmPasswordValue}
+              />
+            )}
             <button
               type="button"
               disabled={loading}
@@ -1705,7 +1727,7 @@ function LoginScreen({
             >
               {loading ? "Aguarde..." : mode === "signup" ? "Criar conta" : mode === "forgot" ? "Enviar link" : mode === "reset" ? "Salvar nova senha" : "Entrar"}
             </button>
-          </form>
+          </div>
         )}
 
         {mode === "login" && <button type="button" onClick={() => setMode("forgot")} className="mt-4 w-full text-center text-sm font-black text-blue-700">Esqueci minha senha</button>}
@@ -1716,13 +1738,17 @@ function LoginScreen({
   );
 }
 
-function PasswordInput({ name, label, required, defaultValue = "", autoComplete }: { name: string; label: string; required?: boolean; defaultValue?: string; autoComplete?: string }) {
+function PasswordInput({ name, label, required, defaultValue, autoComplete, value, onChange }: { name?: string; label: string; required?: boolean; defaultValue?: string; autoComplete?: string; value?: string; onChange?: (v: string) => void }) {
   const [visible, setVisible] = useState(false);
+  const controlled = value !== undefined && onChange !== undefined;
   return (
     <label className="block text-sm font-bold text-slate-600">
       {label}
       <span className="mt-1 flex rounded-2xl border border-slate-200 bg-white focus-within:border-blue-500">
-        <input name={name} type={visible ? "text" : "password"} required={required} defaultValue={defaultValue} autoComplete={autoComplete} className="min-w-0 flex-1 rounded-2xl px-3 py-2 text-slate-950 outline-none" />
+        {controlled
+          ? <input type={visible ? "text" : "password"} required={required} autoComplete={autoComplete} value={value} onChange={(e) => onChange(e.target.value)} className="min-w-0 flex-1 rounded-2xl px-3 py-2 text-slate-950 outline-none" />
+          : <input name={name} type={visible ? "text" : "password"} required={required} defaultValue={defaultValue} autoComplete={autoComplete} className="min-w-0 flex-1 rounded-2xl px-3 py-2 text-slate-950 outline-none" />
+        }
         <button type="button" onClick={() => setVisible((value) => !value)} className="px-3 text-slate-500" aria-label={visible ? "Ocultar senha" : "Mostrar senha"}>
           {visible ? <EyeOff size={18} /> : <Eye size={18} />}
         </button>
