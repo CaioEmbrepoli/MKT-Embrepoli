@@ -1640,10 +1640,11 @@ function LoginScreen({
   onLogout: () => void;
 }) {
   const [localError, setLocalError] = useState("");
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const formRef = useRef<HTMLFormElement>(null);
+
+  function handleSubmit() {
     setLocalError("");
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(formRef.current!);
     const email = String(form.get("email") ?? "");
     const password = String(form.get("password") ?? "");
     const confirmPassword = String(form.get("confirmPassword") ?? "");
@@ -1691,12 +1692,19 @@ function LoginScreen({
             <button type="button" onClick={onLogout} className="w-full rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600">Sair desta conta</button>
           </div>
         ) : (
-          <form onSubmit={submit} method="post" action="#" className="mt-6 space-y-3">
+          <form ref={formRef} onSubmit={(e) => { e.preventDefault(); handleSubmit(); }} className="mt-6 space-y-3">
             {mode === "signup" && <TextInput name="name" label="Nome" required />}
             {mode !== "reset" && <TextInput name="email" label="Email" type="email" autoComplete="email" required defaultValue={!isSupabaseConfigured && mode === "login" ? profiles[0]?.email : ""} />}
             {mode !== "forgot" && <PasswordInput name="password" label={mode === "reset" ? "Nova senha" : "Senha"} autoComplete="current-password" required defaultValue={!isSupabaseConfigured && mode === "login" ? "embrepoli" : ""} />}
             {mode === "signup" && <PasswordInput name="confirmPassword" label="Confirmar senha" required />}
-            <SubmitButton full>{loading ? "Aguarde..." : mode === "signup" ? "Criar conta" : mode === "forgot" ? "Enviar link" : mode === "reset" ? "Salvar nova senha" : "Entrar"}</SubmitButton>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={handleSubmit}
+              className="w-full inline-flex items-center justify-center rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950 disabled:opacity-60"
+            >
+              {loading ? "Aguarde..." : mode === "signup" ? "Criar conta" : mode === "forgot" ? "Enviar link" : mode === "reset" ? "Salvar nova senha" : "Entrar"}
+            </button>
           </form>
         )}
 
