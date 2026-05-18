@@ -1,10 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { GOOGLE_SCOPES, googleRedirectUri, verifyGoogleState } from "@/lib/google-server";
+import { GOOGLE_SCOPES_BY_SERVICE, type GoogleService, googleRedirectUri, normalizeGoogleService, verifyGoogleState } from "@/lib/google-server";
 
 type GoogleState = {
   userId: string;
   organizationId: string;
+  googleService?: GoogleService;
   createdAt: number;
 };
 
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
     });
     const userInfo = await userInfoResponse.json();
     const googleEmail = String(userInfo.email || "Conta Google conectada");
+    const googleService = normalizeGoogleService(payload.googleService);
 
     const service = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false }
@@ -68,18 +70,19 @@ export async function GET(request: Request) {
     const expiresAt = new Date(Date.now() + Number(tokenData.expires_in ?? 3600) * 1000).toISOString();
     const { error } = await service.from("google_connections").upsert({
       organization_id: payload.organizationId,
+      service: googleService,
       google_email: googleEmail,
-      scopes: GOOGLE_SCOPES,
+      scopes: GOOGLE_SCOPES_BY_SERVICE[googleService],
       access_token: String(tokenData.access_token),
       refresh_token: String(tokenData.refresh_token),
       expires_at: expiresAt,
       connected_by: payload.userId,
       connected_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
-    }, { onConflict: "organization_id" });
+    }, { onConflict: "organization_id,service" });
     if (error) throw error;
 
-    return siteRedirect(request, { google: "connected" });
+    return siteRedirect(request, { google: "connected", service: googleService });
   } catch (error) {
     return siteRedirect(request, { google: "error", message: error instanceof Error ? error.message : "oauth_failed" });
   }

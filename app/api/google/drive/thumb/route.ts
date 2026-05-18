@@ -8,7 +8,7 @@ export async function GET(request: Request) {
 
   try {
     const context = await googleRequestContext(request);
-    const token = await getGoogleAccessToken(context);
+    const token = await getGoogleAccessToken(context, "drive");
     const metaRes = await fetch(
       `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?fields=thumbnailLink%2CmimeType%2Cname`,
       { headers: { Authorization: `Bearer ${token}` } }

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { GOOGLE_SCOPES, googleRedirectUri, googleRequestContext, requireGoogleManager, signGoogleState } from "@/lib/google-server";
+import { GOOGLE_SCOPES_BY_SERVICE, googleRedirectUri, googleRequestContext, normalizeGoogleService, requireGoogleManager, signGoogleState } from "@/lib/google-server";
 
 export async function GET(request: Request) {
   try {
     const context = await googleRequestContext(request);
     requireGoogleManager(context);
+    const googleService = normalizeGoogleService(new URL(request.url).searchParams.get("service"));
 
     const clientId = process.env.GOOGLE_CLIENT_ID;
     if (!clientId) return NextResponse.json({ error: "GOOGLE_CLIENT_ID nao configurado." }, { status: 500 });
@@ -12,6 +13,7 @@ export async function GET(request: Request) {
     const state = signGoogleState({
       userId: context.userId,
       organizationId: context.organizationId,
+      googleService,
       nonce: crypto.randomUUID(),
       createdAt: Date.now()
     });
@@ -20,7 +22,7 @@ export async function GET(request: Request) {
     url.searchParams.set("client_id", clientId);
     url.searchParams.set("redirect_uri", googleRedirectUri(request));
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", GOOGLE_SCOPES.join(" "));
+    url.searchParams.set("scope", GOOGLE_SCOPES_BY_SERVICE[googleService].join(" "));
     url.searchParams.set("access_type", "offline");
     url.searchParams.set("prompt", "consent");
     url.searchParams.set("include_granted_scopes", "true");

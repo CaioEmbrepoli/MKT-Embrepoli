@@ -40,12 +40,19 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-export type GoogleConnectionStatus = {
+export type GoogleService = "drive" | "youtube";
+
+export type GoogleServiceConnectionStatus = {
   connected: boolean;
   googleEmail: string;
   scopes: string[];
   connectedAt: string;
   updatedAt: string;
+};
+
+export type GoogleConnectionStatus = {
+  drive: GoogleServiceConnectionStatus;
+  youtube: GoogleServiceConnectionStatus;
   canManage: boolean;
 };
 
@@ -53,13 +60,17 @@ export async function getGoogleStatus(): Promise<GoogleConnectionStatus> {
   return fetchJson<GoogleConnectionStatus>("/api/google/status");
 }
 
-export async function startGoogleConnection(): Promise<string> {
-  const data = await fetchJson<{ url: string }>("/api/google/oauth/start");
+export async function startGoogleConnection(service: GoogleService): Promise<string> {
+  const data = await fetchJson<{ url: string }>(`/api/google/oauth/start?service=${service}`);
   return data.url;
 }
 
-export async function disconnectGoogleConnection(): Promise<void> {
-  await fetchJson<{ ok: true }>("/api/google/disconnect", { method: "POST" });
+export async function disconnectGoogleConnection(service: GoogleService): Promise<void> {
+  await fetchJson<{ ok: true }>("/api/google/disconnect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ service })
+  });
 }
 
 export function clearGoogleTokenCache(): void {
@@ -92,13 +103,13 @@ export type DriveItem = {
 
 export async function getDriveToken(): Promise<string> {
   const status = await getGoogleStatus();
-  if (!status.connected) throw new Error("Google nao conectado. Peca para um Gestor conectar a conta corporativa.");
+  if (!status.drive.connected) throw new Error("Google Drive nao conectado. Peca para um Gestor conectar a conta corporativa.");
   return "";
 }
 
 export async function getYouTubeReadToken(): Promise<string> {
   const status = await getGoogleStatus();
-  if (!status.connected) throw new Error("Google nao conectado. Peca para um Gestor conectar a conta corporativa.");
+  if (!status.youtube.connected) throw new Error("YouTube nao conectado. Peca para um Gestor conectar a conta corporativa.");
   return "";
 }
 

@@ -50,7 +50,7 @@ GOOGLE_API_KEY=
 
 ## Integração Google corporativa
 
-O Drive e o YouTube usam uma conexão Google da empresa, salva no Supabase. Um Administrador ou Gestor conecta uma vez em `Configurações > Conta e Permissões`; depois a equipe inteira usa a mesma autorização automaticamente, inclusive em outros computadores.
+O Drive e o YouTube usam conexões Google corporativas separadas, salvas no Supabase. Um Administrador ou Gestor conecta cada serviço uma vez em `Configurações > Conta e Permissões`; depois a equipe inteira usa a mesma autorização automaticamente, inclusive em outros computadores. Se quiser testar só o Drive primeiro, conecte apenas o bloco `Google Drive` e deixe o YouTube para depois.
 
 No Google Cloud Console, configure o OAuth Client como aplicação web e adicione estes Redirect URIs:
 

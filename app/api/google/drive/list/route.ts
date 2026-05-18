@@ -4,7 +4,7 @@ import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server"
 export async function GET(request: Request) {
   try {
     const context = await googleRequestContext(request);
-    const token = await getGoogleAccessToken(context);
+    const token = await getGoogleAccessToken(context, "drive");
     const { searchParams } = new URL(request.url);
     const folderId = searchParams.get("folderId") || "root";
     const params = new URLSearchParams({

@@ -1,14 +1,17 @@
 import { NextResponse } from "next/server";
-import { googleRequestContext, requireGoogleManager } from "@/lib/google-server";
+import { googleRequestContext, normalizeGoogleService, requireGoogleManager } from "@/lib/google-server";
 
 export async function POST(request: Request) {
   try {
     const context = await googleRequestContext(request);
     requireGoogleManager(context);
+    const body = await request.json().catch(() => ({}));
+    const googleService = normalizeGoogleService(body?.service);
     const { error } = await context.service
       .from("google_connections")
       .delete()
-      .eq("organization_id", context.organizationId);
+      .eq("organization_id", context.organizationId)
+      .eq("service", googleService);
     if (error) throw error;
     return NextResponse.json({ ok: true });
   } catch (error) {

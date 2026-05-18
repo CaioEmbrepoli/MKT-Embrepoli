@@ -58,7 +58,7 @@ import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "
 import { useEffect, useMemo, useRef, useState } from "react";
 import { campaignAudiences as seedCampaignAudiences } from "@/lib/seed-data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type YouTubeChannelVideo, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
+import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import {
   type AppData,
   deleteCampaign,
@@ -4777,7 +4777,7 @@ function CalendarDateModal({ date, setCalendarDates, close }: { date?: CalendarD
 function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>> }) {
   const [googleStatus, setGoogleStatus] = useState<GoogleConnectionStatus | null>(null);
   const [googleLoading, setGoogleLoading] = useState(true);
-  const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState<GoogleService | null>(null);
   const [googleError, setGoogleError] = useState("");
   const canManageGoogle = currentUser.role === "admin" || currentUser.role === "gestor";
 
@@ -4797,31 +4797,45 @@ function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profil
     loadGoogleStatus();
   }, []);
 
-  async function connectGoogle() {
-    setGoogleBusy(true);
+  async function connectGoogle(service: GoogleService) {
+    setGoogleBusy(service);
     setGoogleError("");
     try {
-      const url = await startGoogleConnection();
+      const url = await startGoogleConnection(service);
       window.location.href = url;
     } catch (error) {
       setGoogleError(error instanceof Error ? error.message : "Erro ao iniciar conexao Google.");
-      setGoogleBusy(false);
+      setGoogleBusy(null);
     }
   }
 
-  async function disconnectGoogle() {
-    if (!window.confirm("Desconectar a conta Google corporativa para toda a equipe?")) return;
-    setGoogleBusy(true);
+  async function disconnectGoogle(service: GoogleService) {
+    const label = service === "youtube" ? "YouTube" : "Google Drive";
+    if (!window.confirm(`Desconectar ${label} para toda a equipe?`)) return;
+    setGoogleBusy(service);
     setGoogleError("");
     try {
-      await disconnectGoogleConnection();
+      await disconnectGoogleConnection(service);
       await loadGoogleStatus();
     } catch (error) {
       setGoogleError(error instanceof Error ? error.message : "Erro ao desconectar Google.");
     } finally {
-      setGoogleBusy(false);
+      setGoogleBusy(null);
     }
   }
+
+  const googleIntegrations: Array<{ service: GoogleService; title: string; description: string }> = [
+    {
+      service: "drive",
+      title: "Google Drive",
+      description: "Arquivos, pastas, previews e links do Drive usados em anexos e revisoes."
+    },
+    {
+      service: "youtube",
+      title: "YouTube",
+      description: "Importacao de videos e metricas do canal conectado."
+    }
+  ];
 
   return (
     <Panel title="Conta e permissões">
@@ -4839,43 +4853,60 @@ function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profil
           <input type="checkbox" checked={currentUser.notificationSound} onChange={(event) => setProfiles((current) => current.map((profile) => profile.id === currentUser.id ? { ...profile, notificationSound: event.target.checked } : profile))} className="h-5 w-5" />
         </label>
         <div className="rounded-3xl bg-white p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="font-black">Integração Google corporativa</p>
-              <p className="mt-1 text-sm font-bold text-slate-500">
-                Drive e YouTube usam uma unica conta Google da empresa, sem pedir login em cada computador.
+          <div>
+            <p className="font-black">Integrações Google corporativas</p>
+            <p className="mt-1 text-sm font-bold text-slate-500">
+              Conecte Drive e YouTube separadamente. Cada integracao fica salva para toda a equipe.
+            </p>
+            {!canManageGoogle && (
+              <p className="mt-2 text-xs font-bold text-slate-400">
+                Apenas Administrador ou Gestor pode conectar ou desconectar integrações Google.
               </p>
-              <p className="mt-3 text-sm font-black text-slate-700">
-                {googleLoading
-                  ? "Verificando conexao..."
-                  : googleStatus?.connected
-                    ? `Conectado como ${googleStatus.googleEmail}`
-                    : "Google ainda nao conectado"}
-              </p>
-              {googleStatus?.connectedAt && (
-                <p className="mt-1 text-xs font-bold text-slate-400">
-                  Conectado em {new Date(googleStatus.connectedAt).toLocaleString("pt-BR")}
-                </p>
-              )}
-              {!canManageGoogle && (
-                <p className="mt-2 text-xs font-bold text-slate-400">
-                  Apenas Administrador ou Gestor pode conectar ou desconectar a conta Google.
-                </p>
-              )}
-              {googleError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{googleError}</p>}
-            </div>
-            {canManageGoogle && (
-              <div className="flex flex-wrap gap-2">
-                <button type="button" disabled={googleBusy || googleLoading} onClick={connectGoogle} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
-                  {googleStatus?.connected ? "Reconectar" : "Conectar Google"}
-                </button>
-                {googleStatus?.connected && (
-                  <button type="button" disabled={googleBusy || googleLoading} onClick={disconnectGoogle} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
-                    Desconectar
-                  </button>
-                )}
-              </div>
             )}
+            {googleError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{googleError}</p>}
+          </div>
+          <div className="mt-4 grid gap-3 lg:grid-cols-2">
+            {googleIntegrations.map((integration) => {
+              const serviceStatus = googleStatus?.[integration.service];
+              const busy = googleBusy === integration.service;
+              return (
+                <div key={integration.service} className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-black">{integration.title}</p>
+                      <p className="mt-1 text-sm font-bold text-slate-500">{integration.description}</p>
+                    </div>
+                    <span className={`rounded-full px-3 py-1 text-xs font-black ${serviceStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+                      {googleLoading ? "Verificando" : serviceStatus?.connected ? "Conectado" : "Desconectado"}
+                    </span>
+                  </div>
+                  <p className="mt-3 text-sm font-black text-slate-700">
+                    {googleLoading
+                      ? "Verificando conexao..."
+                      : serviceStatus?.connected
+                        ? `Conta: ${serviceStatus.googleEmail}`
+                        : "Nenhuma conta conectada"}
+                  </p>
+                  {serviceStatus?.connectedAt && (
+                    <p className="mt-1 text-xs font-bold text-slate-400">
+                      Conectado em {new Date(serviceStatus.connectedAt).toLocaleString("pt-BR")}
+                    </p>
+                  )}
+                  {canManageGoogle && (
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
+                        {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
+                      </button>
+                      {serviceStatus?.connected && (
+                        <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => disconnectGoogle(integration.service)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                          Desconectar
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

@@ -1,14 +1,21 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-export const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/drive.readonly",
-  "https://www.googleapis.com/auth/youtube.readonly"
-];
+export type GoogleService = "drive" | "youtube";
+
+export const GOOGLE_SCOPES_BY_SERVICE: Record<GoogleService, string[]> = {
+  drive: ["https://www.googleapis.com/auth/drive.readonly"],
+  youtube: ["https://www.googleapis.com/auth/youtube.readonly"]
+};
+
+export function normalizeGoogleService(value: string | null | undefined): GoogleService {
+  return value === "youtube" ? "youtube" : "drive";
+}
 
 type GoogleConnectionRow = {
   id: string;
   organization_id: string;
+  service: GoogleService;
   google_email: string;
   scopes: string[];
   access_token: string;
@@ -127,19 +134,21 @@ async function exchangeRefreshToken(refreshToken: string) {
   };
 }
 
-export async function getGoogleConnection(service: SupabaseClient, organizationId: string) {
-  const { data, error } = await service
+export async function getGoogleConnection(supabaseClient: SupabaseClient, organizationId: string, googleService: GoogleService) {
+  const { data, error } = await supabaseClient
     .from("google_connections")
     .select("*")
     .eq("organization_id", organizationId)
+    .eq("service", googleService)
     .maybeSingle();
   if (error) throw error;
   return data as GoogleConnectionRow | null;
 }
 
-export async function getGoogleAccessToken(context: GoogleRequestContext) {
-  const connection = await getGoogleConnection(context.service, context.organizationId);
-  if (!connection?.refresh_token) throw new Error("Google nao conectado. Peca para um Gestor conectar a conta corporativa.");
+export async function getGoogleAccessToken(context: GoogleRequestContext, googleService: GoogleService) {
+  const connection = await getGoogleConnection(context.service, context.organizationId, googleService);
+  const serviceLabel = googleService === "youtube" ? "YouTube" : "Google Drive";
+  if (!connection?.refresh_token) throw new Error(`${serviceLabel} nao conectado. Peca para um Gestor conectar a conta corporativa.`);
 
   const expiresAt = new Date(connection.expires_at || 0).getTime();
   if (connection.access_token && expiresAt > Date.now() + 60_000) {

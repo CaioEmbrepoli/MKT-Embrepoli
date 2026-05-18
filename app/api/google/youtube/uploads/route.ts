@@ -17,7 +17,7 @@ function parseDurationSeconds(duration: string): number {
 export async function GET(request: Request) {
   try {
     const context = await googleRequestContext(request);
-    const token = await getGoogleAccessToken(context);
+    const token = await getGoogleAccessToken(context, "youtube");
     const channelData = await ytFetch("https://www.googleapis.com/youtube/v3/channels?part=contentDetails&mine=true", token);
     const playlistId = channelData?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
     if (!playlistId) throw new Error("Nenhum canal do YouTube encontrado nesta conta Google.");
