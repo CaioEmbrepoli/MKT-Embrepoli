@@ -1034,7 +1034,6 @@ export default function Home() {
   }
 
   useEffect(() => {
-    if (!supabase || !isSupabaseConfigured) return;
     // ── Porta de emergência: ?reset=1 limpa todos os tokens Supabase do localStorage ──
     if (
       typeof window !== "undefined" &&
@@ -1052,6 +1051,7 @@ export default function Home() {
       }
     }
     void loadCurrentSession();
+    if (!supabase || !isSupabaseConfigured) return;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       console.log("[auth] onAuthStateChange:", event, "hasSession:", !!session?.user);
       if (event === "PASSWORD_RECOVERY") {
