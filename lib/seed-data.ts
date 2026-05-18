@@ -467,7 +467,10 @@ export const tasks: Task[] = [
         createdAt: "2026-05-08T10:00"
       }
     ],
-    attachments: []
+    attachments: [],
+    resetFrequency: "none",
+    resetTime: "23:59",
+    resetMonthLastDay: false
   },
   {
     id: "task-2",
@@ -484,7 +487,10 @@ export const tasks: Task[] = [
     description: "Conferir se o roteiro está técnico, mas fácil de entender.",
     checklist: [],
     comments: [],
-    attachments: []
+    attachments: [],
+    resetFrequency: "none",
+    resetTime: "23:59",
+    resetMonthLastDay: false
   },
   {
     id: "task-3",
@@ -501,7 +507,10 @@ export const tasks: Task[] = [
     description: "Revisar promessa, clareza e linguagem técnica.",
     checklist: [],
     comments: [],
-    attachments: []
+    attachments: [],
+    resetFrequency: "none",
+    resetTime: "23:59",
+    resetMonthLastDay: false
   },
   {
     id: "task-4",
@@ -518,7 +527,63 @@ export const tasks: Task[] = [
     description: "Fechar resultados da semana.",
     checklist: [{ id: "check-5", label: "Registrar leads", done: true }],
     comments: [],
-    attachments: []
+    attachments: [],
+    resetFrequency: "none",
+    resetTime: "23:59",
+    resetMonthLastDay: false
+  },
+  {
+    id: "goal-weekly-schedule",
+    title: "Organizar agendamento semanal",
+    columnId: "goals-todo",
+    order: 1,
+    priority: "Alta",
+    progress: "No prazo",
+    createdBy: "user-admin",
+    assignedTo: ["user-gestor"],
+    relatedTo: "Metas",
+    funnelStageId: "topo",
+    dueDate: "2026-05-17",
+    description: "Planejar e revisar os posts da semana antes do fechamento do domingo.",
+    checklist: [
+      { id: "goal-weekly-check-1", label: "Revisar calendário da semana", done: false },
+      { id: "goal-weekly-check-2", label: "Conferir responsáveis", done: false },
+      { id: "goal-weekly-check-3", label: "Validar artes pendentes", done: false }
+    ],
+    comments: [],
+    attachments: [],
+    resetFrequency: "weekly",
+    resetTime: "23:59",
+    resetWeekday: 0,
+    resetMonthLastDay: false,
+    fixedGoalKey: "weekly_schedule",
+    nextResetAt: "2026-05-18T02:59:00.000Z"
+  },
+  {
+    id: "goal-monthly-targets",
+    title: "Metas mensais",
+    columnId: "goals-todo",
+    order: 2,
+    priority: "Média",
+    progress: "No prazo",
+    createdBy: "user-admin",
+    assignedTo: ["user-gestor"],
+    relatedTo: "Metas",
+    funnelStageId: "meio",
+    dueDate: "2026-05-31",
+    description: "Acompanhar as metas mensais de marketing e registrar aprendizados do mês.",
+    checklist: [
+      { id: "goal-monthly-check-1", label: "Definir objetivo do mês", done: false },
+      { id: "goal-monthly-check-2", label: "Acompanhar métricas principais", done: false },
+      { id: "goal-monthly-check-3", label: "Registrar próximos ajustes", done: false }
+    ],
+    comments: [],
+    attachments: [],
+    resetFrequency: "monthly",
+    resetTime: "23:59",
+    resetMonthLastDay: true,
+    fixedGoalKey: "monthly_goals",
+    nextResetAt: "2026-06-01T02:59:00.000Z"
   }
 ];
 

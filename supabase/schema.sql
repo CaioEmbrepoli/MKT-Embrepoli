@@ -323,6 +323,17 @@ create table if not exists public.task_attachments (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.task_reset_history (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  task_id text references public.tasks(id) on delete set null,
+  reset_source_id text references public.tasks(id) on delete set null,
+  frequency text not null,
+  scheduled_for timestamptz,
+  executed_at timestamptz not null default now(),
+  snapshot jsonb not null default '{}'::jsonb
+);
+
 create table if not exists public.post_metrics (
   id text primary key default gen_random_uuid()::text,
   organization_id text not null references public.organizations(id) on delete cascade,
@@ -391,6 +402,15 @@ alter table public.task_attachments add column if not exists preview_url text no
 alter table public.task_attachments add column if not exists original_size bigint not null default 0;
 alter table public.task_attachments add column if not exists compressed_size bigint not null default 0;
 alter table public.task_attachments add column if not exists mime_type text not null default '';
+alter table public.tasks add column if not exists reset_frequency text not null default 'none';
+alter table public.tasks add column if not exists reset_time text not null default '23:59';
+alter table public.tasks add column if not exists reset_weekday integer;
+alter table public.tasks add column if not exists reset_month_day integer;
+alter table public.tasks add column if not exists reset_month_last_day boolean not null default false;
+alter table public.tasks add column if not exists fixed_goal_key text;
+alter table public.tasks add column if not exists reset_source_id text references public.tasks(id) on delete set null;
+alter table public.tasks add column if not exists last_reset_at timestamptz;
+alter table public.tasks add column if not exists next_reset_at timestamptz;
 
 create or replace function public.current_organization_id()
 returns text
@@ -476,6 +496,7 @@ alter table public.idea_assignees enable row level security;
 alter table public.task_checklist_items enable row level security;
 alter table public.task_comments enable row level security;
 alter table public.task_attachments enable row level security;
+alter table public.task_reset_history enable row level security;
 alter table public.post_metrics enable row level security;
 alter table public.notifications enable row level security;
 
@@ -606,6 +627,10 @@ create policy "members manage task attachments" on public.task_attachments for a
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
+create policy "members manage task reset history" on public.task_reset_history for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
 create policy "members manage metrics" on public.post_metrics for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
@@ -674,6 +699,97 @@ values
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000102', 'Em andamento', '#cffafe', 2),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000102', 'Em revisão', '#e0e7ff', 3),
   ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000102', 'Concluído', '#dcfce7', 4);
+
+with metas_column as (
+  select id
+  from public.task_columns
+  where organization_id = '00000000-0000-0000-0000-000000000001'
+    and task_board_id = '00000000-0000-0000-0000-000000000102'
+    and name = 'A fazer'
+  order by created_at
+  limit 1
+)
+insert into public.tasks (
+  id, organization_id, task_column_id, funnel_stage_id, created_by, title, priority, progress,
+  related_to, description, due_date, sort_order, reset_frequency, reset_time, reset_weekday,
+  reset_month_last_day, fixed_goal_key, next_reset_at
+)
+select
+  'goal-weekly-schedule',
+  '00000000-0000-0000-0000-000000000001',
+  metas_column.id,
+  'topo',
+  null,
+  'Organizar agendamento semanal',
+  'Alta',
+  'No prazo',
+  'Metas',
+  'Planejar e revisar os posts da semana antes do fechamento do domingo.',
+  '2026-05-17',
+  1,
+  'weekly',
+  '23:59',
+  0,
+  false,
+  'weekly_schedule',
+  '2026-05-18T02:59:00.000Z'::timestamptz
+from metas_column
+on conflict (id) do update set
+  fixed_goal_key = excluded.fixed_goal_key,
+  reset_frequency = excluded.reset_frequency,
+  reset_time = excluded.reset_time,
+  reset_weekday = excluded.reset_weekday,
+  next_reset_at = coalesce(public.tasks.next_reset_at, excluded.next_reset_at);
+
+with metas_column as (
+  select id
+  from public.task_columns
+  where organization_id = '00000000-0000-0000-0000-000000000001'
+    and task_board_id = '00000000-0000-0000-0000-000000000102'
+    and name = 'A fazer'
+  order by created_at
+  limit 1
+)
+insert into public.tasks (
+  id, organization_id, task_column_id, funnel_stage_id, created_by, title, priority, progress,
+  related_to, description, due_date, sort_order, reset_frequency, reset_time,
+  reset_month_last_day, fixed_goal_key, next_reset_at
+)
+select
+  'goal-monthly-targets',
+  '00000000-0000-0000-0000-000000000001',
+  metas_column.id,
+  'meio',
+  null,
+  'Metas mensais',
+  'Média',
+  'No prazo',
+  'Metas',
+  'Acompanhar as metas mensais de marketing e registrar aprendizados do mês.',
+  '2026-05-31',
+  2,
+  'monthly',
+  '23:59',
+  true,
+  'monthly_goals',
+  '2026-06-01T02:59:00.000Z'::timestamptz
+from metas_column
+on conflict (id) do update set
+  fixed_goal_key = excluded.fixed_goal_key,
+  reset_frequency = excluded.reset_frequency,
+  reset_time = excluded.reset_time,
+  reset_month_last_day = excluded.reset_month_last_day,
+  next_reset_at = coalesce(public.tasks.next_reset_at, excluded.next_reset_at);
+
+insert into public.task_checklist_items (id, organization_id, task_id, label, done, sort_order)
+values
+  ('goal-weekly-check-1', '00000000-0000-0000-0000-000000000001', 'goal-weekly-schedule', 'Revisar calendário da semana', false, 1),
+  ('goal-weekly-check-2', '00000000-0000-0000-0000-000000000001', 'goal-weekly-schedule', 'Conferir responsáveis', false, 2),
+  ('goal-weekly-check-3', '00000000-0000-0000-0000-000000000001', 'goal-weekly-schedule', 'Validar artes pendentes', false, 3),
+  ('goal-monthly-check-1', '00000000-0000-0000-0000-000000000001', 'goal-monthly-targets', 'Definir objetivo do mês', false, 1),
+  ('goal-monthly-check-2', '00000000-0000-0000-0000-000000000001', 'goal-monthly-targets', 'Acompanhar métricas principais', false, 2),
+  ('goal-monthly-check-3', '00000000-0000-0000-0000-000000000001', 'goal-monthly-targets', 'Registrar próximos ajustes', false, 3)
+on conflict (id) do nothing;
 
 insert into public.channels (id, organization_id, name, color)
 values
@@ -812,6 +928,7 @@ alter publication supabase_realtime add table
   public.task_checklist_items,
   public.task_comments,
   public.task_attachments,
+  public.task_reset_history,
   public.post_metrics,
   public.notifications;
 

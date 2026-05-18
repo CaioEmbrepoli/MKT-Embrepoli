@@ -157,7 +157,7 @@ type ModalState =
 
 type MediaPreviewItem = Pick<FileAttachment, "name" | "type" | "source" | "url" | "previewUrl" | "mimeType">;
 
-type AuthMode = "login" | "signup" | "forgot" | "reset" | "pending";
+type AuthMode = "login" | "signup" | "forgot" | "reset" | "checkEmail" | "pending";
 type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
 
 const menu = [
@@ -568,6 +568,7 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authMessage, setAuthMessage] = useState("");
   const [authError, setAuthError] = useState("");
+  const [pendingSignupEmail, setPendingSignupEmail] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [saveError, setSaveError] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
@@ -593,7 +594,9 @@ export default function Home() {
   const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns]);
   const columnById = useMemo(() => new Map(taskColumns.map((column) => [column.id, column])), [taskColumns]);
   const canReviewAssets = currentUser.role === "admin" || currentUser.role === "gestor";
+  const canManageTeam = canReviewAssets;
   const pendingReviewAssets = postReviewAssets.filter((asset) => asset.status === "Aguardando revisão");
+  const pendingApprovalsCount = canManageTeam ? profiles.filter((p) => !p.active).length : 0;
 
   const visiblePosts = posts.filter((post) => canSeeItem(currentUser, post.createdBy, post.assignedTo));
   const visibleTasks = tasks.filter((task) => canSeeItem(currentUser, task.createdBy, task.assignedTo) && !task.parentTaskId);
@@ -876,35 +879,162 @@ export default function Home() {
   const syncNotifications = syncState("notifications", setNotifications, (previous, next) => persistArrayChanges(previous, next, (item) => saveNotification(supabase!, item), (id) => deleteNotification(supabase!, id)));
 
   async function loadCurrentSession() {
-    if (!supabase || !isSupabaseConfigured) return;
+    console.log("[auth] loadCurrentSession: start");
+    if (!supabase || !isSupabaseConfigured) {
+      console.warn("[auth] supabase not configured — abort", { hasSupabase: !!supabase, isSupabaseConfigured });
+      return;
+    }
     const recoveryUrl = `${window.location.search}${window.location.hash}`;
     if (recoveryUrl.includes("type=recovery")) {
+      console.log("[auth] recovery URL detected — switching to reset mode");
       setAuthMode("reset");
       return;
     }
-    const { data } = await supabase.auth.getSession();
-    if (!data.session?.user) return;
+
+    let { data } = await supabase.auth.getSession();
+    console.log("[auth] existing session?", !!data.session?.user);
+
+    // ── Dev bypass: auto-login no localhost sem mostrar a tela de login ──
+    if (!data.session?.user && process.env.NODE_ENV === "development") {
+      console.log("[auth] dev bypass: requesting /api/dev-login");
+      try {
+        const res = await fetch("/api/dev-login", { method: "POST" });
+        console.log("[auth] /api/dev-login status:", res.status);
+        if (res.ok) {
+          const tokens = await res.json() as { access_token: string; refresh_token: string };
+          const { data: sessionData, error: setErr } = await supabase.auth.setSession(tokens);
+          console.log("[auth] setSession result:", { error: setErr?.message, hasSession: !!sessionData.session });
+          data = { session: sessionData.session };
+        } else {
+          const errBody = await res.text();
+          console.error("[auth] dev bypass failed:", errBody);
+        }
+      } catch (err) {
+        console.error("[auth] dev bypass exception:", err);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    if (!data.session?.user) {
+      console.warn("[auth] no session after bypass — staying on login screen");
+      return;
+    }
+    console.log("[auth] fetching profile…");
     const profile = await ensureCurrentProfile(supabase);
-    if (!profile) return;
+    console.log("[auth] profile:", profile);
+    if (!profile) {
+      console.error("[auth] ensureCurrentProfile returned null — provavelmente problema de RLS na tabela profiles");
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[auth] DEV: entrando sem profile válido — verifique RLS da tabela profiles");
+        setAuthError("DEV: profile não encontrado, mas entrando mesmo assim. Veja console.");
+        setLoggedIn(true);
+        setAuthMode("login");
+      } else {
+        setAuthError("Não foi possível carregar o perfil. Veja o console para detalhes.");
+      }
+      return;
+    }
     setCurrentUserId(profile.id);
     if (profile.active) {
+      console.log("[auth] profile active — entering app");
       setLoggedIn(true);
       setAuthMode("login");
     } else {
+      console.log("[auth] profile inactive — pending approval");
       setLoggedIn(false);
       setAuthMode("pending");
-      setAuthMessage("Sua conta foi criada e está aguardando aprovação de um Gestor ou Administrador.");
+      setAuthMessage("Email confirmado! ✓ Agora um Gestor ou Administrador precisa liberar seu acesso.");
+      void notifyManagersOfPendingSignup(profile);
+    }
+  }
+
+  async function notifyManagersOfPendingSignup(profile: Profile) {
+    if (!supabase) return;
+    const flagKey = `signup_notified_${profile.id}`;
+    if (typeof window !== "undefined" && localStorage.getItem(flagKey)) {
+      console.log("[auth] signup notification already sent — skip");
+      return;
+    }
+    try {
+      // Busca o organization_id do próprio profile (não vem no tipo Profile)
+      const { data: ownRow, error: ownErr } = await supabase
+        .from("profiles")
+        .select("organization_id")
+        .eq("id", profile.id)
+        .maybeSingle();
+      if (ownErr || !ownRow?.organization_id) {
+        console.error("[auth] could not fetch own organization_id:", ownErr?.message);
+        return;
+      }
+      const organizationId = ownRow.organization_id as string;
+
+      const { data: managers, error: queryErr } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .in("role", ["admin", "gestor"])
+        .eq("active", true);
+      if (queryErr) {
+        console.error("[auth] could not fetch managers:", queryErr.message);
+        return;
+      }
+      if (!managers || managers.length === 0) {
+        console.warn("[auth] no active managers found — nobody to notify");
+        return;
+      }
+      const now = new Date().toISOString();
+      const rows = managers.map((m: { id: string }) => ({
+        id: crypto.randomUUID(),
+        organization_id: organizationId,
+        user_id: m.id,
+        title: "Novo cadastro aguardando aprovação",
+        description: `${profile.name} (${profile.email}) criou uma conta e precisa ser aprovado em Configurações → Equipe.`,
+        created_at: now,
+        read: false,
+        target_kind: "system",
+        target_id: profile.id
+      }));
+      const { error: insertErr } = await supabase.from("notifications").insert(rows);
+      if (insertErr) {
+        console.error("[auth] failed to insert notifications:", insertErr.message);
+        return;
+      }
+      if (typeof window !== "undefined") localStorage.setItem(flagKey, "1");
+      console.log(`[auth] notified ${managers.length} manager(s) about signup`);
+    } catch (err) {
+      console.error("[auth] notifyManagersOfPendingSignup exception:", err);
     }
   }
 
   useEffect(() => {
     if (!supabase || !isSupabaseConfigured) return;
+    // ── Porta de emergência: ?reset=1 limpa todos os tokens Supabase do localStorage ──
+    if (
+      typeof window !== "undefined" &&
+      process.env.NODE_ENV === "development" &&
+      window.location.search.includes("reset=1")
+    ) {
+      try {
+        Object.keys(localStorage)
+          .filter((k) => k.startsWith("sb-") || k.toLowerCase().includes("supabase"))
+          .forEach((k) => localStorage.removeItem(k));
+        console.log("[auth] localStorage limpo via ?reset=1");
+        window.history.replaceState({}, "", "/");
+      } catch (err) {
+        console.error("[auth] falha ao limpar localStorage:", err);
+      }
+    }
     void loadCurrentSession();
-    const { data } = supabase.auth.onAuthStateChange((event) => {
+    const { data } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log("[auth] onAuthStateChange:", event, "hasSession:", !!session?.user);
       if (event === "PASSWORD_RECOVERY") {
         setLoggedIn(false);
         setAuthMode("reset");
         setAuthMessage("Digite sua nova senha para concluir a recuperação.");
+      }
+      // Quando user volta da confirmação de email, dispara reload de sessão
+      if (event === "SIGNED_IN" && session?.user) {
+        void loadCurrentSession();
       }
     });
     return () => data.subscription.unsubscribe();
@@ -929,6 +1059,7 @@ export default function Home() {
           setCurrentUserId(profile?.id ?? data.user.id);
           setAuthMode("pending");
           setAuthMessage("Sua conta está aguardando aprovação de um Gestor ou Administrador.");
+          if (profile) void notifyManagersOfPendingSignup(profile);
           setAuthLoading(false);
           return;
         }
@@ -986,15 +1117,41 @@ export default function Home() {
           notification_sound: true
         });
       }
-      setAuthMode("pending");
-      setAuthMessage("Conta criada. Agora aguarde um Gestor ou Administrador aprovar seu acesso.");
+      setPendingSignupEmail(email);
+      setAuthMode("checkEmail");
+      setAuthMessage("");
       setAuthLoading(false);
       return;
     }
 
     setProfiles((current) => [{ id: crypto.randomUUID(), name, email, phone: "", bio: "", role: "colaborador", avatarUrl: "", active: false, notificationSound: true }, ...current]);
-    setAuthMode("pending");
-    setAuthMessage("Conta criada no modo local. Ela aparece como pendente para simular aprovação.");
+    setPendingSignupEmail(email);
+    setAuthMode("checkEmail");
+    setAuthMessage("");
+    setAuthLoading(false);
+  }
+
+  async function handleResendConfirmation() {
+    if (!pendingSignupEmail) return;
+    setAuthLoading(true);
+    setAuthError("");
+    setAuthMessage("");
+    if (supabase && isSupabaseConfigured) {
+      const { error } = await supabase.auth.resend({
+        type: "signup",
+        email: pendingSignupEmail,
+        options: { emailRedirectTo: `${window.location.origin}/` }
+      });
+      if (error) {
+        setAuthError(`Não foi possível reenviar: ${error.message}`);
+        setAuthLoading(false);
+        return;
+      }
+      setAuthMessage("Email de confirmação reenviado. Verifique sua caixa de entrada e spam.");
+      setAuthLoading(false);
+      return;
+    }
+    setAuthMessage("No modo local não há email para reenviar.");
     setAuthLoading(false);
   }
 
@@ -1379,11 +1536,13 @@ export default function Home() {
         loading={authLoading}
         message={authMessage}
         error={authError}
+        pendingSignupEmail={pendingSignupEmail}
         onLogin={handleLogin}
         onSignup={handleSignup}
         onForgotPassword={handleForgotPassword}
         onResetPassword={handleResetPassword}
         onRetryApproval={handleRetryApproval}
+        onResendConfirmation={handleResendConfirmation}
         onLogout={handleLogout}
       />
     );
@@ -1405,6 +1564,7 @@ export default function Home() {
               if (item.id === "revisoes" && !canReviewAssets) return null;
               const Icon = item.icon;
               const selected = activeSection === item.id;
+              const showPendingBadge = item.id === "configuracoes" && pendingApprovalsCount > 0;
               return (
                 <button
                   key={item.id}
@@ -1414,7 +1574,12 @@ export default function Home() {
                   }`}
                 >
                   <Icon size={18} />
-                  {item.label}
+                  <span className="flex-1">{item.label}</span>
+                  {showPendingBadge && (
+                    <span className={`flex h-6 min-w-6 items-center justify-center rounded-full px-2 text-xs font-black ${selected ? "bg-white text-blue-700" : "bg-amber-500 text-white"}`}>
+                      {pendingApprovalsCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -1619,11 +1784,13 @@ function LoginScreen({
   loading,
   message,
   error,
+  pendingSignupEmail,
   onLogin,
   onSignup,
   onForgotPassword,
   onResetPassword,
   onRetryApproval,
+  onResendConfirmation,
   onLogout
 }: {
   profiles: Profile[];
@@ -1632,11 +1799,13 @@ function LoginScreen({
   loading: boolean;
   message: string;
   error: string;
+  pendingSignupEmail: string;
   onLogin: (email: string, password: string) => void;
   onSignup: (name: string, email: string, password: string) => void;
   onForgotPassword: (email: string) => void;
   onResetPassword: (password: string) => void;
   onRetryApproval: () => void;
+  onResendConfirmation: () => void;
   onLogout: () => void;
 }) {
   const [localError, setLocalError] = useState("");
@@ -1647,26 +1816,50 @@ function LoginScreen({
 
   function handleSubmit() {
     setLocalError("");
+    if (mode === "login" && (!emailValue.trim() || !passwordValue)) {
+      setLocalError("Preencha email e senha antes de continuar.");
+      return;
+    }
+    if (mode === "signup" && (!nameValue.trim() || !emailValue.trim() || !passwordValue)) {
+      setLocalError("Preencha nome, email e senha antes de continuar.");
+      return;
+    }
     if (mode === "signup" && passwordValue !== confirmPasswordValue) {
       setLocalError("As senhas não conferem.");
       return;
     }
+    if (mode === "forgot" && !emailValue.trim()) {
+      setLocalError("Informe o email para receber o link de recuperação.");
+      return;
+    }
+    if (mode === "reset" && !passwordValue) {
+      setLocalError("Digite uma nova senha.");
+      return;
+    }
+    console.log("[auth] handleSubmit:", { mode, email: emailValue, hasPassword: !!passwordValue });
     if (mode === "login") onLogin(emailValue, passwordValue);
     if (mode === "signup") onSignup(nameValue, emailValue, passwordValue);
     if (mode === "forgot") onForgotPassword(emailValue);
     if (mode === "reset") onResetPassword(passwordValue);
   }
 
-  const title = mode === "signup" ? "Criar conta" : mode === "forgot" ? "Recuperar senha" : mode === "reset" ? "Nova senha" : mode === "pending" ? "Aguardando aprovação" : "Entrar";
-  const subtitle = mode === "pending"
-    ? "Sua conta já existe, mas precisa ser aprovada por um Gestor ou Administrador."
-    : mode === "signup"
-      ? "Crie sua conta. O acesso completo será liberado após aprovação."
-      : mode === "forgot"
-        ? "Informe seu email para receber o link de recuperação."
-        : mode === "reset"
-          ? "Digite uma nova senha para sua conta."
-          : "Entre com sua conta da equipe para acessar o sistema.";
+  const title = mode === "signup" ? "Criar conta"
+    : mode === "forgot" ? "Recuperar senha"
+    : mode === "reset" ? "Nova senha"
+    : mode === "checkEmail" ? "Confirme seu email"
+    : mode === "pending" ? "Aguardando aprovação"
+    : "Entrar";
+  const subtitle = mode === "checkEmail"
+    ? "Enviamos um link de confirmação. Clique nele para ativar sua conta."
+    : mode === "pending"
+      ? "Sua conta já existe, mas precisa ser aprovada por um Gestor ou Administrador."
+      : mode === "signup"
+        ? "Crie sua conta. O acesso completo será liberado após aprovação."
+        : mode === "forgot"
+          ? "Informe seu email para receber o link de recuperação."
+          : mode === "reset"
+            ? "Digite uma nova senha para sua conta."
+            : "Entre com sua conta da equipe para acessar o sistema.";
 
   return (
     <main className="grid min-h-screen place-items-center bg-slate-100 px-4">
@@ -1682,7 +1875,33 @@ function LoginScreen({
         {message && <p className="mt-4 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700">{message}</p>}
         {(error || localError) && <p className="mt-4 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error || localError}</p>}
 
-        {mode === "pending" ? (
+        {mode === "checkEmail" ? (
+          <div className="mt-6 space-y-3">
+            <div className="rounded-2xl border border-blue-200 bg-blue-50/60 px-4 py-3">
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Email enviado para</p>
+              <p className="mt-1 text-base font-black text-blue-900 break-all">{pendingSignupEmail || "—"}</p>
+            </div>
+            <p className="text-sm text-slate-600">
+              Abra seu email e clique no link de confirmação. Após confirmar, um Gestor ou Administrador precisará liberar seu acesso.
+            </p>
+            <p className="text-xs font-bold text-slate-400">Não esqueça de verificar a pasta de spam.</p>
+            <button
+              type="button"
+              onClick={onResendConfirmation}
+              disabled={loading}
+              className="w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950 disabled:opacity-60"
+            >
+              {loading ? "Reenviando..." : "Reenviar email de confirmação"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("login")}
+              className="w-full rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600"
+            >
+              Voltar ao login
+            </button>
+          </div>
+        ) : mode === "pending" ? (
           <div className="mt-6 space-y-3">
             <button type="button" onClick={onRetryApproval} disabled={loading} className="w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950 disabled:opacity-60">
               {loading ? "Verificando..." : "Verificar aprovação"}
@@ -3865,8 +4084,18 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
     setProfiles((current) => [...current, { id: crypto.randomUUID(), name: String(form.get("name")), email: String(form.get("email")), phone: "", bio: "", role: String(form.get("role")) as Role, avatarUrl: "", active: true, notificationSound: true }]);
     event.currentTarget.reset();
   }
+  const pendingCount = profiles.filter((p) => !p.active).length;
+  const sortedProfiles = [...profiles].sort((a, b) => {
+    if (a.active === b.active) return a.name.localeCompare(b.name);
+    return a.active ? 1 : -1;
+  });
   return (
     <Panel title="Equipe">
+      {pendingCount > 0 && canManageTeam && (
+        <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">
+          ⚠️ {pendingCount} cadastro{pendingCount === 1 ? "" : "s"} aguardando sua aprovação. Clique em "editar" e marque "Membro ativo" para liberar o acesso.
+        </div>
+      )}
       {canManageTeam && (
         <form onSubmit={addMember} className="mb-5 grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto] lg:items-end">
           <TextInput name="name" label="Nome" required />
@@ -3876,16 +4105,24 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
         </form>
       )}
       <div className="grid gap-3">
-        {profiles.map((profile) => (
-          <div key={profile.id} className="grid gap-3 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm md:grid-cols-[auto_1fr_190px_auto] md:items-center">
+        {sortedProfiles.map((profile) => (
+          <div
+            key={profile.id}
+            className={`grid gap-3 rounded-3xl border p-4 shadow-sm md:grid-cols-[auto_1fr_190px_auto] md:items-center ${
+              !profile.active ? "border-amber-300 bg-amber-50/40" : "border-slate-100 bg-white"
+            }`}
+          >
             <label className="cursor-pointer">
               <Avatar profile={profile} size="md" />
               {canManageTeam && <input type="file" accept="image/*" className="hidden" onChange={(event) => event.target.files?.[0] && uploadProfilePhoto(profile.id, event.target.files[0])} />}
             </label>
             <div>
-              <p className="font-black">{profile.name}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="font-black">{profile.name}</p>
+                {!profile.active && <Badge tone="amber">PENDENTE</Badge>}
+              </div>
               <p className="text-sm text-slate-500">{profile.email}</p>
-              <p className="mt-1 text-xs font-bold text-slate-400">{profile.phone || "Sem telefone"} · {profile.active ? "Ativo" : "Inativo"}</p>
+              <p className="mt-1 text-xs font-bold text-slate-400">{profile.phone || "Sem telefone"} · {profile.active ? "Ativo" : "Aguardando aprovação"}</p>
             </div>
             <Badge tone="blue">{roleLabel[profile.role]}</Badge>
             {canManageTeam && (

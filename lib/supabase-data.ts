@@ -473,7 +473,15 @@ export async function replaceTasks(client: SupabaseClient, tasks: Task[], previo
     related_to: item.relatedTo,
     description: item.description,
     due_date: item.dueDate,
-    sort_order: item.order
+    sort_order: item.order,
+    reset_frequency: item.resetFrequency ?? "none",
+    reset_time: item.resetTime ?? "23:59",
+    reset_weekday: item.resetWeekday ?? null,
+    reset_month_day: item.resetMonthDay ?? null,
+    reset_month_last_day: item.resetMonthLastDay ?? false,
+    fixed_goal_key: item.fixedGoalKey ?? null,
+    last_reset_at: item.lastResetAt ?? null,
+    next_reset_at: item.nextResetAt ?? null
   }));
   await replaceAssignees(client, "task_assignees", "task_id", organizationId, tasks.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
   await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.checklist.map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
@@ -754,7 +762,15 @@ function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], 
     description: row.description ?? "",
     checklist: checklist.sort((a, b) => a.sort_order - b.sort_order).map((item): ChecklistItem => ({ id: item.id, label: item.label, done: item.done })),
     comments: comments.map((item): TaskComment => ({ id: item.id, authorId: item.author_id, message: item.message, createdAt: item.created_at })),
-    attachments: attachments.map(mapFileAttachment)
+    attachments: attachments.map(mapFileAttachment),
+    resetFrequency: row.reset_frequency ?? "none",
+    resetTime: row.reset_time ?? "23:59",
+    resetWeekday: row.reset_weekday ?? undefined,
+    resetMonthDay: row.reset_month_day ?? undefined,
+    resetMonthLastDay: row.reset_month_last_day ?? false,
+    fixedGoalKey: row.fixed_goal_key ?? undefined,
+    lastResetAt: row.last_reset_at ?? undefined,
+    nextResetAt: row.next_reset_at ?? undefined
   };
 }
 
