@@ -26,6 +26,7 @@ import {
   Camera,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ClipboardList,
   File,
@@ -1975,6 +1976,88 @@ function PasswordInput({ name, label, required, defaultValue, autoComplete, valu
   );
 }
 
+function ReviewDetailPanel({
+  selectedAsset,
+  selectedPost,
+  profileById,
+  openMediaPreview,
+  setReviewAssetStatus,
+  addReviewComment,
+  deletePostReviewAsset,
+  setModal,
+  onDeleted,
+}: {
+  selectedAsset: PostReviewAsset;
+  selectedPost: EditorialPost | undefined;
+  profileById: Map<string, Profile>;
+  openMediaPreview: (item: MediaPreviewItem) => void;
+  setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
+  addReviewComment: (assetId: string, message: string) => void;
+  deletePostReviewAsset: (assetId: string) => void;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+  onDeleted: () => void;
+}) {
+  const [adjustmentMessage, setAdjustmentMessage] = useState("");
+  const [comment, setComment] = useState("");
+
+  function requestAdjustments() {
+    if (!adjustmentMessage.trim()) return;
+    setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
+    setAdjustmentMessage("");
+  }
+
+  function submitComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!comment.trim()) return;
+    addReviewComment(selectedAsset.id, comment);
+    setComment("");
+  }
+
+  function removeAsset() {
+    if (!window.confirm("Excluir esta arte de revisão?")) return;
+    deletePostReviewAsset(selectedAsset.id);
+    onDeleted();
+  }
+
+  return (
+    <div className="rounded-[30px] border border-slate-100 bg-slate-50 p-4">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-black text-blue-700">Arte para revisão</p>
+          <h3 className="mt-1 text-xl font-black">{selectedPost?.title ?? selectedAsset.name}</h3>
+          <p className="mt-1 text-sm font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name ?? "Equipe"} em {formatDate(selectedAsset.uploadedAt)}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {selectedPost && <button type="button" onClick={() => setModal({ kind: "post", id: selectedPost.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Abrir post</button>}
+          <button type="button" onClick={removeAsset} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700">Excluir</button>
+        </div>
+      </div>
+      <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
+        <MediaPreviewContent item={selectedAsset} />
+      </button>
+      <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar</button>
+        <div className="rounded-3xl bg-white p-3">
+          <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="Descreva os ajustes necessários" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+          <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+        </div>
+      </div>
+      <form onSubmit={submitComment} className="mt-4 flex gap-2">
+        <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário interno sobre a revisão" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+        <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-4 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
+      </form>
+      <div className="mt-4 space-y-2">
+        {selectedAsset.comments.map((item) => (
+          <div key={item.id} className="rounded-2xl bg-white p-3">
+            <p className="text-sm font-black">{profileById.get(item.authorId)?.name ?? "Equipe"}</p>
+            <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReviewsPage({
   assets,
   posts,
@@ -1997,105 +2080,215 @@ function ReviewsPage({
   addReviewComment: (assetId: string, message: string) => void;
   deletePostReviewAsset: (assetId: string) => void;
 }) {
-  const [statusFilter, setStatusFilter] = useState<ReviewAssetStatus | "Todas">("Aguardando revisão");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const [viewMode, setViewMode] = useState<"Calendário" | ReviewAssetStatus | "Todos">("Calendário");
+  const [weekStart, setWeekStart] = useState<Date>(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return d;
+  });
   const [selectedAssetId, setSelectedAssetId] = useState(assets[0]?.id ?? "");
-  const [adjustmentMessage, setAdjustmentMessage] = useState("");
-  const [comment, setComment] = useState("");
+
+  const days = makeWeek(weekStart);
+
   const filteredAssets = assets
-    .filter((asset) => statusFilter === "Todas" || asset.status === statusFilter)
+    .filter((asset) => viewMode === "Todos" || asset.status === viewMode)
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? filteredAssets[0];
+
+  const selectedAsset =
+    assets.find((asset) => asset.id === selectedAssetId) ??
+    (viewMode === "Calendário" ? undefined : filteredAssets[0]);
   const selectedPost = selectedAsset ? posts.find((post) => post.id === selectedAsset.postId) : undefined;
 
-  function requestAdjustments() {
-    if (!selectedAsset || !adjustmentMessage.trim()) return;
-    setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
-    setAdjustmentMessage("");
+  function prevWeek() {
+    setWeekStart((d) => { const n = new Date(d); n.setDate(n.getDate() - 7); return n; });
+  }
+  function nextWeek() {
+    setWeekStart((d) => { const n = new Date(d); n.setDate(n.getDate() + 7); return n; });
+  }
+  function handleDeleted() {
+    const next = filteredAssets.find((a) => a.id !== selectedAssetId);
+    setSelectedAssetId(next?.id ?? "");
   }
 
-  function submitComment(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selectedAsset || !comment.trim()) return;
-    addReviewComment(selectedAsset.id, comment);
-    setComment("");
-  }
-
-  function removeAsset() {
-    if (!selectedAsset) return;
-    if (!window.confirm("Excluir esta arte de revisão?")) return;
-    deletePostReviewAsset(selectedAsset.id);
-    const nextAsset = filteredAssets.find((asset) => asset.id !== selectedAsset.id);
-    setSelectedAssetId(nextAsset?.id ?? "");
-  }
+  const tabs = ["Calendário", "Aguardando revisão", "Aprovado", "Todos"] as const;
 
   return (
     <div className="space-y-5 animate-task-switch">
-      <Panel title="Fila de revisões" action={<Badge tone="amber">{assets.filter((asset) => asset.status === "Aguardando revisão").length} pendente(s)</Badge>}>
+      <Panel title="Revisões" action={<Badge tone="amber">{assets.filter((a) => a.status === "Aguardando revisão").length} {assets.filter((a) => a.status === "Aguardando revisão").length === 1 ? "pendente" : "pendentes"}</Badge>}>
+        {/* Abas */}
         <div className="mb-5 flex flex-wrap gap-2">
-          {(["Aguardando revisão", "Ajustes solicitados", "Aprovado", "Todas"] as const).map((status) => (
-            <button key={status} type="button" onClick={() => setStatusFilter(status)} className={`rounded-2xl px-4 py-2 text-sm font-black transition ${statusFilter === status ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"}`}>
-              {status}
+          {tabs.map((tab) => (
+            <button key={tab} type="button" onClick={() => setViewMode(tab)} className={`rounded-2xl px-4 py-2 text-sm font-black transition ${viewMode === tab ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"}`}>
+              {tab}
             </button>
           ))}
         </div>
-        <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
-          <div className="max-h-[68vh] space-y-3 overflow-y-auto pr-1">
-            {filteredAssets.map((asset) => {
-              const post = posts.find((item) => item.id === asset.postId);
-              return (
-                <button key={asset.id} type="button" onClick={() => setSelectedAssetId(asset.id)} className={`w-full rounded-3xl border p-4 text-left transition ${selectedAsset?.id === asset.id ? "border-blue-400 bg-blue-50 shadow-sm" : "border-slate-100 bg-white hover:border-blue-200"}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="line-clamp-2 font-black">{post?.title ?? asset.name}</p>
-                      <p className="mt-1 text-xs font-bold text-slate-500">{channelById.get(post?.channelId ?? "")?.name ?? "Canal"} · {profileById.get(asset.uploadedBy)?.name ?? "Equipe"}</p>
-                    </div>
-                    <Badge tone={asset.status === "Aprovado" ? "green" : asset.status === "Ajustes solicitados" ? "red" : "amber"}>{asset.status}</Badge>
-                  </div>
+
+        {/* ── Vista Calendário ── */}
+        {viewMode === "Calendário" && (
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div>
+              {/* Navegação de semana */}
+              <div className="mb-4 flex items-center gap-3">
+                <button type="button" onClick={prevWeek} className="rounded-2xl bg-slate-100 p-2 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700">
+                  <ChevronLeft size={16} />
                 </button>
-              );
-            })}
-            {!filteredAssets.length && <p className="rounded-3xl bg-slate-50 p-6 text-center text-sm font-bold text-slate-400">Nenhuma revisão nesse filtro.</p>}
-          </div>
-          {selectedAsset ? (
-            <div className="rounded-[30px] border border-slate-100 bg-slate-50 p-4">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-black text-blue-700">Arte para revisão</p>
-                  <h3 className="mt-1 text-xl font-black">{selectedPost?.title ?? selectedAsset.name}</h3>
-                  <p className="mt-1 text-sm font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name ?? "Equipe"} em {formatDate(selectedAsset.uploadedAt)}</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {selectedPost && <button type="button" onClick={() => setModal({ kind: "post", id: selectedPost.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Abrir post</button>}
-                  <button type="button" onClick={removeAsset} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700">Excluir</button>
+                <span className="text-sm font-black text-slate-700">
+                  {days[0].toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })} – {days[6].toLocaleDateString("pt-BR", { day: "2-digit", month: "short", year: "numeric" })}
+                </span>
+                <button type="button" onClick={nextWeek} className="rounded-2xl bg-slate-100 p-2 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700">
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+
+              {/* Grade 7 colunas */}
+              <div className="overflow-x-auto pb-2">
+                <div className="grid min-w-[560px] grid-cols-7 gap-2">
+                  {/* Headers dos dias */}
+                  {days.map((day) => (
+                    <div key={day.toISOString()} className={`rounded-2xl p-2 text-center text-xs font-black uppercase ${sameDay(day, today) ? "bg-blue-700 text-white shadow-lg shadow-blue-700/20" : "bg-slate-100 text-slate-600"}`}>
+                      {day.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit" })}
+                    </div>
+                  ))}
+                  {/* Células com thumbnails */}
+                  {days.map((day) => {
+                    const dayAssets = assets.filter((asset) => {
+                      const post = posts.find((p) => p.id === asset.postId);
+                      return post?.publishAt && sameDay(new Date(post.publishAt), day);
+                    });
+                    return (
+                      <div key={day.toISOString()} className={`min-h-[90px] rounded-2xl p-1.5 space-y-1.5 ${sameDay(day, today) ? "bg-blue-50 ring-1 ring-blue-200" : "bg-slate-50"}`}>
+                        {dayAssets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            onClick={() => setSelectedAssetId(asset.id)}
+                            className={`w-full overflow-hidden rounded-xl border-2 transition hover:opacity-80 ${
+                              selectedAsset?.id === asset.id
+                                ? "border-blue-500 shadow-md"
+                                : asset.status === "Aprovado"
+                                ? "border-emerald-300"
+                                : asset.status === "Ajustes solicitados"
+                                ? "border-rose-300"
+                                : "border-amber-300"
+                            }`}
+                          >
+                            <div className="aspect-video w-full bg-slate-200 overflow-hidden">
+                              {asset.previewUrl || asset.url ? (
+                                <img src={asset.previewUrl || asset.url} className="h-full w-full object-cover" alt={asset.name} />
+                              ) : (
+                                <div className="grid h-full place-items-center text-slate-400"><File size={16} /></div>
+                              )}
+                            </div>
+                            <p className="truncate px-1.5 py-1 text-left text-[10px] font-black text-slate-600">
+                              {posts.find((p) => p.id === asset.postId)?.title ?? asset.name}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-              <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
-                <MediaPreviewContent item={selectedAsset} />
-              </button>
-              <div className="mt-4 grid gap-3 lg:grid-cols-2">
-                <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar</button>
-                <div className="rounded-3xl bg-white p-3">
-                  <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="Descreva os ajustes necessários" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-                  <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
-                </div>
-              </div>
-              <form onSubmit={submitComment} className="mt-4 flex gap-2">
-                <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário interno sobre a revisão" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-                <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-4 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
-              </form>
-              <div className="mt-4 space-y-2">
-                {selectedAsset.comments.map((item) => (
-                  <div key={item.id} className="rounded-2xl bg-white p-3">
-                    <p className="text-sm font-black">{profileById.get(item.authorId)?.name ?? "Equipe"}</p>
-                    <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+
+              {/* Assets sem data */}
+              {(() => {
+                const undated = assets.filter((a) => {
+                  const post = posts.find((p) => p.id === a.postId);
+                  return !post?.publishAt;
+                });
+                if (!undated.length) return null;
+                return (
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-black uppercase text-slate-400">Sem data definida</p>
+                    <div className="flex flex-wrap gap-2">
+                      {undated.map((asset) => (
+                        <button
+                          key={asset.id}
+                          type="button"
+                          onClick={() => setSelectedAssetId(asset.id)}
+                          className={`w-24 overflow-hidden rounded-xl border-2 transition hover:opacity-80 ${
+                            selectedAsset?.id === asset.id ? "border-blue-500" :
+                            asset.status === "Aprovado" ? "border-emerald-300" :
+                            asset.status === "Ajustes solicitados" ? "border-rose-300" : "border-amber-300"
+                          }`}
+                        >
+                          <div className="aspect-video w-full overflow-hidden bg-slate-200">
+                            {asset.previewUrl || asset.url ? (
+                              <img src={asset.previewUrl || asset.url} className="h-full w-full object-cover" alt={asset.name} />
+                            ) : (
+                              <div className="grid h-full place-items-center text-slate-400"><File size={14} /></div>
+                            )}
+                          </div>
+                          <p className="truncate px-1 py-0.5 text-left text-[9px] font-black text-slate-500">{asset.name}</p>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
+                );
+              })()}
             </div>
-          ) : (
-            <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma revisão.</div>
-          )}
-        </div>
+
+            {/* Painel de detalhe */}
+            {selectedAsset ? (
+              <ReviewDetailPanel
+                selectedAsset={selectedAsset}
+                selectedPost={selectedPost}
+                profileById={profileById}
+                openMediaPreview={openMediaPreview}
+                setReviewAssetStatus={setReviewAssetStatus}
+                addReviewComment={addReviewComment}
+                deletePostReviewAsset={deletePostReviewAsset}
+                setModal={setModal}
+                onDeleted={handleDeleted}
+              />
+            ) : (
+              <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma arte para revisar.</div>
+            )}
+          </div>
+        )}
+
+        {/* ── Vistas de lista ── */}
+        {viewMode !== "Calendário" && (
+          <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <div className="max-h-[68vh] space-y-3 overflow-y-auto pr-1">
+              {filteredAssets.map((asset) => {
+                const post = posts.find((item) => item.id === asset.postId);
+                return (
+                  <button key={asset.id} type="button" onClick={() => setSelectedAssetId(asset.id)} className={`w-full rounded-3xl border p-4 text-left transition ${selectedAsset?.id === asset.id ? "border-blue-400 bg-blue-50 shadow-sm" : "border-slate-100 bg-white hover:border-blue-200"}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="line-clamp-2 font-black">{post?.title ?? asset.name}</p>
+                        <p className="mt-1 text-xs font-bold text-slate-500">{channelById.get(post?.channelId ?? "")?.name ?? "Canal"} · {profileById.get(asset.uploadedBy)?.name ?? "Equipe"}</p>
+                      </div>
+                      <Badge tone={asset.status === "Aprovado" ? "green" : asset.status === "Ajustes solicitados" ? "red" : "amber"}>{asset.status}</Badge>
+                    </div>
+                  </button>
+                );
+              })}
+              {!filteredAssets.length && <p className="rounded-3xl bg-slate-50 p-6 text-center text-sm font-bold text-slate-400">Nenhuma revisão nesse filtro.</p>}
+            </div>
+            {selectedAsset ? (
+              <ReviewDetailPanel
+                selectedAsset={selectedAsset}
+                selectedPost={selectedPost}
+                profileById={profileById}
+                openMediaPreview={openMediaPreview}
+                setReviewAssetStatus={setReviewAssetStatus}
+                addReviewComment={addReviewComment}
+                deletePostReviewAsset={deletePostReviewAsset}
+                setModal={setModal}
+                onDeleted={handleDeleted}
+              />
+            ) : (
+              <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma revisão.</div>
+            )}
+          </div>
+        )}
       </Panel>
     </div>
   );
