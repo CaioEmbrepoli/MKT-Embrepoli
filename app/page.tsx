@@ -2205,7 +2205,7 @@ function Header({
             className="hidden rounded-3xl border border-amber-200 bg-amber-100 px-4 py-3 text-sm font-black text-amber-800 shadow-sm transition hover:border-amber-300 hover:bg-amber-200 md:block"
             title="Abrir revisões pendentes"
           >
-            {pendingReviewCount} revisão(ões)
+            {pendingReviewCount} {pendingReviewCount === 1 ? "revisão" : "revisões"}
           </button>
         )}
         {saveStatus !== "idle" && (
