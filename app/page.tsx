@@ -90,6 +90,7 @@ import {
   saveIdea,
   saveMetric,
   saveMetricSnapshots,
+  replaceMetrics,
   saveNotification,
   savePost,
   savePostReviewAsset,
@@ -1755,6 +1756,7 @@ export default function Home() {
               contentTypeById={contentTypeById}
               funnelById={funnelById}
               setModal={setModal}
+              reloadData={reloadFromSupabase}
             />
           )}
           {activeSection === "configuracoes" && (
@@ -3828,7 +3830,8 @@ function Metrics({
   vehicleTypeById,
   contentTypeById,
   funnelById,
-  setModal
+  setModal,
+  reloadData
 }: {
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
@@ -3849,6 +3852,7 @@ function Metrics({
   contentTypeById: Map<string, ContentType>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
+  reloadData?: () => Promise<void>;
 }) {
   const [period, setPeriod] = useState("all");
   const [youtubeImportOpen, setYoutubeImportOpen] = useState(false);
@@ -4242,6 +4246,7 @@ function Metrics({
           productLines={productLines}
           funnelStages={funnelStages}
           onClose={() => setYoutubeImportOpen(false)}
+          reloadData={reloadData}
         />
       )}
       {allVideosOpen && (
@@ -4869,6 +4874,7 @@ function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profil
             {googleIntegrations.map((integration) => {
               const serviceStatus = googleStatus?.[integration.service];
               const busy = googleBusy === integration.service;
+              const connectedEmail = serviceStatus?.googleEmail?.trim();
               return (
                 <div key={integration.service} className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
                   <div className="flex items-start justify-between gap-3">
@@ -4884,9 +4890,17 @@ function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profil
                     {googleLoading
                       ? "Verificando conexao..."
                       : serviceStatus?.connected
-                        ? `Conta: ${serviceStatus.googleEmail}`
+                        ? "Conta conectada"
                         : "Nenhuma conta conectada"}
                   </p>
+                  {serviceStatus?.connected && (
+                    <div className="mt-2 rounded-2xl border border-emerald-100 bg-white px-3 py-2">
+                      <p className="text-xs font-black uppercase text-slate-400">Email conectado</p>
+                      <p className="mt-0.5 break-all text-sm font-black text-emerald-700">
+                        {connectedEmail || "Email nao identificado pelo Google"}
+                      </p>
+                    </div>
+                  )}
                   {serviceStatus?.connectedAt && (
                     <p className="mt-1 text-xs font-bold text-slate-400">
                       Conectado em {new Date(serviceStatus.connectedAt).toLocaleString("pt-BR")}
@@ -5404,7 +5418,7 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
   );
 }
 
-function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose }: {
+function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose, reloadData }: {
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
   posts: EditorialPost[];
@@ -5412,6 +5426,7 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
   productLines: ProductLine[];
   funnelStages: FunnelStage[];
   onClose: () => void;
+  reloadData?: () => Promise<void>;
 }) {
   const [phase, setPhase] = useState<"auth" | "fetching" | "importing" | "done" | "error">("auth");
   const [progress, setProgress] = useState<YouTubeImportProgress | null>(null);
@@ -5510,10 +5525,10 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
         await saveMetricSnapshots(supabase, snapshots);
       }
 
-      const importedIds = new Set(importedRows.map((r) => r.id));
-      const untouched = metrics.filter((m) => !importedIds.has(m.id));
-      const next = [...untouched, ...importedRows];
-      setMetrics(next);
+      if (supabase) {
+        await replaceMetrics(supabase, importedRows, metrics);
+      }
+      void reloadData?.();
       setSummary({ created, updated });
       setPhase("done");
     } catch (err) {
