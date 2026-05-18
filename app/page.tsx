@@ -6191,33 +6191,44 @@ function ProfileModal({ currentUser, setProfiles, uploadProfilePhoto, close }: P
 }
 
 function TeamMemberModal({ modal, currentUser, profiles, setProfiles, uploadProfilePhoto, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const [saving, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
+
   const member = modal?.kind === "teamMember" ? profiles.find((profile) => profile.id === modal.id) : undefined;
   const canManageTeam = currentUser.role === "admin" || currentUser.role === "gestor";
   if (!member || !canManageTeam) return <p className="text-sm font-bold text-slate-500">Você não tem permissão para editar este membro.</p>;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!member) return;
+    if (!member || !supabase) return;
     const form = new FormData(event.currentTarget);
-    const file = form.get("avatar");
-    if (file instanceof File && file.size > 0) {
-      await uploadProfilePhoto(member.id, file);
+
+    const updated: Profile = {
+      ...member,
+      name: String(form.get("name")),
+      email: String(form.get("email")),
+      phone: String(form.get("phone")),
+      bio: String(form.get("bio")),
+      role: String(form.get("role")) as Role,
+      active: form.get("active") === "on",
+    };
+
+    setSaving(true);
+    setSaveErr("");
+
+    try {
+      const file = form.get("avatar");
+      if (file instanceof File && file.size > 0) {
+        await uploadProfilePhoto(member.id, file);
+      }
+      await saveProfile(supabase, updated);
+    } catch (err) {
+      setSaveErr(err instanceof Error ? err.message : "Erro ao salvar. Tente novamente.");
+      setSaving(false);
+      return;
     }
-    setProfiles((current) =>
-      current.map((profile) =>
-        profile.id === member.id
-          ? {
-              ...profile,
-              name: String(form.get("name")),
-              email: String(form.get("email")),
-              phone: String(form.get("phone")),
-              bio: String(form.get("bio")),
-              role: String(form.get("role")) as Role,
-              active: form.get("active") === "on"
-            }
-          : profile
-      )
-    );
+
+    setProfiles((current) => current.map((profile) => (profile.id === member.id ? updated : profile)));
     close();
   }
 
@@ -6236,7 +6247,18 @@ function TeamMemberModal({ modal, currentUser, profiles, setProfiles, uploadProf
         Membro ativo
       </label>
       <TextArea name="bio" label="Bio curta" defaultValue={member.bio} />
-      <SubmitButton>Salvar membro</SubmitButton>
+      {saveErr && (
+        <p className="md:col-span-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">
+          ⚠️ {saveErr}
+        </p>
+      )}
+      <button
+        type="submit"
+        disabled={saving}
+        className="inline-flex items-center justify-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950 disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        {saving ? "Salvando..." : "Salvar membro"}
+      </button>
     </EntityForm>
   );
 }
