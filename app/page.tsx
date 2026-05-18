@@ -4215,6 +4215,9 @@ function Metrics({
                     {metric.privacyStatus === "unlisted" && (
                       <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-700">🔗 Não listado</span>
                     )}
+                    {(metric.privacyStatus === "public" || metric.privacyStatus == null) && metric.externalId?.startsWith("yt:") && (
+                      <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">🌐 Público</span>
+                    )}
                   </div>
                   <p className="text-xs font-bold text-slate-500">
                     {metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}
@@ -5327,6 +5330,9 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
                         )}
                         {metric.privacyStatus === "unlisted" && (
                           <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-700">🔗 Não listado</span>
+                        )}
+                        {(metric.privacyStatus === "public" || metric.privacyStatus == null) && metric.externalId?.startsWith("yt:") && (
+                          <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">🌐 Público</span>
                         )}
                       </div>
                       <p className="text-xs font-bold text-slate-500">
