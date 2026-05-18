@@ -13,6 +13,7 @@ import type {
   PostReviewAsset,
   PostReviewComment,
   PostMetric,
+  PostMetricSnapshot,
   PostTemplate,
   ProductLine,
   Profile,
@@ -530,6 +531,28 @@ export async function saveMetric(client: SupabaseClient, metric: PostMetric) {
 
 export async function deleteMetric(client: SupabaseClient, id: string) {
   await deleteById(client, "post_metrics", id);
+}
+
+export async function saveMetricSnapshots(
+  client: SupabaseClient,
+  snapshots: PostMetricSnapshot[]
+) {
+  if (!snapshots.length) return;
+  const organizationId = await currentOrganizationId(client);
+  const rows = snapshots.map((s) => ({
+    id: s.id,
+    organization_id: organizationId,
+    metric_id: s.metricId,
+    captured_at: s.capturedAt,
+    reach: s.reach,
+    likes: s.likes,
+    comments: s.comments,
+    shares: s.shares,
+    clicks: s.clicks,
+    leads: s.leads,
+  }));
+  const { error } = await client.from("post_metric_snapshots").insert(rows);
+  if (error) throw new Error(`post_metric_snapshots insert: ${error.message}`);
 }
 
 export async function replaceNotifications(client: SupabaseClient, notifications: Notification[], previous: Notification[] = []) {

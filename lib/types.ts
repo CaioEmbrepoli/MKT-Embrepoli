@@ -256,6 +256,18 @@ export type PostMetric = {
   videoType?: 'video' | 'short';
 };
 
+export type PostMetricSnapshot = {
+  id: string;
+  metricId: string;
+  capturedAt: string;
+  reach: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  clicks: number;
+  leads: number;
+};
+
 export type Notification = {
   id: string;
   userId: string;

@@ -388,6 +388,26 @@ alter table public.post_metrics add column if not exists vehicle_type_id text re
 alter table public.post_metrics add column if not exists content_type_id text references public.content_types(id) on delete set null;
 alter table public.post_metrics add column if not exists metric_date date not null default current_date;
 alter table public.post_metrics add column if not exists learning text not null default '';
+
+-- Histórico de snapshots de métricas (capturado antes de cada reimport do YouTube)
+create table if not exists public.post_metric_snapshots (
+  id              text        primary key default gen_random_uuid()::text,
+  organization_id text        not null references public.organizations(id) on delete cascade,
+  metric_id       text        not null references public.post_metrics(id) on delete cascade,
+  captured_at     timestamptz not null default now(),
+  reach           integer     not null default 0,
+  likes           integer     not null default 0,
+  comments        integer     not null default 0,
+  shares          integer     not null default 0,
+  clicks          integer     not null default 0,
+  leads           integer     not null default 0
+);
+alter table public.post_metric_snapshots enable row level security;
+create policy "members read own snapshots" on public.post_metric_snapshots for select
+  using (organization_id = current_organization_id());
+create policy "members insert own snapshots" on public.post_metric_snapshots for insert
+  with check (organization_id = current_organization_id());
+
 alter table public.posts add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;
 alter table public.posts add column if not exists content_type_id text references public.content_types(id) on delete set null;
 alter table public.ideas add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;

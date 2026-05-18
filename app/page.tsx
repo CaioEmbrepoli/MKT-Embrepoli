@@ -89,6 +89,7 @@ import {
   saveFunnelStage,
   saveIdea,
   saveMetric,
+  saveMetricSnapshots,
   saveNotification,
   savePost,
   savePostReviewAsset,
@@ -116,6 +117,7 @@ import type {
   PostReviewComment,
   ReviewAssetStatus,
   PostMetric,
+  PostMetricSnapshot,
   PostTemplate,
   PostStatus,
   ProductLine,
@@ -2108,12 +2110,12 @@ function ReviewDetailPanel({
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
         <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar</button>
         <div className="rounded-3xl bg-white p-3">
-          <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="Descreva os ajustes necessários" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+          <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="Descreva os ajustes necessários" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
           <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
         </div>
       </div>
       <form onSubmit={submitComment} className="mt-4 flex gap-2">
-        <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário interno sobre a revisão" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+        <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário interno sobre a revisão" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
         <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-4 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
       </form>
       <div className="mt-4 space-y-2">
@@ -3289,7 +3291,7 @@ function TaskColumnView({
         }}
         className="mb-3 flex gap-2"
       >
-        <input value={quickTitle} onChange={(event) => setQuickTitle(event.target.value)} placeholder="+ tarefa rápida" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+        <input value={quickTitle} onChange={(event) => setQuickTitle(event.target.value)} placeholder="+ tarefa rápida" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
         <button className="rounded-2xl bg-blue-700 px-3 text-white"><Plus size={16} /></button>
       </form>
       <SortableContext items={tasks.map((task) => `task:${task.id}`)} strategy={verticalListSortingStrategy}>
@@ -5271,6 +5273,37 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
         };
       });
 
+      // Coleta snapshots dos vídeos existentes cujos valores mudaram (guarda os valores ANTIGOS)
+      const snapshots: PostMetricSnapshot[] = videos
+        .map((v) => {
+          const externalId = `yt:${v.videoId}`;
+          const linkedPost = posts.find((p) => p.publishedVideoId === v.videoId);
+          const existing = byExt.get(externalId) ?? (linkedPost ? byPostId.get(linkedPost.id) : undefined);
+          if (!existing) return null;
+          // Só salva snapshot se algo mudou
+          if (
+            existing.reach === v.viewCount &&
+            existing.likes === v.likeCount &&
+            existing.comments === v.commentCount
+          ) return null;
+          return {
+            id: crypto.randomUUID(),
+            metricId: existing.id,
+            capturedAt: new Date().toISOString(),
+            reach: existing.reach,
+            likes: existing.likes,
+            comments: existing.comments,
+            shares: existing.shares,
+            clicks: existing.clicks,
+            leads: existing.leads,
+          } satisfies PostMetricSnapshot;
+        })
+        .filter((s): s is PostMetricSnapshot => s !== null);
+
+      if (snapshots.length && supabase) {
+        await saveMetricSnapshots(supabase, snapshots);
+      }
+
       const untouched = metrics.filter((m) => !m.externalId);
       const next = [...untouched, ...importedRows];
       setMetrics(next);
@@ -5565,7 +5598,7 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         )}
       </div>
 
-      <input value={task.title} onChange={(event) => updateTask(task.id, (current) => ({ ...current, title: event.target.value }))} className="w-full rounded-2xl border-0 bg-transparent px-0 py-1 text-3xl font-black outline-none focus:ring-0" />
+      <input value={task.title} onChange={(event) => updateTask(task.id, (current) => ({ ...current, title: event.target.value }))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full rounded-2xl border-0 bg-transparent px-0 py-1 text-3xl font-black outline-none focus:ring-0" />
       {task.fixedGoalKey && <Badge tone="purple">Card fixo de metas</Badge>}
 
       <div className="grid gap-3 lg:grid-cols-2">
@@ -5581,7 +5614,7 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
 
       <section className="space-y-2">
         <h3 className="font-black">Descrição</h3>
-        <textarea value={task.description} rows={7} placeholder="Do que se trata esta tarefa?" onChange={(event) => updateTask(task.id, (current) => ({ ...current, description: event.target.value }))} className="w-full resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-blue-500" />
+        <textarea value={task.description} rows={7} placeholder="Do que se trata esta tarefa?" onChange={(event) => updateTask(task.id, (current) => ({ ...current, description: event.target.value }))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-blue-500" />
       </section>
 
       <section className="space-y-3 border-t border-slate-200 pt-4">
@@ -5632,7 +5665,7 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           <Badge tone="slate">{doneSubtasks}/{subtasks.length}</Badge>
         </div>
         <form onSubmit={addNamedSubtask} className="flex gap-2">
-          <input value={subtaskTitle} onChange={(event) => setSubtaskTitle(event.target.value)} placeholder="Nova subtarefa" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" />
+          <input value={subtaskTitle} onChange={(event) => setSubtaskTitle(event.target.value)} placeholder="Nova subtarefa" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" />
           <button disabled={!subtaskTitle.trim()} className="rounded-2xl bg-blue-700 px-3 text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"><Plus size={17} /></button>
         </form>
         <div className="divide-y divide-slate-200 rounded-2xl border border-slate-100">
@@ -5670,12 +5703,12 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           {task.checklist.map((item) => (
             <div key={item.id} className="flex items-center gap-3 rounded-2xl bg-slate-50 p-3">
               <input type="checkbox" checked={item.done} onChange={(event) => updateTask(task.id, (current) => ({ ...current, checklist: current.checklist.map((check) => check.id === item.id ? { ...check, done: event.target.checked } : check) }))} />
-              <input value={item.label} onChange={(event) => updateTask(task.id, (current) => ({ ...current, checklist: current.checklist.map((check) => check.id === item.id ? { ...check, label: event.target.value } : check) }))} className="min-w-0 flex-1 bg-transparent font-bold outline-none" />
+              <input value={item.label} onChange={(event) => updateTask(task.id, (current) => ({ ...current, checklist: current.checklist.map((check) => check.id === item.id ? { ...check, label: event.target.value } : check) }))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 bg-transparent font-bold outline-none" />
               <button type="button" onClick={() => updateTask(task.id, (current) => ({ ...current, checklist: current.checklist.filter((check) => check.id !== item.id) }))} className="rounded-xl bg-rose-100 p-2 text-rose-700" title="Excluir item"><Trash2 size={15} /></button>
             </div>
           ))}
         </div>
-        <form onSubmit={addChecklist} className="flex gap-2"><input name="label" required placeholder="Novo item" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /><button className="rounded-2xl bg-blue-700 px-3 text-white"><Plus size={17} /></button></form>
+        <form onSubmit={addChecklist} className="flex gap-2"><input name="label" required placeholder="Novo item" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /><button className="rounded-2xl bg-blue-700 px-3 text-white"><Plus size={17} /></button></form>
       </section>
 
       <section className="space-y-3 border-t border-slate-200 pt-4">
@@ -5719,7 +5752,7 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
       <section className="sticky bottom-0 -mx-5 border-t border-slate-200 bg-white px-5 py-4">
         <form onSubmit={addComment} className="flex gap-3">
           <Avatar profile={profileById.get(currentUser.id)} size="sm" />
-          <input name="message" required placeholder="Adicionar um comentário" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500" />
+          <input name="message" required placeholder="Adicionar um comentário" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-blue-500" />
           <button className="rounded-2xl bg-blue-700 px-4 text-white"><MessageSquare size={17} /></button>
         </form>
         <div className="mt-3 space-y-2">{task.comments.map((comment) => <div key={comment.id} className="rounded-2xl bg-slate-50 p-3"><p className="font-black">{profileById.get(comment.authorId)?.name}</p><p className="text-sm text-slate-600">{comment.message}</p></div>)}</div>
@@ -6134,12 +6167,12 @@ function PostReviewPanel({
           {canReview && (
             <div className="space-y-2 rounded-3xl bg-white p-3">
               <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="w-full rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white">Aprovar arte</button>
-              <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="O que precisa ajustar?" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+              <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="O que precisa ajustar?" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
               <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="w-full rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
             </div>
           )}
           <form onSubmit={submitComment} className="flex gap-2">
-            <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário sobre esta arte" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+            <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário sobre esta arte" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
             <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-3 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
           </form>
           <div className="space-y-2">
@@ -6616,11 +6649,11 @@ function Avatar({ profile, size }: { profile?: Profile; size: "xs" | "sm" | "md"
 }
 
 function TextInput({ label, name, type = "text", required = false, defaultValue, autoComplete }: { label: string; name: string; type?: string; required?: boolean; defaultValue?: string; autoComplete?: string }) {
-  return <label className="block text-sm font-bold text-slate-600">{label}<input name={name} type={type} required={required} defaultValue={defaultValue} autoComplete={autoComplete} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
+  return <label className="block text-sm font-bold text-slate-600">{label}<input name={name} type={type} required={required} defaultValue={defaultValue} autoComplete={autoComplete} spellCheck={type === "text"} autoCorrect={type === "text" ? "on" : "off"} autoCapitalize={type === "text" ? "sentences" : "off"} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
 }
 
 function TextArea({ label, name, defaultValue }: { label: string; name: string; defaultValue?: string }) {
-  return <label className="block text-sm font-bold text-slate-600 md:col-span-2">{label}<textarea name={name} rows={4} defaultValue={defaultValue} className="mt-1 w-full resize-none rounded-3xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
+  return <label className="block text-sm font-bold text-slate-600 md:col-span-2">{label}<textarea name={name} rows={4} defaultValue={defaultValue} spellCheck autoCorrect="on" autoCapitalize="sentences" className="mt-1 w-full resize-none rounded-3xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
 }
 
 function Select({ label, name, options, defaultValue }: { label: string; name: string; options: string[][]; defaultValue?: string }) {
