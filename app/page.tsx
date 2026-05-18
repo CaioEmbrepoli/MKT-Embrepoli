@@ -1050,7 +1050,12 @@ export default function Home() {
         console.error("[auth] falha ao limpar localStorage:", err);
       }
     }
-    void loadCurrentSession();
+    // Fallback: garante que o spinner nunca trava indefinidamente
+    const fallbackTimer = setTimeout(() => {
+      console.warn("[auth] fallback timer: forçando fim do initializing após 6s");
+      setInitializing(false);
+    }, 6000);
+    void loadCurrentSession().finally(() => clearTimeout(fallbackTimer));
     if (!supabase || !isSupabaseConfigured) return;
     const { data } = supabase.auth.onAuthStateChange((event, session) => {
       console.log("[auth] onAuthStateChange:", event, "hasSession:", !!session?.user);
