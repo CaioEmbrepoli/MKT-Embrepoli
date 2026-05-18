@@ -254,6 +254,7 @@ export type PostMetric = {
   notes: string;
   learning: string;
   videoType?: 'video' | 'short';
+  privacyStatus?: 'public' | 'unlisted' | 'private';
 };
 
 export type PostMetricSnapshot = {

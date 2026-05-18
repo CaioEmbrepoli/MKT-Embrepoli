@@ -58,7 +58,7 @@ import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "
 import { useEffect, useMemo, useRef, useState } from "react";
 import { campaignAudiences as seedCampaignAudiences } from "@/lib/seed-data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { getDriveToken, getYouTubeReadToken, listDriveFolder, listMyYouTubeChannelVideos, searchYouTube, type DriveFile, type DriveItem, type YouTubeChannelVideo, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
+import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type YouTubeChannelVideo, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import {
   type AppData,
   deleteCampaign,
@@ -2034,28 +2034,46 @@ function driveFileId(url: string): string | null {
 }
 
 /**
- * Thumbnail para cards de revisão.
- * - Assets externos (Google Drive): usa o proxy /api/drive-thumb com o token OAuth.
+ * Thumbnail para cards de revisao.
+ * - Assets externos (Google Drive): busca a miniatura pela rota server-side.
  * - Assets carregados (upload): exibe <img> diretamente.
  */
-function ReviewThumb({ asset, driveToken }: { asset: PostReviewAsset; driveToken: string }) {
+function ReviewThumb({ asset }: { asset: PostReviewAsset }) {
   const [failed, setFailed] = useState(false);
+  const [driveSrc, setDriveSrc] = useState("");
+
+  useEffect(() => {
+    if (asset.source !== "external") return;
+    const fileId = driveFileId(asset.previewUrl || asset.url);
+    if (!fileId) return;
+    let active = true;
+    let objectUrl = "";
+    setFailed(false);
+    fetchDriveThumbnailObjectUrl(fileId)
+      .then((url) => {
+        objectUrl = url;
+        if (active) setDriveSrc(url);
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [asset.source, asset.previewUrl, asset.url]);
 
   if (asset.source === "external") {
-    const fileId = driveFileId(asset.previewUrl || asset.url);
-    if (fileId && driveToken && !failed) {
-      // Usa a rota que consulta a Drive API para obter o thumbnailLink real
-      const proxySrc = `/api/drive-thumb-by-id?fileId=${encodeURIComponent(fileId)}&token=${encodeURIComponent(driveToken)}`;
+    if (driveSrc && !failed) {
       return (
         <img
-          src={proxySrc}
+          src={driveSrc}
           alt={asset.name}
           className="h-full w-full object-cover"
           onError={() => setFailed(true)}
         />
       );
     }
-    // Fallback enquanto busca o token ou se falhar
     return (
       <div className="grid h-full place-items-center gap-1 text-slate-400">
         <HardDrive size={18} />
@@ -2191,14 +2209,6 @@ function ReviewsPage({
     return d;
   });
   const [selectedAssetId, setSelectedAssetId] = useState(assets[0]?.id ?? "");
-  const [driveToken, setDriveToken] = useState("");
-
-  // Busca o token do Google Drive para exibir thumbnails dos assets externos
-  useEffect(() => {
-    let active = true;
-    getDriveToken().then((t) => { if (active) setDriveToken(t); }).catch(() => {});
-    return () => { active = false; };
-  }, []);
 
   const days = makeWeek(weekStart);
 
@@ -2286,7 +2296,7 @@ function ReviewsPage({
                             }`}
                           >
                             <div className="aspect-video w-full bg-slate-200 overflow-hidden">
-                              <ReviewThumb asset={asset} driveToken={driveToken} />
+                              <ReviewThumb asset={asset} />
                             </div>
                             <p className="truncate px-1.5 py-1 text-left text-[10px] font-black text-slate-600">
                               {posts.find((p) => p.id === asset.postId)?.title ?? asset.name}
@@ -2322,7 +2332,7 @@ function ReviewsPage({
                           }`}
                         >
                           <div className="aspect-video w-full overflow-hidden bg-slate-200">
-                            <ReviewThumb asset={asset} driveToken={driveToken} />
+                            <ReviewThumb asset={asset} />
                           </div>
                           <p className="truncate px-1 py-0.5 text-left text-[9px] font-black text-slate-500">{asset.name}</p>
                         </button>
@@ -3843,6 +3853,7 @@ function Metrics({
   const [campaignFilter, setCampaignFilter] = useState("all");
   const [funnelFilter, setFunnelFilter] = useState("all");
   const [videoTypeFilter, setVideoTypeFilter] = useState("all");
+  const [privacyFilter, setPrivacyFilter] = useState("all");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersRef = useRef<HTMLDivElement>(null);
   const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
@@ -3894,8 +3905,9 @@ function Metrics({
     if (!metricMatchesFilter(metric.campaignId, campaignFilter)) return false;
     if (!metricMatchesFilter(metric.funnelStageId, funnelFilter)) return false;
     if (videoTypeFilter !== "all" && metric.videoType !== videoTypeFilter) return false;
+    if (privacyFilter !== "all" && (metric.privacyStatus ?? "public") !== privacyFilter) return false;
     return true;
-  }), [resolvedMetrics, period, activeChannel, lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, todayMs]);
+  }), [resolvedMetrics, period, activeChannel, lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, privacyFilter, todayMs]);
 
   const totals = useMemo(() => computeMetricTotals(filteredMetrics), [filteredMetrics]);
   const kpis = useMemo(() => channelKpiConfig(activeChannel, totals, filteredMetrics.length), [activeChannel, totals, filteredMetrics.length]);
@@ -3939,7 +3951,7 @@ function Metrics({
   const winners = useMemo(() => filteredMetrics.filter((m) => m.leads > 0 && metricEngagementRate(m) >= 5).slice(0, 4), [filteredMetrics]);
   const weakMetrics = useMemo(() => filteredMetrics.filter((m) => m.reach < averageReach * 0.7 || m.leads === 0).slice(0, 4), [filteredMetrics, averageReach]);
 
-  const activeFilterCount = [lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter].filter((f) => f !== "all").length;
+  const activeFilterCount = [lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, privacyFilter].filter((f) => f !== "all").length;
 
   const channelCounts = useMemo(() => {
     const map = new Map<string, number>();
@@ -4062,8 +4074,11 @@ function Metrics({
                 {isYoutubeChannel && (
                   <FilterSelect label="Tipo" value={videoTypeFilter} onChange={setVideoTypeFilter} options={[["all", "Todos"], ["video", "Vídeo"], ["short", "Shorts"]]} />
                 )}
+                {isYoutubeChannel && (
+                  <FilterSelect label="Visibilidade" value={privacyFilter} onChange={setPrivacyFilter} options={[["all", "Todas"], ["public", "Público"], ["unlisted", "Não listado"], ["private", "Privado"]]} />
+                )}
                 {activeFilterCount > 0 && (
-                  <button type="button" onClick={() => { setLineFilter("all"); setVehicleFilter("all"); setContentFilter("all"); setCampaignFilter("all"); setFunnelFilter("all"); setVideoTypeFilter("all"); }}
+                  <button type="button" onClick={() => { setLineFilter("all"); setVehicleFilter("all"); setContentFilter("all"); setCampaignFilter("all"); setFunnelFilter("all"); setVideoTypeFilter("all"); setPrivacyFilter("all"); }}
                     className="rounded-2xl bg-slate-100 px-3 py-2 text-xs font-black text-slate-600 hover:bg-slate-200"
                   >
                     Limpar filtros
@@ -4185,7 +4200,15 @@ function Metrics({
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
-                  <p className="line-clamp-1 font-black">{metric.postTitle}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="line-clamp-1 font-black">{metric.postTitle}</p>
+                    {metric.privacyStatus === "private" && (
+                      <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">🔒 Privado</span>
+                    )}
+                    {metric.privacyStatus === "unlisted" && (
+                      <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-700">🔗 Não listado</span>
+                    )}
+                  </div>
                   <p className="text-xs font-bold text-slate-500">
                     {metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}
                     {metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}
@@ -4742,6 +4765,54 @@ function CalendarDateModal({ date, setCalendarDates, close }: { date?: CalendarD
 }
 
 function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>> }) {
+  const [googleStatus, setGoogleStatus] = useState<GoogleConnectionStatus | null>(null);
+  const [googleLoading, setGoogleLoading] = useState(true);
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [googleError, setGoogleError] = useState("");
+  const canManageGoogle = currentUser.role === "admin" || currentUser.role === "gestor";
+
+  async function loadGoogleStatus() {
+    setGoogleLoading(true);
+    setGoogleError("");
+    try {
+      setGoogleStatus(await getGoogleStatus());
+    } catch (error) {
+      setGoogleError(error instanceof Error ? error.message : "Erro ao carregar integracao Google.");
+    } finally {
+      setGoogleLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadGoogleStatus();
+  }, []);
+
+  async function connectGoogle() {
+    setGoogleBusy(true);
+    setGoogleError("");
+    try {
+      const url = await startGoogleConnection();
+      window.location.href = url;
+    } catch (error) {
+      setGoogleError(error instanceof Error ? error.message : "Erro ao iniciar conexao Google.");
+      setGoogleBusy(false);
+    }
+  }
+
+  async function disconnectGoogle() {
+    if (!window.confirm("Desconectar a conta Google corporativa para toda a equipe?")) return;
+    setGoogleBusy(true);
+    setGoogleError("");
+    try {
+      await disconnectGoogleConnection();
+      await loadGoogleStatus();
+    } catch (error) {
+      setGoogleError(error instanceof Error ? error.message : "Erro ao desconectar Google.");
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
+
   return (
     <Panel title="Conta e permissões">
       <div className="space-y-4 rounded-3xl bg-slate-50 p-5">
@@ -4757,6 +4828,46 @@ function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profil
           </span>
           <input type="checkbox" checked={currentUser.notificationSound} onChange={(event) => setProfiles((current) => current.map((profile) => profile.id === currentUser.id ? { ...profile, notificationSound: event.target.checked } : profile))} className="h-5 w-5" />
         </label>
+        <div className="rounded-3xl bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-black">Integração Google corporativa</p>
+              <p className="mt-1 text-sm font-bold text-slate-500">
+                Drive e YouTube usam uma unica conta Google da empresa, sem pedir login em cada computador.
+              </p>
+              <p className="mt-3 text-sm font-black text-slate-700">
+                {googleLoading
+                  ? "Verificando conexao..."
+                  : googleStatus?.connected
+                    ? `Conectado como ${googleStatus.googleEmail}`
+                    : "Google ainda nao conectado"}
+              </p>
+              {googleStatus?.connectedAt && (
+                <p className="mt-1 text-xs font-bold text-slate-400">
+                  Conectado em {new Date(googleStatus.connectedAt).toLocaleString("pt-BR")}
+                </p>
+              )}
+              {!canManageGoogle && (
+                <p className="mt-2 text-xs font-bold text-slate-400">
+                  Apenas Administrador ou Gestor pode conectar ou desconectar a conta Google.
+                </p>
+              )}
+              {googleError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{googleError}</p>}
+            </div>
+            {canManageGoogle && (
+              <div className="flex flex-wrap gap-2">
+                <button type="button" disabled={googleBusy || googleLoading} onClick={connectGoogle} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
+                  {googleStatus?.connected ? "Reconectar" : "Conectar Google"}
+                </button>
+                {googleStatus?.connected && (
+                  <button type="button" disabled={googleBusy || googleLoading} onClick={disconnectGoogle} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                    Desconectar
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </Panel>
   );
@@ -4888,17 +4999,36 @@ function driveItemIcon(item: DriveItem) {
   return <File size={20} className="shrink-0 text-slate-400" />;
 }
 
-function DriveThumb({ src, token, alt, className, fallback }: {
-  src: string; token: string; alt: string; className?: string; fallback: React.ReactNode;
+function DriveThumb({ fileId, alt, className, fallback }: {
+  fileId: string; alt: string; className?: string; fallback: React.ReactNode;
 }) {
   const [failed, setFailed] = useState(false);
-  if (!src || !token || failed) return <>{fallback}</>;
-  const proxySrc = `/api/drive-thumb?url=${encodeURIComponent(src)}&token=${encodeURIComponent(token)}`;
-  return <img src={proxySrc} alt={alt} className={className} onError={() => setFailed(true)} />;
+  const [src, setSrc] = useState("");
+
+  useEffect(() => {
+    if (!fileId) return;
+    let active = true;
+    let objectUrl = "";
+    setFailed(false);
+    fetchDriveThumbnailObjectUrl(fileId)
+      .then((url) => {
+        objectUrl = url;
+        if (active) setSrc(url);
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [fileId]);
+
+  if (!src || failed) return <>{fallback}</>;
+  return <img src={src} alt={alt} className={className} onError={() => setFailed(true)} />;
 }
 
 function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile) => void; onClose: () => void }) {
-  const [token, setToken] = useState("");
   const [items, setItems] = useState<DriveItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -4909,10 +5039,7 @@ function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile)
     let active = true;
     async function init() {
       try {
-        const t = await getDriveToken();
-        if (!active) return;
-        setToken(t);
-        const files = await listDriveFolder("root", t);
+        const files = await listDriveFolder("root");
         if (!active) return;
         setItems(files);
       } catch (err) {
@@ -4931,7 +5058,7 @@ function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile)
     setError("");
     setBreadcrumb((prev) => [...prev, { id: folder.id, name: folder.name }]);
     try {
-      const files = await listDriveFolder(folder.id, token);
+      const files = await listDriveFolder(folder.id);
       setItems(files);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao abrir pasta.");
@@ -4946,7 +5073,7 @@ function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile)
     setError("");
     setBreadcrumb((prev) => prev.slice(0, index + 1));
     try {
-      const files = await listDriveFolder(target.id, token);
+      const files = await listDriveFolder(target.id);
       setItems(files);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao navegar.");
@@ -5036,8 +5163,7 @@ function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile)
                         <div className="aspect-video w-full overflow-hidden bg-slate-50">
                           {file.thumbnailLink ? (
                             <DriveThumb
-                              src={file.thumbnailLink}
-                              token={token}
+                              fileId={file.id}
                               alt={file.name}
                               className="h-full w-full object-cover"
                               fallback={
@@ -5187,7 +5313,15 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
                       </div>
                     )}
                     <div className="min-w-0 flex-1">
-                      <p className="line-clamp-1 font-black">{metric.postTitle}</p>
+                      <div className="flex items-center gap-2">
+                        <p className="line-clamp-1 font-black">{metric.postTitle}</p>
+                        {metric.privacyStatus === "private" && (
+                          <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">🔒 Privado</span>
+                        )}
+                        {metric.privacyStatus === "unlisted" && (
+                          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-700">🔗 Não listado</span>
+                        )}
+                      </div>
                       <p className="text-xs font-bold text-slate-500">
                         {metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}
                         {metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}
@@ -5245,9 +5379,8 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
     setError("");
     setPhase("auth");
     try {
-      const token = await getYouTubeReadToken();
       setPhase("fetching");
-      const videos = await listMyYouTubeChannelVideos(token, setProgress);
+      const videos = await listMyYouTubeChannelVideos(setProgress);
       setPhase("importing");
 
       const youtubeChannelId =
@@ -5291,6 +5424,7 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
           // Campos do YouTube: sempre atualiza com dados frescos
           externalId,
           videoType: v.isShort ? "short" as const : "video" as const,
+          privacyStatus: v.privacyStatus,
           postId:    linkedPost?.id,
           postTitle: v.title,
           channelId: youtubeChannelId,

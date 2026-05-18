@@ -521,7 +521,8 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
     leads: item.leads,
     notes: item.notes,
     learning: item.learning,
-    video_type: item.videoType ?? null
+    video_type: item.videoType ?? null,
+    privacy_status: item.privacyStatus ?? null
   }));
 }
 
@@ -822,7 +823,8 @@ function mapMetric(row: any): PostMetric {
     leads: row.leads,
     notes: row.notes ?? "",
     learning: row.learning ?? "",
-    videoType: row.video_type ?? undefined
+    videoType: row.video_type ?? undefined,
+    privacyStatus: row.privacy_status ?? undefined
   };
 }
 
