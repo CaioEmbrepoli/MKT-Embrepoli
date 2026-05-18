@@ -550,7 +550,9 @@ function playNotificationSound() {
 
 export default function Home() {
   const [loggedIn, setLoggedIn] = useState(false);
-  const [initializing, setInitializing] = useState(true); // evita flash da tela de login no F5
+  // Em dev: começa false (sem spinner) para evitar travamento do bypass local
+  // Em produção: começa true (mostra spinner) para evitar flash da tela de login
+  const [initializing, setInitializing] = useState(process.env.NODE_ENV !== "development");
   const [activeSection, setActiveSection] = useState("painel");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
