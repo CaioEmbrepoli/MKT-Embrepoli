@@ -340,8 +340,7 @@ async function compressImageFile(file: File) {
     quality -= 0.08;
     blob = await canvasToBlob(canvas, "image/jpeg", quality);
   }
-  const FileClass = File as unknown as new (bits: BlobPart[], name: string, options?: FilePropertyBag) => File;
-  return new FileClass([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+  return new globalThis.File([blob], file.name.replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
 }
 
 function loadImage(file: File): Promise<HTMLImageElement> {
@@ -6154,7 +6153,7 @@ function ProfileModal({ currentUser, setProfiles, uploadProfilePhoto, close }: P
     if (supabase && password) {
       await supabase.auth.updateUser({ password });
     }
-    if (file instanceof File && file.size > 0) {
+    if (file instanceof globalThis.File && (file as globalThis.File).size > 0) {
       await uploadProfilePhoto(currentUser.id, file);
     }
 
@@ -6218,7 +6217,7 @@ function TeamMemberModal({ modal, currentUser, profiles, setProfiles, uploadProf
 
     try {
       const file = form.get("avatar");
-      if (file instanceof File && file.size > 0) {
+      if (file instanceof globalThis.File && (file as globalThis.File).size > 0) {
         await uploadProfilePhoto(member.id, file);
       }
       await saveProfile(supabase, updated);
