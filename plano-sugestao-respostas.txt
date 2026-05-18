@@ -1,0 +1,120 @@
+Plano para sugestao de respostas com base em comentarios e duvidas dos clientes
+
+Objetivo
+Criar uma base inteligente de perguntas, comentarios e respostas reais dos clientes da Embrepoli, usando dados vindos das redes sociais e do atendimento. Essa base deve ajudar a equipe a responder perguntas futuras com mais rapidez, mantendo o conhecimento da empresa organizado dentro do sistema.
+
+1. Extracao de comentarios e respostas das redes sociais
+
+E possivel automatizar parte da coleta de comentarios e respostas das redes sociais, mas cada rede tem suas regras e limitacoes.
+
+YouTube
+E a rede mais simples para comecar. A API oficial do YouTube permite buscar comentarios de videos e tambem respostas. Ela usa recursos como commentThreads para comentarios principais e comments.list para respostas de comentarios.
+
+Instagram e Facebook
+Tambem e possivel puxar comentarios e respostas dos posts da conta profissional, mas isso depende da Meta API, permissoes corretas e, em alguns casos, revisao do aplicativo pela Meta. Funciona melhor para contas Business ou Creator e para conteudos da propria empresa.
+
+TikTok
+E a parte mais dificil. A API oficial para comentarios e mais restrita e pode depender de aprovacoes especificas. Por isso, o ideal e tratar TikTok como uma fase separada.
+
+Evitar raspagem nao oficial
+O ideal e evitar metodos nao oficiais de coleta, porque isso pode causar bloqueios, perda de acesso, dados incompletos ou problema com termos de uso das plataformas.
+
+2. Banco de duvidas dos clientes
+
+O sistema deve ter uma area chamada Banco de duvidas dos clientes, salva no Supabase.
+
+Cada item pode armazenar:
+- pergunta ou comentario do cliente;
+- resposta dada pela equipe, quando existir;
+- rede social de origem;
+- post, video ou campanha relacionada;
+- data;
+- autor, quando permitido pela plataforma;
+- produto ou linha relacionada;
+- tipo de veiculo;
+- tipo de conteudo;
+- categoria;
+- status: pendente, respondido, aprovado para base ou descartado;
+- responsavel pela revisao;
+- aprendizado interno.
+
+Tabelas sugeridas no Supabase:
+- customer_questions;
+- customer_answers;
+- knowledge_base;
+- question_embeddings.
+
+3. Uso inteligente com IA
+
+No comeco, nao e necessario treinar uma IA propria. O caminho mais pratico e usar busca semantica com embeddings.
+
+Busca semantica significa que o sistema entende a essencia da pergunta, mesmo quando o cliente usa palavras diferentes.
+
+Exemplos de perguntas parecidas:
+- Serve na Hilux 2018?
+- Tem kit para Hilux diesel?
+- Esse turbo da certo na Hilux?
+- Voces fazem para SW4?
+
+Mesmo com textos diferentes, o sistema pode entender que todas estao relacionadas a compatibilidade de kit para caminhonetes Toyota diesel.
+
+4. Como o fluxo funcionaria
+
+1. O sistema puxa comentarios e mensagens das redes sociais.
+2. Os dados sao salvos no Supabase.
+3. A IA gera embeddings, que sao representacoes numericas do significado das perguntas.
+4. Quando chega uma pergunta nova, o sistema compara essa pergunta com as antigas.
+5. O sistema mostra perguntas parecidas, respostas ja usadas e uma sugestao de resposta.
+6. A equipe aprova, edita ou descarta a sugestao.
+7. A resposta aprovada vira conhecimento oficial da empresa.
+
+5. RAG em vez de treinamento
+
+O caminho recomendado e usar RAG: a IA busca informacoes no banco da empresa antes de sugerir uma resposta.
+
+Estrutura recomendada:
+Supabase + pgvector + embeddings + IA para gerar sugestoes.
+
+Isso permite que a IA responda com base no conhecimento da Embrepoli, sem precisar treinar um modelo proprio logo no inicio.
+
+Vantagens:
+- mais rapido de implementar;
+- mais barato;
+- mais facil de controlar;
+- permite revisar antes de responder ao cliente;
+- reduz risco de resposta inventada;
+- melhora com o tempo conforme a base cresce.
+
+6. Fluxo ideal dentro do app
+
+Cliente pergunta nas redes sociais
+-> sistema importa a pergunta
+-> IA procura duvidas parecidas
+-> IA sugere resposta
+-> equipe aprova ou edita
+-> resposta final pode ser usada no atendimento
+-> resposta aprovada entra na base de conhecimento
+
+7. Fases sugeridas
+
+Fase 1
+Criar o Banco de duvidas dos clientes no Supabase e permitir cadastro manual de perguntas e respostas.
+
+Fase 2
+Importar comentarios do YouTube, por ser a integracao mais simples.
+
+Fase 3
+Adicionar Instagram e Facebook via Meta API.
+
+Fase 4
+Avaliar TikTok conforme disponibilidade e aprovacao da API.
+
+Fase 5
+Adicionar embeddings e busca semantica.
+
+Fase 6
+Adicionar sugestao automatica de resposta com aprovacao da equipe.
+
+8. Observacao importante
+
+A IA nao deve responder automaticamente para o cliente no inicio. O mais seguro e ela sugerir respostas para a equipe revisar. Depois que o sistema estiver maduro e a base estiver bem confiavel, pode ser avaliada uma automacao maior.
