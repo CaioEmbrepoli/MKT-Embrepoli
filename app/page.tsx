@@ -5332,7 +5332,8 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
         await saveMetricSnapshots(supabase, snapshots);
       }
 
-      const untouched = metrics.filter((m) => !m.externalId);
+      const importedIds = new Set(importedRows.map((r) => r.id));
+      const untouched = metrics.filter((m) => !importedIds.has(m.id));
       const next = [...untouched, ...importedRows];
       setMetrics(next);
       setSummary({ created, updated });
