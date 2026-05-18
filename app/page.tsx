@@ -216,6 +216,12 @@ function defaultPostFormatForChannel(channel?: Channel) {
   return postFormatOptionsForChannel(channel)[0] ?? "Post";
 }
 
+function authRedirectUrl() {
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  const baseUrl = configuredUrl || (typeof window !== "undefined" ? window.location.origin : "");
+  return `${baseUrl.replace(/\/$/, "")}/`;
+}
+
 function defaultTaskResetFields(): Pick<Task, "resetFrequency" | "resetTime" | "resetMonthLastDay"> {
   return { resetFrequency: "none", resetTime: "23:59", resetMonthLastDay: false };
 }
@@ -548,6 +554,7 @@ export default function Home() {
   const [activeSection, setActiveSection] = useState("painel");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
+  const [sessionUserId, setSessionUserId] = useState("");
   const [channels, setChannels] = useState<Channel[]>([]);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
@@ -587,7 +594,11 @@ export default function Home() {
   const realtimeReloadTimer = useRef<number | null>(null);
   const remoteReady = useRef(false);
 
-  const currentUser = profiles.find((profile) => profile.id === currentUserId) ?? profiles[0] ?? { id: "", role: "colaborador" as const, name: "", email: "", phone: "", active: false, notificationSound: false, organizationId: "", avatarUrl: "" };
+  const emptyUser: Profile = { id: "", role: "colaborador", name: "", email: "", phone: "", bio: "", active: false, notificationSound: false, avatarUrl: "" };
+  const currentUser = profiles.find((profile) => profile.id === currentUserId)
+    ?? profiles.find((profile) => profile.id === sessionUserId)
+    ?? (!isSupabaseConfigured ? profiles[0] : undefined)
+    ?? emptyUser;
   const profileById = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile])), [profiles]);
   const channelById = useMemo(() => new Map(channels.map((channel) => [channel.id, channel])), [channels]);
   const lineById = useMemo(() => new Map(productLines.map((line) => [line.id, line])), [productLines]);
@@ -768,8 +779,13 @@ export default function Home() {
     setTasks(data.tasks);
     setMetrics(data.metrics);
     setNotifications(data.notifications);
-    const current = data.profiles.find((profile) => profile.email === currentUser.email) ?? data.profiles[0];
-    if (current) setCurrentUserId(current.id);
+    const { data: authData } = await supabase.auth.getUser();
+    const authUserId = authData.user?.id ?? sessionUserId;
+    if (authUserId) {
+      setSessionUserId(authUserId);
+      const current = data.profiles.find((profile) => profile.id === authUserId);
+      setCurrentUserId(current?.id ?? authUserId);
+    }
     remoteReady.current = true;
     window.setTimeout(() => {
       realtimeReloading.current = false;
@@ -922,8 +938,11 @@ export default function Home() {
 
       if (!data.session?.user) {
         console.warn("[auth] no session after bypass — staying on login screen");
+        setSessionUserId("");
+        setCurrentUserId("");
         return;
       }
+      setSessionUserId(data.session.user.id);
       console.log("[auth] fetching profile…");
       const profile = await ensureCurrentProfile(supabase);
       console.log("[auth] profile:", profile);
@@ -1040,6 +1059,11 @@ export default function Home() {
         setAuthMode("reset");
         setAuthMessage("Digite sua nova senha para concluir a recuperação.");
       }
+      if (event === "SIGNED_OUT") {
+        setSessionUserId("");
+        setCurrentUserId("");
+        setLoggedIn(false);
+      }
       // Quando user volta da confirmação de email, dispara reload de sessão
       if (event === "SIGNED_IN" && session?.user) {
         void loadCurrentSession();
@@ -1062,6 +1086,7 @@ export default function Home() {
           setAuthLoading(false);
           return;
         }
+        setSessionUserId(data.user.id);
         const profile = await ensureCurrentProfile(supabase);
         if (!profile?.active) {
           setCurrentUserId(profile?.id ?? data.user.id);
@@ -1084,6 +1109,7 @@ export default function Home() {
 
     const fallback = profiles.find((profile) => profile.email.toLowerCase() === email.toLowerCase());
     if (fallback) {
+      setSessionUserId(fallback.id);
       setCurrentUserId(fallback.id);
       setAuthLoading(false);
       setLoggedIn(true);
@@ -1103,7 +1129,7 @@ export default function Home() {
         password,
         options: {
           data: { name },
-          emailRedirectTo: `${window.location.origin}/`
+          emailRedirectTo: authRedirectUrl()
         }
       });
       if (error) {
@@ -1148,7 +1174,7 @@ export default function Home() {
       const { error } = await supabase.auth.resend({
         type: "signup",
         email: pendingSignupEmail,
-        options: { emailRedirectTo: `${window.location.origin}/` }
+        options: { emailRedirectTo: authRedirectUrl() }
       });
       if (error) {
         setAuthError(`Não foi possível reenviar: ${error.message}`);
@@ -1169,7 +1195,7 @@ export default function Home() {
     setAuthMessage("");
     if (supabase && isSupabaseConfigured) {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/`
+        redirectTo: authRedirectUrl()
       });
       if (error) {
         setAuthError("Não foi possível enviar o email de recuperação. Verifique o endereço informado.");
@@ -1211,6 +1237,8 @@ export default function Home() {
     if (supabase && isSupabaseConfigured) {
       await supabase.auth.signOut();
     }
+    setSessionUserId("");
+    setCurrentUserId("");
     setLoggedIn(false);
     setProfileOpen(false);
     setAuthMode("login");

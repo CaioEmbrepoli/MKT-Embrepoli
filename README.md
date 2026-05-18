@@ -32,15 +32,16 @@ Depois acesse `http://localhost:3000`.
 ```bash
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_SITE_URL=https://SEU-PROJETO.vercel.app
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
 5. O `schema.sql` já publica as tabelas no Realtime com `alter publication supabase_realtime add table ...`. Se alguma tabela já estiver publicada, ignore o aviso de duplicidade ou remova a linha repetida no SQL Editor.
 6. Confirme os buckets `task-attachments` e `profile-avatars` no Supabase Storage.
 7. Em Supabase Auth > URL Configuration, configure:
-   - Site URL local: `http://localhost:3000`
    - Site URL produção: `https://SEU-PROJETO.vercel.app`
    - Redirect URLs: `http://localhost:3000`, `https://SEU-PROJETO.vercel.app`
+   - Na Vercel, mantenha `NEXT_PUBLIC_SITE_URL` com a URL final da produção. Essa variável é usada nos emails de confirmação e redefinição de senha.
 
 Para o primeiro acesso, crie um usuário no Supabase Auth e insira o perfil inicial:
 
