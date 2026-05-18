@@ -165,7 +165,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
 export async function replaceProfiles(client: SupabaseClient, profiles: Profile[], previous: Profile[] = []) {
   const organizationId = await currentOrganizationId(client);
   await deleteRemovedRows(client, "profiles", organizationId, previous, profiles);
-  await client.from("profiles").upsert(profiles.map((profile) => ({
+  const { error } = await client.from("profiles").upsert(profiles.map((profile) => ({
     id: profile.id,
     organization_id: organizationId,
     name: profile.name,
@@ -177,6 +177,7 @@ export async function replaceProfiles(client: SupabaseClient, profiles: Profile[
     active: profile.active,
     notification_sound: profile.notificationSound
   })));
+  if (error) throw new Error(`profiles upsert: ${error.message}`);
 }
 
 export async function saveProfile(client: SupabaseClient, profile: Profile) {
@@ -580,7 +581,10 @@ async function replaceSimple<T extends { id: string }>(client: SupabaseClient, t
 
 async function replaceSimpleWithOrg<T extends { id: string }>(client: SupabaseClient, table: string, organizationId: string, rows: T[], previous: T[], mapper: (row: T) => Record<string, unknown>) {
   await deleteRemovedRows(client, table, organizationId, previous, rows);
-  if (rows.length) await client.from(table).upsert(rows.map(mapper));
+  if (rows.length) {
+    const { error } = await client.from(table).upsert(rows.map(mapper));
+    if (error) throw new Error(`${table} upsert: ${error.message}`);
+  }
 }
 
 async function replaceAssignees(client: SupabaseClient, table: string, parentColumn: string, organizationId: string, rows: { parentId: string; assignees: string[] }[]) {
