@@ -542,6 +542,7 @@ function playNotificationSound() {
 
 export default function Home() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [initializing, setInitializing] = useState(true); // evita flash da tela de login no F5
   const [activeSection, setActiveSection] = useState("painel");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
@@ -882,69 +883,74 @@ export default function Home() {
     console.log("[auth] loadCurrentSession: start");
     if (!supabase || !isSupabaseConfigured) {
       console.warn("[auth] supabase not configured — abort", { hasSupabase: !!supabase, isSupabaseConfigured });
+      setInitializing(false);
       return;
     }
-    const recoveryUrl = `${window.location.search}${window.location.hash}`;
-    if (recoveryUrl.includes("type=recovery")) {
-      console.log("[auth] recovery URL detected — switching to reset mode");
-      setAuthMode("reset");
-      return;
-    }
-
-    let { data } = await supabase.auth.getSession();
-    console.log("[auth] existing session?", !!data.session?.user);
-
-    // ── Dev bypass: auto-login no localhost sem mostrar a tela de login ──
-    if (!data.session?.user && process.env.NODE_ENV === "development") {
-      console.log("[auth] dev bypass: requesting /api/dev-login");
-      try {
-        const res = await fetch("/api/dev-login", { method: "POST" });
-        console.log("[auth] /api/dev-login status:", res.status);
-        if (res.ok) {
-          const tokens = await res.json() as { access_token: string; refresh_token: string };
-          const { data: sessionData, error: setErr } = await supabase.auth.setSession(tokens);
-          console.log("[auth] setSession result:", { error: setErr?.message, hasSession: !!sessionData.session });
-          data = { session: sessionData.session };
-        } else {
-          const errBody = await res.text();
-          console.error("[auth] dev bypass failed:", errBody);
-        }
-      } catch (err) {
-        console.error("[auth] dev bypass exception:", err);
+    try {
+      const recoveryUrl = `${window.location.search}${window.location.hash}`;
+      if (recoveryUrl.includes("type=recovery")) {
+        console.log("[auth] recovery URL detected — switching to reset mode");
+        setAuthMode("reset");
+        return;
       }
-    }
-    // ─────────────────────────────────────────────────────────────────────
 
-    if (!data.session?.user) {
-      console.warn("[auth] no session after bypass — staying on login screen");
-      return;
-    }
-    console.log("[auth] fetching profile…");
-    const profile = await ensureCurrentProfile(supabase);
-    console.log("[auth] profile:", profile);
-    if (!profile) {
-      console.error("[auth] ensureCurrentProfile returned null — provavelmente problema de RLS na tabela profiles");
-      if (process.env.NODE_ENV === "development") {
-        console.warn("[auth] DEV: entrando sem profile válido — verifique RLS da tabela profiles");
-        setAuthError("DEV: profile não encontrado, mas entrando mesmo assim. Veja console.");
+      let { data } = await supabase.auth.getSession();
+      console.log("[auth] existing session?", !!data.session?.user);
+
+      // ── Dev bypass: auto-login no localhost sem mostrar a tela de login ──
+      if (!data.session?.user && process.env.NODE_ENV === "development") {
+        console.log("[auth] dev bypass: requesting /api/dev-login");
+        try {
+          const res = await fetch("/api/dev-login", { method: "POST" });
+          console.log("[auth] /api/dev-login status:", res.status);
+          if (res.ok) {
+            const tokens = await res.json() as { access_token: string; refresh_token: string };
+            const { data: sessionData, error: setErr } = await supabase.auth.setSession(tokens);
+            console.log("[auth] setSession result:", { error: setErr?.message, hasSession: !!sessionData.session });
+            data = { session: sessionData.session };
+          } else {
+            const errBody = await res.text();
+            console.error("[auth] dev bypass failed:", errBody);
+          }
+        } catch (err) {
+          console.error("[auth] dev bypass exception:", err);
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
+      if (!data.session?.user) {
+        console.warn("[auth] no session after bypass — staying on login screen");
+        return;
+      }
+      console.log("[auth] fetching profile…");
+      const profile = await ensureCurrentProfile(supabase);
+      console.log("[auth] profile:", profile);
+      if (!profile) {
+        console.error("[auth] ensureCurrentProfile returned null — provavelmente problema de RLS na tabela profiles");
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[auth] DEV: entrando sem profile válido — verifique RLS da tabela profiles");
+          setAuthError("DEV: profile não encontrado, mas entrando mesmo assim. Veja console.");
+          setLoggedIn(true);
+          setAuthMode("login");
+        } else {
+          setAuthError("Não foi possível carregar o perfil. Veja o console para detalhes.");
+        }
+        return;
+      }
+      setCurrentUserId(profile.id);
+      if (profile.active) {
+        console.log("[auth] profile active — entering app");
         setLoggedIn(true);
         setAuthMode("login");
       } else {
-        setAuthError("Não foi possível carregar o perfil. Veja o console para detalhes.");
+        console.log("[auth] profile inactive — pending approval");
+        setLoggedIn(false);
+        setAuthMode("pending");
+        setAuthMessage("Email confirmado! ✓ Agora um Gestor ou Administrador precisa liberar seu acesso.");
+        void notifyManagersOfPendingSignup(profile);
       }
-      return;
-    }
-    setCurrentUserId(profile.id);
-    if (profile.active) {
-      console.log("[auth] profile active — entering app");
-      setLoggedIn(true);
-      setAuthMode("login");
-    } else {
-      console.log("[auth] profile inactive — pending approval");
-      setLoggedIn(false);
-      setAuthMode("pending");
-      setAuthMessage("Email confirmado! ✓ Agora um Gestor ou Administrador precisa liberar seu acesso.");
-      void notifyManagersOfPendingSignup(profile);
+    } finally {
+      setInitializing(false);
     }
   }
 
@@ -1527,6 +1533,21 @@ export default function Home() {
     syncTasks((current) => [...current, subtask]);
   }
 
+  if (initializing) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-white">
+        <div className="flex flex-col items-center gap-3">
+          <img
+            src="/embrepoli-logo.png"
+            alt="Embrepoli"
+            className="h-12 w-auto opacity-70"
+          />
+          <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-700 border-t-transparent" />
+        </div>
+      </div>
+    );
+  }
+
   if (!loggedIn) {
     return (
       <LoginScreen
@@ -1976,6 +1997,55 @@ function PasswordInput({ name, label, required, defaultValue, autoComplete, valu
   );
 }
 
+/** Extrai o fileId de uma URL do Google Drive (preview ou view) */
+function driveFileId(url: string): string | null {
+  const m = url.match(/\/file\/d\/([^/?#]+)/) ?? url.match(/[?&]id=([^&#]+)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Thumbnail para cards de revisão.
+ * - Assets externos (Google Drive): usa o proxy /api/drive-thumb com o token OAuth.
+ * - Assets carregados (upload): exibe <img> diretamente.
+ */
+function ReviewThumb({ asset, driveToken }: { asset: PostReviewAsset; driveToken: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (asset.source === "external") {
+    const fileId = driveFileId(asset.previewUrl || asset.url);
+    if (fileId && driveToken && !failed) {
+      // Usa a rota que consulta a Drive API para obter o thumbnailLink real
+      const proxySrc = `/api/drive-thumb-by-id?fileId=${encodeURIComponent(fileId)}&token=${encodeURIComponent(driveToken)}`;
+      return (
+        <img
+          src={proxySrc}
+          alt={asset.name}
+          className="h-full w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      );
+    }
+    // Fallback enquanto busca o token ou se falhar
+    return (
+      <div className="grid h-full place-items-center gap-1 text-slate-400">
+        <HardDrive size={18} />
+        <span className="text-[9px] font-bold">Drive</span>
+      </div>
+    );
+  }
+
+  // Asset de upload direto
+  const src = asset.previewUrl || asset.url;
+  if (src) {
+    return <img src={src} alt={asset.name} className="h-full w-full object-cover" onError={() => setFailed(true)} />;
+  }
+  return (
+    <div className="grid h-full place-items-center text-slate-400">
+      <File size={16} />
+    </div>
+  );
+}
+
 function ReviewDetailPanel({
   selectedAsset,
   selectedPost,
@@ -2091,6 +2161,14 @@ function ReviewsPage({
     return d;
   });
   const [selectedAssetId, setSelectedAssetId] = useState(assets[0]?.id ?? "");
+  const [driveToken, setDriveToken] = useState("");
+
+  // Busca o token do Google Drive para exibir thumbnails dos assets externos
+  useEffect(() => {
+    let active = true;
+    getDriveToken().then((t) => { if (active) setDriveToken(t); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   const days = makeWeek(weekStart);
 
@@ -2178,11 +2256,7 @@ function ReviewsPage({
                             }`}
                           >
                             <div className="aspect-video w-full bg-slate-200 overflow-hidden">
-                              {asset.previewUrl || asset.url ? (
-                                <img src={asset.previewUrl || asset.url} className="h-full w-full object-cover" alt={asset.name} />
-                              ) : (
-                                <div className="grid h-full place-items-center text-slate-400"><File size={16} /></div>
-                              )}
+                              <ReviewThumb asset={asset} driveToken={driveToken} />
                             </div>
                             <p className="truncate px-1.5 py-1 text-left text-[10px] font-black text-slate-600">
                               {posts.find((p) => p.id === asset.postId)?.title ?? asset.name}
@@ -2218,11 +2292,7 @@ function ReviewsPage({
                           }`}
                         >
                           <div className="aspect-video w-full overflow-hidden bg-slate-200">
-                            {asset.previewUrl || asset.url ? (
-                              <img src={asset.previewUrl || asset.url} className="h-full w-full object-cover" alt={asset.name} />
-                            ) : (
-                              <div className="grid h-full place-items-center text-slate-400"><File size={14} /></div>
-                            )}
+                            <ReviewThumb asset={asset} driveToken={driveToken} />
                           </div>
                           <p className="truncate px-1 py-0.5 text-left text-[9px] font-black text-slate-500">{asset.name}</p>
                         </button>
@@ -2332,6 +2402,11 @@ function Header({
 }) {
   const title = menu.find((item) => item.id === activeSection)?.label ?? "Painel";
   const unreadCount = notifications.filter((item) => !item.read).length;
+  // Notificações visíveis no painel: não lidas (sempre) + lidas há menos de 1 hora
+  const ONE_HOUR = 60 * 60 * 1000;
+  const panelNotifications = notifications.filter(
+    (n) => !n.read || Date.now() - new Date(n.createdAt).getTime() < ONE_HOUR
+  );
   function markNotificationsRead(ids: string[]) {
     const idsToRead = new Set(ids);
     setNotifications((current) => {
@@ -2415,17 +2490,17 @@ function Header({
             <div className="absolute right-0 z-30 mt-3 w-96 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl animate-fade-in-up">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="font-black">Notificações</h3>
-                <button onClick={() => markNotificationsRead(notifications.map((notification) => notification.id))} className="text-xs font-black text-blue-700">Marcar lidas</button>
+                <button onClick={() => markNotificationsRead(panelNotifications.map((n) => n.id))} className="text-xs font-black text-blue-700">Marcar lidas</button>
               </div>
               <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-                {notifications.map((notification) => (
+                {panelNotifications.map((notification) => (
                   <button key={notification.id} onClick={() => openNotification(notification)} className={`w-full rounded-2xl p-3 text-left transition hover:bg-blue-50 ${notification.read ? "bg-slate-50" : "bg-blue-50"}`}>
                     <p className={`text-sm font-black ${notification.read ? "text-slate-600" : "text-slate-950"}`}>{notification.title}</p>
                     <p className={`mt-1 line-clamp-2 text-xs font-bold ${notification.read ? "text-slate-400" : "text-slate-500"}`}>{notification.description}</p>
                     <p className="mt-2 text-[11px] font-bold text-slate-400">{formatDate(notification.createdAt)}</p>
                   </button>
                 ))}
-                {!notifications.length && <p className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">Nenhuma notificação por enquanto.</p>}
+                {!panelNotifications.length && <p className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">Nenhuma notificação por enquanto.</p>}
               </div>
             </div>
           )}
@@ -2442,7 +2517,20 @@ function Header({
         {profileOpen && (
           <div className="absolute right-0 z-30 mt-3 w-80 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl animate-fade-in-up">
             <div className="flex items-center gap-3">
-              <Avatar profile={currentUser} size="lg" />
+              {/* Foto com overlay de câmera no hover */}
+              <label className="group relative h-16 w-16 shrink-0 cursor-pointer">
+                {currentUser.avatarUrl ? (
+                  <img src={currentUser.avatarUrl} alt={currentUser.name} className="h-16 w-16 rounded-full object-cover ring-2 ring-blue-100" />
+                ) : (
+                  <div className="flex h-16 w-16 items-center justify-center rounded-full bg-blue-700 text-lg font-black text-white ring-2 ring-blue-100">
+                    {initials(currentUser.name)}
+                  </div>
+                )}
+                <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
+                  <span className="text-2xl transition-transform duration-200 group-hover:scale-125">📷</span>
+                </div>
+                <input type="file" accept="image/*" className="hidden" onChange={(event) => event.target.files?.[0] && uploadProfilePhoto(currentUser.id, event.target.files[0])} />
+              </label>
               <div className="min-w-0">
                 <p className="truncate font-black">{currentUser.name}</p>
                 <p className="truncate text-sm text-slate-500">{currentUser.email}</p>
@@ -2458,11 +2546,6 @@ function Header({
             >
               Editar perfil
             </button>
-            <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700">
-              <Camera size={16} />
-              Trocar foto
-              <input type="file" accept="image/*" className="hidden" onChange={(event) => event.target.files?.[0] && uploadProfilePhoto(currentUser.id, event.target.files[0])} />
-            </label>
             <button onClick={logout} className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-950 px-3 py-2 text-sm font-black text-white">
               <LogOut size={16} />
               Sair

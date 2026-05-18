@@ -18,7 +18,8 @@ Estas regras devem ser seguidas por qualquer IA que modifique este projeto.
 
 ## Git e Commits
 
-- **Nunca commitar sem aprovação explícita do usuário.**
+- **Nunca commitar e nunca dar push sem aprovação explícita do usuário.** Aguardar o usuário dizer explicitamente que quer subir as mudanças (ex: "sobe pro git", "commita", "faz o push") antes de executar qualquer `git commit` ou `git push`.
+- O usuário pode querer acumular várias mudanças antes de um único commit — nunca antecipar isso.
 - Nunca usar `--force` em branches que não sejam branches de feature pessoal.
 - Nunca pular hooks de pre-commit (`--no-verify`).
 
