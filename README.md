@@ -34,6 +34,11 @@ NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 NEXT_PUBLIC_SITE_URL=https://SEU-PROJETO.vercel.app
 SUPABASE_SERVICE_ROLE_KEY=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=https://SEU-PROJETO.vercel.app/api/google/oauth/callback
+GOOGLE_OAUTH_STATE_SECRET=
+GOOGLE_API_KEY=
 ```
 
 5. O `schema.sql` já publica as tabelas no Realtime com `alter publication supabase_realtime add table ...`. Se alguma tabela já estiver publicada, ignore o aviso de duplicidade ou remova a linha repetida no SQL Editor.
@@ -42,6 +47,19 @@ SUPABASE_SERVICE_ROLE_KEY=
    - Site URL produção: `https://SEU-PROJETO.vercel.app`
    - Redirect URLs: `http://localhost:3000`, `https://SEU-PROJETO.vercel.app`
    - Na Vercel, mantenha `NEXT_PUBLIC_SITE_URL` com a URL final da produção. Essa variável é usada nos emails de confirmação e redefinição de senha.
+
+## Integração Google corporativa
+
+O Drive e o YouTube usam uma conexão Google da empresa, salva no Supabase. Um Administrador ou Gestor conecta uma vez em `Configurações > Conta e Permissões`; depois a equipe inteira usa a mesma autorização automaticamente, inclusive em outros computadores.
+
+No Google Cloud Console, configure o OAuth Client como aplicação web e adicione estes Redirect URIs:
+
+```text
+https://SEU-PROJETO.vercel.app/api/google/oauth/callback
+http://localhost:3000/api/google/oauth/callback
+```
+
+Na Vercel, preencha `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` e `SUPABASE_SERVICE_ROLE_KEY`. O `GOOGLE_API_KEY` continua opcional para buscas públicas no YouTube. Depois rode `supabase/google-connections.sql` no SQL Editor para criar a tabela `google_connections` no projeto já existente.
 
 Para o primeiro acesso, crie um usuário no Supabase Auth e insira o perfil inicial:
 
