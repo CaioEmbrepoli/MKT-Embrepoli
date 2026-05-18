@@ -5246,26 +5246,28 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
         if (existing) updated += 1;
         else created += 1;
         return {
-          id: existing?.id ?? crypto.randomUUID(),
+          // Campos manuais: preserva os existentes, usa padrão só se for novo
+          id:            existing?.id            ?? crypto.randomUUID(),
+          campaignId:    existing?.campaignId    ?? "",
+          productLineId: existing?.productLineId ?? defaultLineId,
+          vehicleTypeId: existing?.vehicleTypeId ?? "",
+          contentTypeId: existing?.contentTypeId ?? "",
+          funnelStageId: existing?.funnelStageId ?? defaultFunnelId,
+          shares:        existing?.shares        ?? 0,
+          clicks:        existing?.clicks        ?? 0,
+          leads:         existing?.leads         ?? 0,
+          notes:         existing?.notes         ?? "",
+          learning:      existing?.learning      ?? "",
+          // Campos do YouTube: sempre atualiza com dados frescos
           externalId,
           videoType: v.isShort ? "short" as const : "video" as const,
-          postId: linkedPost?.id,
+          postId:    linkedPost?.id,
           postTitle: v.title,
           channelId: youtubeChannelId,
-          campaignId: "",
-          productLineId: defaultLineId,
-          vehicleTypeId: "",
-          contentTypeId: "",
-          funnelStageId: defaultFunnelId,
-          date: v.publishedAt,
-          reach: v.viewCount,
-          likes: v.likeCount,
-          comments: v.commentCount,
-          shares: 0,
-          clicks: 0,
-          leads: 0,
-          notes: "",
-          learning: "",
+          date:      v.publishedAt,
+          reach:     v.viewCount,
+          likes:     v.likeCount,
+          comments:  v.commentCount,
         };
       });
 
