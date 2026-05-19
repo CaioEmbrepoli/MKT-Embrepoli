@@ -32,7 +32,9 @@ import {
   File,
   FileImage,
   FileUp,
+  FileText,
   FileVideo,
+  Download,
   Folder,
   GripVertical,
   HardDrive,
@@ -478,6 +480,54 @@ function youtubePreviewUrl(url: string) {
     ?? trimmed.match(/youtube\.com\/shorts\/([^?&/]+)/)
     ?? trimmed.match(/youtube\.com\/embed\/([^?&/]+)/);
   return match?.[1] ? `https://www.youtube.com/embed/${match[1]}` : "";
+}
+
+const OFFICE_AND_PDF_MIMES = new Set([
+  "application/pdf",
+  "application/msword",
+  "application/vnd.ms-excel",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/rtf",
+  "application/vnd.oasis.opendocument.text",
+  "application/vnd.oasis.opendocument.spreadsheet",
+  "application/vnd.oasis.opendocument.presentation",
+  "text/csv",
+  "text/plain"
+]);
+const OFFICE_EXT_RE = /\.(pdf|docx?|xlsx?|pptx?|rtf|csv|txt|odt|ods|odp)(\?.*)?$/i;
+
+function isDocumentFile(item: { mimeType?: string; name?: string; url?: string }): boolean {
+  if (item.mimeType && OFFICE_AND_PDF_MIMES.has(item.mimeType)) return true;
+  return OFFICE_EXT_RE.test(item.name || item.url || "");
+}
+
+function extractDriveFileId(url: string): string | null {
+  const match = url.match(/drive\.google\.com\/file\/d\/([^/?]+)/) ?? url.match(/[?&]id=([^&]+)/);
+  return match?.[1] ?? null;
+}
+
+function buildOnlineViewerUrl(item: { url: string; source: "upload" | "external" }): string {
+  if (item.source === "external") {
+    const id = extractDriveFileId(item.url);
+    return id ? `https://drive.google.com/file/d/${id}/view` : item.url;
+  }
+  return `https://docs.google.com/viewer?url=${encodeURIComponent(item.url)}`;
+}
+
+function buildEmbeddedViewerUrl(item: { url: string; previewUrl?: string; source: "upload" | "external" }): string {
+  if (item.source === "external") return item.previewUrl || item.url;
+  return `https://docs.google.com/viewer?url=${encodeURIComponent(item.url)}&embedded=true`;
+}
+
+function buildDownloadUrl(item: { url: string; source: "upload" | "external" }): string {
+  if (item.source === "external") {
+    const id = extractDriveFileId(item.url);
+    if (id) return `https://drive.google.com/uc?export=download&id=${id}`;
+  }
+  return item.url;
 }
 
 class AnyButtonPointerSensor extends PointerSensor {
@@ -2354,6 +2404,9 @@ function ReviewDetailPanel({
       <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
         <MediaPreviewContent item={selectedAsset} />
       </button>
+      <div className="mt-2 flex justify-end">
+        <FileActionButtons item={selectedAsset} />
+      </div>
       <div className="mt-4">
         {selectedAsset.status === "Aprovado" ? (
           showAdjustInput ? (
@@ -5379,7 +5432,60 @@ function MediaPreviewContent({ item, large = false }: { item: MediaPreviewItem; 
   if (item.type === "video") {
     return <video src={source} controls className={`${large ? "max-h-[72vh]" : "max-h-64"} w-full rounded-3xl bg-black`} />;
   }
+  if (isDocumentFile(item)) {
+    return (
+      <div className="space-y-3">
+        <iframe
+          src={buildEmbeddedViewerUrl(item)}
+          title={item.name}
+          className={`${large ? "h-[64vh]" : "h-96"} w-full rounded-3xl border border-slate-200 bg-white`}
+        />
+        <div className="flex flex-wrap gap-2">
+          <a href={buildOnlineViewerUrl(item)} target="_blank" rel="noreferrer"
+             className="flex-1 rounded-2xl bg-blue-700 px-4 py-3 text-center text-sm font-black text-white hover:bg-blue-800">
+            Abrir em tela cheia
+          </a>
+          <a href={buildDownloadUrl(item)} download={item.name} target="_blank" rel="noreferrer"
+             className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-center text-sm font-black text-slate-700 hover:bg-slate-200">
+            Baixar
+          </a>
+        </div>
+      </div>
+    );
+  }
   return <a href={item.url} target="_blank" className="block rounded-3xl bg-slate-50 p-8 text-center font-black text-blue-700">Abrir arquivo: {item.name}</a>;
+}
+
+function FileActionButtons({ item, onPreview }: {
+  item: { name: string; url: string; previewUrl?: string; mimeType?: string; source: "upload" | "external" };
+  onPreview?: () => void;
+}) {
+  const isDoc = isDocumentFile(item);
+  return (
+    <div className="flex items-center gap-1">
+      {onPreview && (
+        <button type="button" onClick={(e) => { e.stopPropagation(); onPreview(); }}
+          className="rounded-xl bg-slate-100 p-1.5 text-slate-600 hover:bg-blue-100 hover:text-blue-700"
+          title="Visualizar">
+          <Eye size={14} />
+        </button>
+      )}
+      {isDoc && (
+        <a href={buildOnlineViewerUrl(item)} target="_blank" rel="noreferrer"
+           onClick={(e) => e.stopPropagation()}
+           className="rounded-xl bg-slate-100 p-1.5 text-slate-600 hover:bg-emerald-100 hover:text-emerald-700"
+           title="Abrir online (sem baixar)">
+          <FileText size={14} />
+        </a>
+      )}
+      <a href={buildDownloadUrl(item)} download={item.name} target="_blank" rel="noreferrer"
+         onClick={(e) => e.stopPropagation()}
+         className="rounded-xl bg-slate-100 p-1.5 text-slate-600 hover:bg-blue-100 hover:text-blue-700"
+         title="Baixar">
+        <Download size={14} />
+      </a>
+    </div>
+  );
 }
 
 const SELECTABLE_MIME_TYPES = new Set([
@@ -6359,9 +6465,12 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           <div key={attachment.id} className="rounded-2xl bg-slate-50 p-3 text-sm font-black">
             <div className="flex items-start justify-between gap-3">
               <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.type}: {attachment.name}</a>
-              <button type="button" onClick={() => deleteTaskAttachment(task.id, attachment)} className="rounded-xl bg-rose-100 p-2 text-rose-700 transition hover:bg-rose-200" title="Excluir anexo">
-                <Trash2 size={15} />
-              </button>
+              <div className="flex items-center gap-1">
+                <FileActionButtons item={attachment} onPreview={() => openMediaPreview(attachment)} />
+                <button type="button" onClick={() => deleteTaskAttachment(task.id, attachment)} className="rounded-xl bg-rose-100 p-1.5 text-rose-700 transition hover:bg-rose-200" title="Excluir anexo">
+                  <Trash2 size={14} />
+                </button>
+              </div>
             </div>
             <p className="mt-1 text-xs font-bold text-slate-400">{attachment.source === "external" ? externalMediaLabel(attachment) : `${formatBytes(attachment.compressedSize || attachment.originalSize)}${attachment.originalSize && attachment.compressedSize && attachment.originalSize !== attachment.compressedSize ? ` após compressão de ${formatBytes(attachment.originalSize)}` : ""}`}</p>
             <button type="button" onClick={() => openMediaPreview(attachment)} className="mt-3 block w-full overflow-hidden rounded-2xl text-left">
@@ -6842,9 +6951,12 @@ function PostReviewPanel({
             <Badge tone={selectedAsset.status === "Aprovado" ? "green" : selectedAsset.status === "Ajustes solicitados" ? "red" : "blue"}>{selectedAsset.status}</Badge>
             <Badge tone="slate">{selectedAsset.source === "external" ? externalMediaLabel(selectedAsset) : formatBytes(selectedAsset.compressedSize || selectedAsset.originalSize)}</Badge>
             <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name}</span>
-            <button type="button" onClick={removeSelectedAsset} className="ml-auto rounded-2xl bg-rose-100 px-3 py-1.5 text-xs font-black text-rose-700 transition hover:bg-rose-200">
-              Excluir arquivo
-            </button>
+            <div className="ml-auto flex items-center gap-1">
+              <FileActionButtons item={selectedAsset} />
+              <button type="button" onClick={removeSelectedAsset} className="rounded-2xl bg-rose-100 px-3 py-1.5 text-xs font-black text-rose-700 transition hover:bg-rose-200">
+                Excluir arquivo
+              </button>
+            </div>
           </div>
           {canReview && (
             <div className="rounded-3xl bg-white p-3">
@@ -7011,7 +7123,10 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
               <div key={attachment.id} className="rounded-2xl bg-white p-3 text-sm font-black">
                 <div className="flex items-center justify-between gap-2">
                   <a href={attachment.url} target="_blank" className="text-blue-700">{attachment.name}</a>
-                  <button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
+                  <div className="flex items-center gap-1">
+                    <FileActionButtons item={attachment} onPreview={() => openMediaPreview(attachment)} />
+                    <button type="button" onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))} className="rounded-xl bg-rose-100 p-1.5 text-rose-700"><Trash2 size={14} /></button>
+                  </div>
                 </div>
                 <p className="mt-1 text-xs font-bold text-slate-400">{attachment.source === "external" ? externalMediaLabel(attachment) : formatBytes(attachment.compressedSize || attachment.originalSize)}</p>
                 <button type="button" onClick={() => openMediaPreview(attachment)} className="mt-3 block w-full overflow-hidden rounded-2xl text-left">
