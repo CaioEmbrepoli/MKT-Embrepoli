@@ -118,11 +118,7 @@ export const taskColumns: TaskColumn[] = [
   { id: "todo", boardId: "tarefas", name: "A fazer", color: "#dbeafe", order: 1 },
   { id: "doing", boardId: "tarefas", name: "Em andamento", color: "#cffafe", order: 2 },
   { id: "review", boardId: "tarefas", name: "Em revisão", color: "#e0e7ff", order: 3 },
-  { id: "done", boardId: "tarefas", name: "Concluído", color: "#dcfce7", order: 4 },
-  { id: "goals-todo", boardId: "metas", name: "A fazer", color: "#dbeafe", order: 1 },
-  { id: "goals-doing", boardId: "metas", name: "Em andamento", color: "#cffafe", order: 2 },
-  { id: "goals-review", boardId: "metas", name: "Em revisão", color: "#e0e7ff", order: 3 },
-  { id: "goals-done", boardId: "metas", name: "Concluído", color: "#dcfce7", order: 4 }
+  { id: "done", boardId: "tarefas", name: "Concluído", color: "#dcfce7", order: 4 }
 ];
 
 export const campaigns: Campaign[] = [
@@ -539,7 +535,10 @@ export const tasks: Task[] = [
   {
     id: "goal-weekly-schedule",
     title: "Organizar agendamento semanal",
-    columnId: "goals-todo",
+    columnId: "goals-weekly",
+    targetValue: 1,
+    currentValue: 0,
+    unit: "ciclos",
     order: 1,
     priority: "Alta",
     progress: "No prazo",
@@ -566,7 +565,10 @@ export const tasks: Task[] = [
   {
     id: "goal-monthly-targets",
     title: "Metas mensais",
-    columnId: "goals-todo",
+    columnId: "goals-monthly",
+    targetValue: 30,
+    currentValue: 0,
+    unit: "posts",
     order: 2,
     priority: "Média",
     progress: "No prazo",

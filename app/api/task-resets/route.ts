@@ -8,12 +8,14 @@ const saoPauloOffsetMs = 3 * 60 * 60 * 1000;
 type ResetTaskRow = {
   id: string;
   organization_id: string;
-  reset_frequency: "none" | "daily" | "weekly" | "monthly";
+  reset_frequency: "none" | "daily" | "weekly" | "monthly" | "quarterly";
   reset_time: string | null;
   reset_weekday: number | null;
   reset_month_day: number | null;
   reset_month_last_day: boolean | null;
   next_reset_at: string | null;
+  current_value: number | null;
+  target_value: number | null;
 };
 
 function parseTime(value: string | null) {
@@ -60,6 +62,18 @@ function nextResetAt(task: ResetTaskRow, after: Date) {
     if (candidate <= after) {
       daysAhead += 7;
       candidate = localSaoPauloToUtc(now.year, now.month, now.day + daysAhead, hour, minute);
+    }
+    return candidate.toISOString();
+  }
+
+  if (task.reset_frequency === "quarterly") {
+    const currentQuarterStartMonth = Math.floor(now.month / 3) * 3;
+    let candidate = localSaoPauloToUtc(now.year, currentQuarterStartMonth + 3, 1, hour, minute);
+    if (candidate <= after) {
+      const overflow = currentQuarterStartMonth + 6;
+      const nextYear = now.year + Math.floor(overflow / 12);
+      const nextMonth = overflow % 12;
+      candidate = localSaoPauloToUtc(nextYear, nextMonth, 1, hour, minute);
     }
     return candidate.toISOString();
   }
@@ -127,7 +141,15 @@ export async function GET(request: Request) {
       childRows(client, "task_attachments", task.id)
     ]);
 
-    const snapshot = { task, assignees, checklist, comments, attachments };
+    const snapshot = {
+      task,
+      assignees,
+      checklist,
+      comments,
+      attachments,
+      currentValueAtReset: task.current_value ?? 0,
+      targetValueAtReset: task.target_value ?? null
+    };
     const { error: historyError } = await client.from("task_reset_history").insert({
       organization_id: task.organization_id,
       task_id: task.id,
@@ -158,6 +180,7 @@ export async function GET(request: Request) {
 
     const { error: updateError } = await client.from("tasks").update({
       progress: "No prazo",
+      current_value: 0,
       last_reset_at: nowIso,
       next_reset_at: nextResetAt(task, now)
     }).eq("id", task.id);

@@ -186,7 +186,7 @@ export type PostTemplate = {
 
 export type TaskPriority = string;
 export type TaskProgress = string;
-export type TaskResetFrequency = "none" | "daily" | "weekly" | "monthly";
+export type TaskResetFrequency = "none" | "daily" | "weekly" | "monthly" | "quarterly";
 
 export type ChecklistItem = {
   id: string;
@@ -238,6 +238,9 @@ export type Task = {
   fixedGoalKey?: string;
   lastResetAt?: string;
   nextResetAt?: string;
+  targetValue?: number;
+  currentValue?: number;
+  unit?: string;
 };
 
 export type PostMetric = {

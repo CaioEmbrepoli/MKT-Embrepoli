@@ -484,7 +484,10 @@ export async function replaceTasks(client: SupabaseClient, tasks: Task[], previo
     reset_month_last_day: item.resetMonthLastDay ?? false,
     fixed_goal_key: nullableText(item.fixedGoalKey),
     last_reset_at: nullableText(item.lastResetAt),
-    next_reset_at: nullableText(item.nextResetAt)
+    next_reset_at: nullableText(item.nextResetAt),
+    target_value: item.targetValue ?? null,
+    current_value: item.currentValue ?? 0,
+    unit: item.unit ? item.unit : null
   }));
   await replaceAssignees(client, "task_assignees", "task_id", organizationId, tasks.map((item) => ({ parentId: item.id, assignees: item.assignedTo ?? [] })));
   await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => (task.checklist ?? []).map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
@@ -808,7 +811,10 @@ function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], 
     resetMonthLastDay: row.reset_month_last_day ?? false,
     fixedGoalKey: row.fixed_goal_key ?? undefined,
     lastResetAt: row.last_reset_at ?? undefined,
-    nextResetAt: row.next_reset_at ?? undefined
+    nextResetAt: row.next_reset_at ?? undefined,
+    targetValue: row.target_value != null ? Number(row.target_value) : undefined,
+    currentValue: row.current_value != null ? Number(row.current_value) : 0,
+    unit: row.unit ?? ""
   };
 }
 

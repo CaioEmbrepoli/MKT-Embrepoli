@@ -45,6 +45,7 @@ import {
   Megaphone,
   MessageSquare,
   Plus,
+  Minus,
   Search,
   Settings,
   Trash2,
@@ -185,8 +186,49 @@ const resetFrequencies: { value: TaskResetFrequency; label: string }[] = [
   { value: "none", label: "Nenhum" },
   { value: "daily", label: "Diário" },
   { value: "weekly", label: "Semanal" },
-  { value: "monthly", label: "Mensal" }
+  { value: "monthly", label: "Mensal" },
+  { value: "quarterly", label: "Trimestral" }
 ];
+
+const goalsBoardId = "metas";
+const GOALS_VIRTUAL_COLUMNS: { id: string; boardId: string; name: string; color: string; frequency: TaskResetFrequency; order: number }[] = [
+  { id: "goals-daily", boardId: goalsBoardId, name: "Diárias", color: "#dbeafe", frequency: "daily", order: 1 },
+  { id: "goals-weekly", boardId: goalsBoardId, name: "Semanais", color: "#dcfce7", frequency: "weekly", order: 2 },
+  { id: "goals-monthly", boardId: goalsBoardId, name: "Mensais", color: "#fef3c7", frequency: "monthly", order: 3 },
+  { id: "goals-quarterly", boardId: goalsBoardId, name: "Trimestrais", color: "#e9d5ff", frequency: "quarterly", order: 4 },
+  { id: "goals-none", boardId: goalsBoardId, name: "Únicas", color: "#f1f5f9", frequency: "none", order: 5 }
+];
+const goalsColumnByFrequency = new Map(GOALS_VIRTUAL_COLUMNS.map((c) => [c.frequency, c]));
+const goalsColumnIds = new Set(GOALS_VIRTUAL_COLUMNS.map((c) => c.id));
+
+function isGoalColumn(columnId: string | undefined) {
+  return columnId ? goalsColumnIds.has(columnId) : false;
+}
+
+function computeGoalStatus(task: Task): { kind: "atingida" | "quase" | "atrasada" | "progresso"; pct: number } {
+  const target = task.targetValue ?? 0;
+  const current = task.currentValue ?? 0;
+  const pct = target > 0 ? Math.min(100, (current / target) * 100) : 0;
+  if (target > 0 && current >= target) return { kind: "atingida", pct: 100 };
+  if (task.nextResetAt && task.lastResetAt) {
+    const start = new Date(task.lastResetAt).getTime();
+    const end = new Date(task.nextResetAt).getTime();
+    if (end > start) {
+      const timePct = (Date.now() - start) / (end - start);
+      const progressPct = target > 0 ? current / target : 0;
+      if (timePct > 0.8 && progressPct >= 0.9) return { kind: "quase", pct };
+      if (timePct > 0.5 && progressPct < 0.5) return { kind: "atrasada", pct };
+    }
+  }
+  return { kind: "progresso", pct };
+}
+
+function goalStatusColors(kind: "atingida" | "quase" | "atrasada" | "progresso") {
+  if (kind === "atingida") return { bar: "#16a34a", badge: "green" as const, label: "Atingida" };
+  if (kind === "quase") return { bar: "#f59e0b", badge: "amber" as const, label: "Quase lá" };
+  if (kind === "atrasada") return { bar: "#dc2626", badge: "red" as const, label: "Atrasada" };
+  return { bar: "#2563eb", badge: "blue" as const, label: "Em progresso" };
+}
 const weekDays = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 const priorityToneMap: Record<string, BadgeTone> = { Alta: "red", Média: "amber", Baixa: "blue" };
 const progressToneMap: Record<string, BadgeTone> = { Bloqueada: "red", "No prazo": "blue", Atenção: "amber", Finalizando: "green" };
@@ -300,6 +342,16 @@ function calculateNextResetAt(task: Pick<Task, "resetFrequency" | "resetTime" | 
     }
   }
 
+  if (task.resetFrequency === "quarterly") {
+    const currentQuarterStartMonth = Math.floor((local.month - 1) / 3) * 3 + 1;
+    for (let offset = 0; offset <= 4; offset += 3) {
+      const month = currentQuarterStartMonth + 3 + offset;
+      const year = local.year + Math.floor((month - 1) / 12);
+      const normalizedMonth = ((month - 1) % 12) + 1;
+      candidates.push(localSaoPauloToUtcIso(year, normalizedMonth, 1, time));
+    }
+  }
+
   return candidates.filter((candidate) => new Date(candidate).getTime() > from.getTime()).sort()[0] ?? "";
 }
 
@@ -307,6 +359,7 @@ function resetScheduleLabel(task: Task) {
   if (!task.resetFrequency || task.resetFrequency === "none") return "Sem reset automático";
   if (task.resetFrequency === "daily") return `Diário às ${task.resetTime || "23:59"}`;
   if (task.resetFrequency === "weekly") return `Semanal: ${weekDays[task.resetWeekday ?? 0]} às ${task.resetTime || "23:59"}`;
+  if (task.resetFrequency === "quarterly") return `Trimestral: primeiro dia do trimestre às ${task.resetTime || "23:59"}`;
   const day = task.resetMonthLastDay ? "último dia do mês" : `dia ${task.resetMonthDay ?? 1}`;
   return `Mensal: ${day} às ${task.resetTime || "23:59"}`;
 }
@@ -636,6 +689,13 @@ export default function Home() {
   const funnelById = useMemo(() => new Map(funnelStages.map((stage) => [stage.id, stage])), [funnelStages]);
   const campaignById = useMemo(() => new Map(campaigns.map((campaign) => [campaign.id, campaign])), [campaigns]);
   const columnById = useMemo(() => new Map(taskColumns.map((column) => [column.id, column])), [taskColumns]);
+  const primaryTaskBoardId = useMemo(
+    () =>
+      taskBoards.find((board) => board.id === "tarefas")?.id ??
+      taskBoards.find((board) => normalizeText(board.name) === "tarefas")?.id ??
+      "tarefas",
+    [taskBoards]
+  );
   const canReviewAssets = currentUser.role === "admin" || currentUser.role === "gestor";
   const canManageTeam = canReviewAssets;
   const pendingReviewAssets = postReviewAssets.filter((asset) => asset.status === "Aguardando revisão");
@@ -749,6 +809,8 @@ export default function Home() {
     return Array.from(merged.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [notifications, derivedTaskNotifications, derivedPostNotifications, derivedCampaignNotifications, derivedDeadlineNotifications, derivedCalendarNotifications, currentUser.id]);
   const seenNotificationIds = useRef<Set<string>>(new Set());
+  const recentQuickTaskSignature = useRef<{ signature: string; at: number } | null>(null);
+  const recentSubtaskSignature = useRef<{ signature: string; at: number } | null>(null);
 
   useEffect(() => {
     const unreadIds = currentNotifications.filter((item) => !item.read).map((item) => item.id);
@@ -758,6 +820,11 @@ export default function Home() {
     }
     seenNotificationIds.current = new Set(unreadIds);
   }, [currentNotifications, currentUser.notificationSound]);
+
+  function openSection(sectionId: string) {
+    setActiveSection(sectionId);
+    if (sectionId === "tarefas") setActiveTaskBoardId(primaryTaskBoardId);
+  }
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -1527,6 +1594,7 @@ export default function Home() {
     }
     if (!uploaded.length) return;
     syncPostReviewAssets((current) => [...uploaded, ...current]);
+    syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
     createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
   }
 
@@ -1556,6 +1624,7 @@ export default function Home() {
       comments: []
     };
     syncPostReviewAssets((current) => [asset, ...current]);
+    syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
     createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", asset.id);
   }
 
@@ -1580,6 +1649,7 @@ export default function Home() {
         ? [{ id: crypto.randomUUID(), assetId, authorId: currentUser.id, message, createdAt: new Date().toISOString() }, ...current.comments]
         : current.comments
     }));
+    syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: status === "Aprovado" ? "Aprovado" : "Revisão" } : item));
     createNotifications([asset.uploadedBy].filter((id) => id !== currentUser.id), status === "Aprovado" ? "Arte aprovada" : "Ajustes solicitados", post.title, "review", asset.id);
   }
 
@@ -1592,32 +1662,56 @@ export default function Home() {
   }
 
   function addQuickTask(columnId: string, title: string) {
-    syncTasks((current) => [
-      ...current,
-      {
-        id: crypto.randomUUID(),
-        title,
-        columnId,
-        order: current.filter((task) => task.columnId === columnId).length + 1,
-        priority: "Média",
-        progress: "No prazo",
-        createdBy: currentUser.id,
-        assignedTo: [],
-        relatedTo: "",
-        funnelStageId: funnelStages[0]?.id ?? "",
-        dueDate: todayIso(),
-        description: "",
-        checklist: [],
-        comments: [],
-        attachments: [],
-        ...defaultTaskResetFields()
+    const cleanTitle = title.trim();
+    if (!cleanTitle) return;
+    const signature = `${columnId}:${normalizeText(cleanTitle)}`;
+    const now = Date.now();
+    if (recentQuickTaskSignature.current?.signature === signature && now - recentQuickTaskSignature.current.at < 800) return;
+    recentQuickTaskSignature.current = { signature, at: now };
+    const taskId = crypto.randomUUID();
+    const goalCol = isGoalColumn(columnId) ? GOALS_VIRTUAL_COLUMNS.find((c) => c.id === columnId) : undefined;
+    const resetFields = defaultTaskResetFields();
+    const baseTask: Task = {
+      id: taskId,
+      title: cleanTitle,
+      columnId,
+      order: tasks.filter((item) => item.columnId === columnId && !item.parentTaskId).length + 1,
+      priority: "Média",
+      progress: "No prazo",
+      createdBy: currentUser.id,
+      assignedTo: [],
+      relatedTo: "",
+      funnelStageId: funnelStages[0]?.id ?? "",
+      dueDate: todayIso(),
+      description: "",
+      checklist: [],
+      comments: [],
+      attachments: [],
+      ...resetFields
+    };
+    if (goalCol) {
+      baseTask.resetFrequency = goalCol.frequency;
+      baseTask.currentValue = 0;
+      if (goalCol.frequency !== "none") {
+        baseTask.nextResetAt = calculateNextResetAt({
+          resetFrequency: goalCol.frequency,
+          resetTime: baseTask.resetTime || "23:59",
+          resetWeekday: baseTask.resetWeekday ?? 0,
+          resetMonthDay: baseTask.resetMonthDay ?? 1,
+          resetMonthLastDay: baseTask.resetMonthLastDay ?? false
+        });
       }
-    ]);
+    }
+    syncTasks((current) => current.some((item) => item.id === taskId) ? current : [...current, baseTask]);
   }
 
   function addSubtask(parentTask: Task, title = "Novo subtópico") {
     const cleanTitle = title.trim();
     if (!cleanTitle) return;
+    const signature = `${parentTask.id}:${normalizeText(cleanTitle)}`;
+    const now = Date.now();
+    if (recentSubtaskSignature.current?.signature === signature && now - recentSubtaskSignature.current.at < 800) return;
+    recentSubtaskSignature.current = { signature, at: now };
     const subtask: Task = {
       id: crypto.randomUUID(),
       title: cleanTitle,
@@ -1637,7 +1731,7 @@ export default function Home() {
       attachments: [],
       ...defaultTaskResetFields()
     };
-    syncTasks((current) => [...current, subtask]);
+    syncTasks((current) => current.some((item) => item.id === subtask.id) ? current : [...current, subtask]);
   }
 
   if (initializing) {
@@ -1696,7 +1790,7 @@ export default function Home() {
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveSection(item.id)}
+                  onClick={() => openSection(item.id)}
                   className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-black transition ${
                     selected ? "bg-blue-700 text-white shadow-lg shadow-blue-700/20" : "text-slate-600 hover:bg-blue-50 hover:text-blue-800"
                   }`}
@@ -3247,7 +3341,26 @@ function Tasks(props: {
           : undefined;
       if (!targetColumn) return current;
       const targetColumnTasks = current.filter((task) => task.columnId === targetColumn && !task.parentTaskId && task.id !== activeId).sort((a, b) => a.order - b.order);
-      const moved = current.map((task) => (task.id === activeId ? { ...task, columnId: targetColumn, order: targetColumnTasks.length + 1 } : task));
+      const goalsTarget = isGoalColumn(targetColumn) ? GOALS_VIRTUAL_COLUMNS.find((c) => c.id === targetColumn) : undefined;
+      const moved = current.map((task) => {
+        if (task.id !== activeId) return task;
+        const base = { ...task, columnId: targetColumn, order: targetColumnTasks.length + 1 };
+        if (goalsTarget && goalsTarget.frequency !== task.resetFrequency) {
+          const nextFreq = goalsTarget.frequency;
+          return {
+            ...base,
+            resetFrequency: nextFreq,
+            nextResetAt: nextFreq === "none" ? "" : calculateNextResetAt({
+              resetFrequency: nextFreq,
+              resetTime: base.resetTime || "23:59",
+              resetWeekday: base.resetWeekday ?? 0,
+              resetMonthDay: base.resetMonthDay ?? 1,
+              resetMonthLastDay: base.resetMonthLastDay ?? false
+            })
+          };
+        }
+        return base;
+      });
       if (overId.startsWith("task:")) {
         const overTaskId = overId.replace("task:", "");
         const columnTasks = moved.filter((task) => task.columnId === targetColumn && !task.parentTaskId);
@@ -3266,12 +3379,15 @@ function Tasks(props: {
   }
 
   const sortedBoards = props.taskBoards.slice().sort((a, b) => a.order - b.order);
-  const activeColumns = props.taskColumns.filter((column) => column.boardId === props.activeTaskBoardId).slice().sort((a, b) => a.order - b.order);
+  const goalsActive = props.activeTaskBoardId === goalsBoardId;
+  const activeColumns: TaskColumn[] = goalsActive
+    ? GOALS_VIRTUAL_COLUMNS.map((c) => ({ id: c.id, boardId: c.boardId, name: c.name, color: c.color, order: c.order }))
+    : props.taskColumns.filter((column) => column.boardId === props.activeTaskBoardId).slice().sort((a, b) => a.order - b.order);
   const calendarActive = props.activeTaskBoardId === calendarTaskBoardId;
   const activeTaskMenu = taskMenu ? props.tasks.find((task) => task.id === taskMenu.taskId) : undefined;
 
   return (
-    <Panel title="Tarefas" action={calendarActive ? <RoundAdd onClick={() => props.setModal({ kind: "post" })} label="Adicionar post" /> : <button onClick={addColumn} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">Nova coluna</button>}>
+    <Panel title="Tarefas" action={calendarActive ? <RoundAdd onClick={() => props.setModal({ kind: "post" })} label="Adicionar post" /> : goalsActive ? null : <button onClick={addColumn} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">Nova coluna</button>}>
       <div className="mb-5 flex flex-wrap items-center gap-2">
         {sortedBoards.map((board) => (
           <span key={board.id} className={`inline-flex items-center gap-1 rounded-2xl ${props.activeTaskBoardId === board.id ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
@@ -3394,36 +3510,45 @@ function TaskColumnView({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `drop-column:${column.id}` });
   const [quickTitle, setQuickTitle] = useState("");
+  const isGoal = isGoalColumn(column.id);
   return (
     <section ref={setNodeRef} className={`min-h-[540px] rounded-[30px] border p-3 motion-smooth ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white"}`}>
       <div className="mb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <button {...dragHandleProps.attributes} {...dragHandleProps.listeners} className="rounded-xl bg-slate-100 p-1 text-slate-400" title="Arrastar coluna">
-            <GripVertical size={17} />
-          </button>
-          <input
-            value={column.name}
-            onChange={(event) => setTaskColumns((current) => current.map((item) => item.id === column.id ? { ...item, name: event.target.value } : item))}
-            className="min-w-0 bg-transparent font-black outline-none"
-          />
+          {!isGoal && (
+            <button {...dragHandleProps.attributes} {...dragHandleProps.listeners} className="rounded-xl bg-slate-100 p-1 text-slate-400" title="Arrastar coluna">
+              <GripVertical size={17} />
+            </button>
+          )}
+          {isGoal ? (
+            <h3 className="font-black">{column.name}</h3>
+          ) : (
+            <input
+              value={column.name}
+              onChange={(event) => setTaskColumns((current) => current.map((item) => item.id === column.id ? { ...item, name: event.target.value } : item))}
+              className="min-w-0 bg-transparent font-black outline-none"
+            />
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Badge tone="slate">{tasks.length}</Badge>
-          <button
-            type="button"
-            onClick={() => {
-              if (allColumns.length <= 1) return;
-              if (!window.confirm("Excluir coluna? As tarefas serão movidas para a primeira coluna.")) return;
-              const fallback = allColumns.slice().sort((a, b) => a.order - b.order).find((item) => item.id !== column.id);
-              if (!fallback) return;
-              setTasks((current) => current.map((task) => task.columnId === column.id ? { ...task, columnId: fallback.id } : task));
-              setTaskColumns((current) => current.filter((item) => item.id !== column.id).map((item, index) => ({ ...item, order: index + 1 })));
-            }}
-            className="rounded-xl bg-rose-100 p-1 text-rose-700 motion-smooth hover:bg-rose-200"
-            title="Excluir coluna"
-          >
-            <Trash2 size={15} />
-          </button>
+          {!isGoal && (
+            <button
+              type="button"
+              onClick={() => {
+                if (allColumns.length <= 1) return;
+                if (!window.confirm("Excluir coluna? As tarefas serão movidas para a primeira coluna.")) return;
+                const fallback = allColumns.slice().sort((a, b) => a.order - b.order).find((item) => item.id !== column.id);
+                if (!fallback) return;
+                setTasks((current) => current.map((task) => task.columnId === column.id ? { ...task, columnId: fallback.id } : task));
+                setTaskColumns((current) => current.filter((item) => item.id !== column.id).map((item, index) => ({ ...item, order: index + 1 })));
+              }}
+              className="rounded-xl bg-rose-100 p-1 text-rose-700 motion-smooth hover:bg-rose-200"
+              title="Excluir coluna"
+            >
+              <Trash2 size={15} />
+            </button>
+          )}
         </div>
       </div>
       <form
@@ -3441,12 +3566,72 @@ function TaskColumnView({
       <SortableContext items={tasks.map((task) => `task:${task.id}`)} strategy={verticalListSortingStrategy}>
         <div className={`min-h-80 space-y-3 rounded-[24px] border border-dashed p-2 transition ${isOver ? "border-blue-300 bg-blue-100/50" : "border-transparent"}`}>
           {tasks.map((task) => (
-            <SortableTaskCard key={task.id} task={task} profileById={profileById} funnelById={funnelById} setModal={setModal} openTaskMenu={openTaskMenu} />
+            isGoalColumn(task.columnId)
+              ? <SortableGoalCard key={task.id} task={task} setModal={setModal} setTasks={setTasks} openTaskMenu={openTaskMenu} />
+              : <SortableTaskCard key={task.id} task={task} profileById={profileById} funnelById={funnelById} setModal={setModal} openTaskMenu={openTaskMenu} />
           ))}
-          {!tasks.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">Solte uma tarefa aqui</div>}
+          {!tasks.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">{isGoalColumn(column.id) ? "Solte uma meta aqui" : "Solte uma tarefa aqui"}</div>}
         </div>
       </SortableContext>
     </section>
+  );
+}
+
+function SortableGoalCard({ task, setModal, setTasks, openTaskMenu }: { task: Task; setModal: Dispatch<SetStateAction<ModalState>>; setTasks: Dispatch<SetStateAction<Task[]>>; openTaskMenu: (taskId: string, x: number, y: number) => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `task:${task.id}` });
+  const pointerStart = useRef<{ x: number; y: number } | null>(null);
+  const movedPointer = useRef(false);
+  const status = computeGoalStatus(task);
+  const colors = goalStatusColors(status.kind);
+  const target = task.targetValue ?? 0;
+  const current = task.currentValue ?? 0;
+  const unit = task.unit || "";
+
+  function adjust(delta: number, event: React.MouseEvent) {
+    event.stopPropagation();
+    const step = event.shiftKey ? 10 * delta : delta;
+    setTasks((all) => all.map((t) => t.id === task.id ? { ...t, currentValue: Math.max(0, (t.currentValue ?? 0) + step) } : t));
+  }
+
+  return (
+    <article
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onPointerDownCapture={(event) => { pointerStart.current = { x: event.clientX, y: event.clientY }; movedPointer.current = false; }}
+      onPointerMoveCapture={(event) => {
+        if (!pointerStart.current) return;
+        if (Math.hypot(event.clientX - pointerStart.current.x, event.clientY - pointerStart.current.y) > 6) movedPointer.current = true;
+      }}
+      onContextMenu={(event) => { event.preventDefault(); if (movedPointer.current) return; openTaskMenu(task.id, event.clientX, event.clientY); }}
+      onClick={() => { if (movedPointer.current) return; setModal({ kind: "task", id: task.id }); }}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.55 : 1 }}
+      className={`cursor-grab rounded-3xl border bg-white p-4 shadow-sm active:cursor-grabbing ${isDragging ? "border-blue-300 opacity-60 ring-2 ring-blue-200" : "border-slate-100 hover:border-blue-200 hover:shadow-md"}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h4 className="min-w-0 flex-1 font-black">{task.title}</h4>
+        <Badge tone={colors.badge}>{colors.label}</Badge>
+      </div>
+      <div className="mt-3 flex items-baseline gap-1">
+        <span className="text-2xl font-black text-slate-950">{current.toLocaleString("pt-BR")}</span>
+        <span className="text-sm font-bold text-slate-400">/ {target.toLocaleString("pt-BR")}{unit ? ` ${unit}` : ""}</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+        <div className="h-full rounded-full transition-all" style={{ width: `${status.pct}%`, background: colors.bar }} />
+      </div>
+      <div className="mt-2 flex items-center justify-between text-xs">
+        <span className="font-bold text-slate-500">{status.pct.toFixed(0)}%</span>
+        <div className="flex items-center gap-1">
+          <button type="button" onClick={(e) => adjust(-1, e)} className="grid h-7 w-7 place-items-center rounded-full bg-slate-100 text-slate-600 hover:bg-rose-100 hover:text-rose-700" title="Diminuir (Shift+clique = 10)">
+            <Minus size={14} />
+          </button>
+          <button type="button" onClick={(e) => adjust(1, e)} className="grid h-7 w-7 place-items-center rounded-full bg-blue-700 text-white hover:bg-blue-800" title="Aumentar (Shift+clique = 10)">
+            <Plus size={14} />
+          </button>
+        </div>
+      </div>
+      {task.fixedGoalKey && <div className="mt-2"><Badge tone="purple">Fixa</Badge></div>}
+    </article>
   );
 }
 
@@ -3534,6 +3719,7 @@ function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, c
   const unlinkedIdeas = ideas.filter((idea) => !posts.some((post) => post.ideaId === idea.id)).sort((a, b) => a.order - b.order);
 
   function statusFor(post: EditorialPost) {
+    if (post.status === "Ideia") return "Produção";
     return postStatuses.includes(post.status) ? post.status : "Outros";
   }
 
@@ -3557,7 +3743,7 @@ function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, c
       const channel = channels.find((item) => item.id === idea.channelId);
       const publishAt = new Date();
       publishAt.setHours(9, 0, 0, 0);
-      const normalizedStatus = targetStatus === "Outros" ? "Ideia" : targetStatus;
+      const normalizedStatus = targetStatus === "Outros" ? "Produção" : targetStatus;
       const newPostId = crypto.randomUUID();
       setPosts((current) => [{
         id: newPostId,
@@ -3587,8 +3773,9 @@ function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, c
     setPosts((current) => {
       const activePost = current.find((post) => post.id === activeId);
       if (!activePost) return current;
-      if (targetStatus === "Ideia" && activePost.ideaId && activePost.status !== "Ideia") {
-        return current.filter((post) => post.id !== activeId);
+      if (targetStatus === "Ideia") {
+        if (activePost.ideaId) return current.filter((post) => post.id !== activeId);
+        return current;
       }
       const normalizedStatus = targetStatus === "Outros" ? activePost.status : targetStatus;
       if (normalizedStatus !== activePost.status) {
@@ -5810,7 +5997,9 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const subtasks = tasks.filter((item) => item.parentTaskId === task.id);
   const parentTask = task.parentTaskId ? tasks.find((item) => item.id === task.parentTaskId) : undefined;
-  const taskBoardId = taskColumns.find((column) => column.id === task.columnId)?.boardId;
+  const isGoalTask = isGoalColumn(task.columnId);
+  const taskBoardId = isGoalTask ? goalsBoardId : taskColumns.find((column) => column.id === task.columnId)?.boardId;
+  const showResetSchedule = taskBoardId === goalsBoardId;
   const availableColumns = taskBoardId ? taskColumns.filter((column) => column.boardId === taskBoardId) : taskColumns;
   const isTaskCompleted = isCompletedTask(task);
   const doneSubtasks = subtasks.filter(isCompletedTask).length;
@@ -5964,47 +6153,103 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         <textarea value={task.description} rows={7} placeholder="Do que se trata esta tarefa?" onChange={(event) => updateTask(task.id, (current) => ({ ...current, description: event.target.value }))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-blue-500" />
       </section>
 
-      <section className="space-y-3 border-t border-slate-200 pt-4">
-        <div>
-          <h3 className="font-black">Reset automático</h3>
-          <p className="mt-1 text-sm font-bold text-slate-500">{resetScheduleLabel(task)}</p>
-          {task.nextResetAt && <p className="mt-1 text-xs font-black text-blue-700">Próximo reset: {formatDate(task.nextResetAt)}</p>}
-          {task.lastResetAt && <p className="mt-1 text-xs font-bold text-slate-400">Último reset: {formatDate(task.lastResetAt)}</p>}
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <SelectControlled
-            label="Frequência"
-            value={task.resetFrequency ?? "none"}
-            options={resetFrequencies.map((item) => [item.value, item.label])}
-            onChange={(value) => {
-              const frequency = value as TaskResetFrequency;
-              updateResetSchedule({
-                resetFrequency: frequency,
-                resetTime: task.resetTime || "23:59",
-                resetWeekday: frequency === "weekly" ? task.resetWeekday ?? 0 : task.resetWeekday,
-                resetMonthDay: frequency === "monthly" && !task.resetMonthLastDay ? task.resetMonthDay ?? 1 : task.resetMonthDay,
-                resetMonthLastDay: frequency === "monthly" ? task.resetMonthLastDay ?? false : false,
-                nextResetAt: frequency === "none" ? "" : task.nextResetAt
-              });
-            }}
-          />
-          {task.resetFrequency !== "none" && <TextInputControlled label="Horário" type="time" value={task.resetTime || "23:59"} onChange={(value) => updateResetSchedule({ resetTime: value || "23:59" })} />}
-          {task.resetFrequency === "weekly" && (
-            <SelectControlled label="Dia da semana" value={String(task.resetWeekday ?? 0)} options={weekDays.map((day, index) => [String(index), day])} onChange={(value) => updateResetSchedule({ resetWeekday: Number(value) })} />
-          )}
-          {task.resetFrequency === "monthly" && (
-            <>
-              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700">
-                <input type="checkbox" checked={task.resetMonthLastDay} onChange={(event) => updateResetSchedule({ resetMonthLastDay: event.target.checked })} />
-                Último dia do mês
-              </label>
-              {!task.resetMonthLastDay && (
-                <TextInputControlled label="Dia do mês" type="number" min={1} max={31} value={String(task.resetMonthDay ?? 1)} onChange={(value) => updateResetSchedule({ resetMonthDay: Math.min(31, Math.max(1, Number(value) || 1)) })} />
-              )}
-            </>
-          )}
-        </div>
-      </section>
+      {isGoalTask && (
+        <section className="space-y-3 border-t border-slate-200 pt-4">
+          <h3 className="font-black">Valor da meta</h3>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="block text-sm font-bold text-slate-600">Alvo
+              <input
+                type="number"
+                min={0}
+                value={task.targetValue ?? ""}
+                onChange={(event) => updateTask(task.id, (current) => ({ ...current, targetValue: event.target.value === "" ? undefined : Number(event.target.value) }))}
+                placeholder="Ex: 30"
+                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
+              />
+            </label>
+            <label className="block text-sm font-bold text-slate-600">Atual
+              <input
+                type="number"
+                min={0}
+                value={task.currentValue ?? 0}
+                onChange={(event) => updateTask(task.id, (current) => ({ ...current, currentValue: Math.max(0, Number(event.target.value) || 0) }))}
+                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
+              />
+            </label>
+            <label className="block text-sm font-bold text-slate-600">Unidade
+              <input
+                type="text"
+                value={task.unit ?? ""}
+                onChange={(event) => updateTask(task.id, (current) => ({ ...current, unit: event.target.value }))}
+                placeholder="posts, leads, R$..."
+                spellCheck autoCorrect="on" autoCapitalize="sentences"
+                className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
+              />
+            </label>
+          </div>
+          {task.targetValue ? (
+            (() => {
+              const s = computeGoalStatus(task);
+              const c = goalStatusColors(s.kind);
+              return (
+                <div className="rounded-2xl bg-slate-50 p-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-black">{(task.currentValue ?? 0).toLocaleString("pt-BR")} / {task.targetValue.toLocaleString("pt-BR")} {task.unit ?? ""}</span>
+                    <Badge tone={c.badge}>{c.label}</Badge>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full transition-all" style={{ width: `${s.pct}%`, background: c.bar }} />
+                  </div>
+                </div>
+              );
+            })()
+          ) : null}
+        </section>
+      )}
+
+      {showResetSchedule && (
+        <section className="space-y-3 border-t border-slate-200 pt-4">
+          <div>
+            <h3 className="font-black">Reset automático</h3>
+            <p className="mt-1 text-sm font-bold text-slate-500">{resetScheduleLabel(task)}</p>
+            {task.nextResetAt && <p className="mt-1 text-xs font-black text-blue-700">Próximo reset: {formatDate(task.nextResetAt)}</p>}
+            {task.lastResetAt && <p className="mt-1 text-xs font-bold text-slate-400">Último reset: {formatDate(task.lastResetAt)}</p>}
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <SelectControlled
+              label="Frequência"
+              value={task.resetFrequency ?? "none"}
+              options={resetFrequencies.map((item) => [item.value, item.label])}
+              onChange={(value) => {
+                const frequency = value as TaskResetFrequency;
+                updateResetSchedule({
+                  resetFrequency: frequency,
+                  resetTime: task.resetTime || "23:59",
+                  resetWeekday: frequency === "weekly" ? task.resetWeekday ?? 0 : task.resetWeekday,
+                  resetMonthDay: frequency === "monthly" && !task.resetMonthLastDay ? task.resetMonthDay ?? 1 : task.resetMonthDay,
+                  resetMonthLastDay: frequency === "monthly" ? task.resetMonthLastDay ?? false : false,
+                  nextResetAt: frequency === "none" ? "" : task.nextResetAt
+                });
+              }}
+            />
+            {task.resetFrequency !== "none" && <TextInputControlled label="Horário" type="time" value={task.resetTime || "23:59"} onChange={(value) => updateResetSchedule({ resetTime: value || "23:59" })} />}
+            {task.resetFrequency === "weekly" && (
+              <SelectControlled label="Dia da semana" value={String(task.resetWeekday ?? 0)} options={weekDays.map((day, index) => [String(index), day])} onChange={(value) => updateResetSchedule({ resetWeekday: Number(value) })} />
+            )}
+            {task.resetFrequency === "monthly" && (
+              <>
+                <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700">
+                  <input type="checkbox" checked={task.resetMonthLastDay} onChange={(event) => updateResetSchedule({ resetMonthLastDay: event.target.checked })} />
+                  Último dia do mês
+                </label>
+                {!task.resetMonthLastDay && (
+                  <TextInputControlled label="Dia do mês" type="number" min={1} max={31} value={String(task.resetMonthDay ?? 1)} onChange={(value) => updateResetSchedule({ resetMonthDay: Math.min(31, Math.max(1, Number(value) || 1)) })} />
+                )}
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
       <section className="space-y-3 border-t border-slate-200 pt-4">
         <div className="flex items-center gap-2">
