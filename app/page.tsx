@@ -191,6 +191,22 @@ const resetFrequencies: { value: TaskResetFrequency; label: string }[] = [
 ];
 
 const goalsBoardId = "metas";
+
+function findMetasBoardId(taskBoards: TaskBoard[]): string {
+  return (
+    taskBoards.find((b) => b.id === "metas")?.id ??
+    taskBoards.find((b) => normalizeText(b.name) === "metas")?.id ??
+    "metas"
+  );
+}
+
+function isMetasBoardId(boardId: string | undefined, taskBoards: TaskBoard[]): boolean {
+  if (!boardId) return false;
+  if (boardId === "metas") return true;
+  const board = taskBoards.find((b) => b.id === boardId);
+  return Boolean(board && normalizeText(board.name) === "metas");
+}
+
 const GOALS_VIRTUAL_COLUMNS: { id: string; boardId: string; name: string; color: string; frequency: TaskResetFrequency; order: number }[] = [
   { id: "goals-daily", boardId: goalsBoardId, name: "Diárias", color: "#dbeafe", frequency: "daily", order: 1 },
   { id: "goals-weekly", boardId: goalsBoardId, name: "Semanais", color: "#dcfce7", frequency: "weekly", order: 2 },
@@ -643,7 +659,7 @@ export default function Home() {
   const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
   const [funnelStages, setFunnelStages] = useState<FunnelStage[]>([]);
   const [taskBoards, setTaskBoards] = useState<TaskBoard[]>([]);
-  const [activeTaskBoardId, setActiveTaskBoardId] = useState("tarefas");
+  const [activeTaskBoardId, setActiveTaskBoardId] = useState("");
   const [taskColumns, setTaskColumns] = useState<TaskColumn[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignAudiences, setCampaignAudiences] = useState<CampaignAudience[]>([]);
@@ -696,6 +712,14 @@ export default function Home() {
       "tarefas",
     [taskBoards]
   );
+
+  useEffect(() => {
+    if (!taskBoards.length) return;
+    const exists = taskBoards.some((b) => b.id === activeTaskBoardId);
+    if (!exists && activeTaskBoardId !== calendarTaskBoardId) {
+      setActiveTaskBoardId(primaryTaskBoardId);
+    }
+  }, [taskBoards, primaryTaskBoardId, activeTaskBoardId]);
   const canReviewAssets = currentUser.role === "admin" || currentUser.role === "gestor";
   const canManageTeam = canReviewAssets;
   const pendingReviewAssets = postReviewAssets.filter((asset) => asset.status === "Aguardando revisão");
@@ -1991,6 +2015,7 @@ export default function Home() {
         tasks={tasks}
         setTasks={syncTasks}
         taskColumns={taskColumns}
+        taskBoards={taskBoards}
         updateTask={updateTask}
         addTaskAttachment={addTaskAttachment}
         deleteTaskAttachment={deleteTaskAttachment}
@@ -3302,7 +3327,10 @@ function Tasks(props: {
     props.setTasks((current) => current.filter((task) => !columnIds.includes(task.columnId)));
     props.setTaskColumns((current) => current.filter((column) => column.boardId !== board.id));
     props.setTaskBoards((current) => current.filter((item) => item.id !== board.id).map((item, index) => ({ ...item, order: index + 1 })));
-    if (props.activeTaskBoardId === board.id) props.setActiveTaskBoardId("tarefas");
+    if (props.activeTaskBoardId === board.id) {
+      const fallback = props.taskBoards.find((b) => b.id !== board.id);
+      props.setActiveTaskBoardId(fallback?.id ?? "");
+    }
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -3379,7 +3407,7 @@ function Tasks(props: {
   }
 
   const sortedBoards = props.taskBoards.slice().sort((a, b) => a.order - b.order);
-  const goalsActive = props.activeTaskBoardId === goalsBoardId;
+  const goalsActive = isMetasBoardId(props.activeTaskBoardId, props.taskBoards);
   const activeColumns: TaskColumn[] = goalsActive
     ? GOALS_VIRTUAL_COLUMNS.map((c) => ({ id: c.id, boardId: c.boardId, name: c.name, color: c.color, order: c.order }))
     : props.taskColumns.filter((column) => column.boardId === props.activeTaskBoardId).slice().sort((a, b) => a.order - b.order);
@@ -5277,6 +5305,7 @@ function EntityModal(props: {
   tasks: Task[];
   setTasks: Dispatch<SetStateAction<Task[]>>;
   taskColumns: TaskColumn[];
+  taskBoards: TaskBoard[];
   updateTask: (taskId: string, updater: (task: Task) => Task) => void;
   addTaskAttachment: (taskId: string, file: File) => void;
   deleteTaskAttachment: (taskId: string, attachment: TaskAttachment) => void;
@@ -5993,13 +6022,14 @@ function YouTubeSearchModal({ onSelect, onClose }: { onSelect: (video: YouTubeVi
   );
 }
 
-function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tasks, currentUser, updateTask, addTaskAttachment, deleteTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
+function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, taskBoards, tasks, currentUser, updateTask, addTaskAttachment, deleteTaskAttachment, addTaskExternalLink, addSubtask, setModal, setTasks, openMediaPreview, createNotifications, close }: Parameters<typeof EntityModal>[0] & { task: Task; close: () => void }) {
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const subtasks = tasks.filter((item) => item.parentTaskId === task.id);
   const parentTask = task.parentTaskId ? tasks.find((item) => item.id === task.parentTaskId) : undefined;
   const isGoalTask = isGoalColumn(task.columnId);
-  const taskBoardId = isGoalTask ? goalsBoardId : taskColumns.find((column) => column.id === task.columnId)?.boardId;
-  const showResetSchedule = taskBoardId === goalsBoardId;
+  const columnBoardId = taskColumns.find((column) => column.id === task.columnId)?.boardId;
+  const taskBoardId = isGoalTask ? findMetasBoardId(taskBoards) : columnBoardId;
+  const showResetSchedule = isMetasBoardId(taskBoardId, taskBoards);
   const availableColumns = taskBoardId ? taskColumns.filter((column) => column.boardId === taskBoardId) : taskColumns;
   const isTaskCompleted = isCompletedTask(task);
   const doneSubtasks = subtasks.filter(isCompletedTask).length;
