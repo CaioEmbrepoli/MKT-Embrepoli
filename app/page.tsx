@@ -6219,10 +6219,12 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
   function updateResetSchedule(patch: Partial<Task>) {
     updateTask(task.id, (current) => {
       const next = { ...current, ...patch };
-      return {
-        ...next,
-        nextResetAt: calculateNextResetAt(next)
-      };
+      const updated: Task = { ...next, nextResetAt: calculateNextResetAt(next) };
+      if (isGoalColumn(current.columnId) && patch.resetFrequency !== undefined) {
+        const targetCol = goalsColumnByFrequency.get(patch.resetFrequency);
+        if (targetCol) updated.columnId = targetCol.id;
+      }
+      return updated;
     });
   }
 
