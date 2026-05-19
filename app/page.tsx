@@ -2152,12 +2152,14 @@ function ReviewDetailPanel({
   onDeleted: () => void;
 }) {
   const [adjustmentMessage, setAdjustmentMessage] = useState("");
+  const [showAdjustInput, setShowAdjustInput] = useState(false);
   const [comment, setComment] = useState("");
 
   function requestAdjustments() {
     if (!adjustmentMessage.trim()) return;
     setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
     setAdjustmentMessage("");
+    setShowAdjustInput(false);
   }
 
   function submitComment(event: FormEvent<HTMLFormElement>) {
@@ -2189,12 +2191,28 @@ function ReviewDetailPanel({
       <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
         <MediaPreviewContent item={selectedAsset} />
       </button>
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar</button>
-        <div className="rounded-3xl bg-white p-3">
-          <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="Descreva os ajustes necessários" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-          <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
-        </div>
+      <div className="mt-4">
+        {selectedAsset.status === "Aprovado" ? (
+          showAdjustInput ? (
+            <div className="rounded-3xl bg-white p-3">
+              <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="Descreva os ajustes necessários" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+              <div className="mt-2 flex gap-2">
+                <button type="button" onClick={() => { setShowAdjustInput(false); setAdjustmentMessage(""); }} className="flex-1 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">Cancelar</button>
+                <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="flex-1 rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Enviar</button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setShowAdjustInput(true)} className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black text-rose-700 hover:bg-rose-100">Solicitar ajuste</button>
+          )
+        ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
+            <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar</button>
+            <div className="rounded-3xl bg-white p-3">
+              <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="Descreva os ajustes necessários" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+              <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+            </div>
+          </div>
+        )}
       </div>
       <form onSubmit={submitComment} className="mt-4 flex gap-2">
         <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário interno sobre a revisão" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
@@ -6323,6 +6341,7 @@ function PostReviewPanel({
   close: () => void;
 }) {
   const [adjustmentMessage, setAdjustmentMessage] = useState("");
+  const [showAdjustInput, setShowAdjustInput] = useState(false);
   const [comment, setComment] = useState("");
   const [externalUrl, setExternalUrl] = useState("");
   const [ytOpen, setYtOpen] = useState(false);
@@ -6339,6 +6358,7 @@ function PostReviewPanel({
     if (!selectedAsset || !adjustmentMessage.trim()) return;
     setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
     setAdjustmentMessage("");
+    setShowAdjustInput(false);
   }
 
   function submitExternalAsset(event: FormEvent<HTMLFormElement>) {
@@ -6422,10 +6442,26 @@ function PostReviewPanel({
             </button>
           </div>
           {canReview && (
-            <div className="space-y-2 rounded-3xl bg-white p-3">
-              <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="w-full rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white">Aprovar arte</button>
-              <textarea value={adjustmentMessage} onChange={(event) => setAdjustmentMessage(event.target.value)} placeholder="O que precisa ajustar?" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-              <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="w-full rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+            <div className="rounded-3xl bg-white p-3">
+              {selectedAsset.status === "Aprovado" ? (
+                showAdjustInput ? (
+                  <>
+                    <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="O que precisa ajustar?" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                    <div className="mt-2 flex gap-2">
+                      <button type="button" onClick={() => { setShowAdjustInput(false); setAdjustmentMessage(""); }} className="flex-1 rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">Cancelar</button>
+                      <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="flex-1 rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Enviar</button>
+                    </div>
+                  </>
+                ) : (
+                  <button type="button" onClick={() => setShowAdjustInput(true)} className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-100">Solicitar ajuste</button>
+                )
+              ) : (
+                <div className="space-y-2">
+                  <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="w-full rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white">Aprovar arte</button>
+                  <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="O que precisa ajustar?" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                  <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="w-full rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+                </div>
+              )}
             </div>
           )}
           <form onSubmit={submitComment} className="flex gap-2">
