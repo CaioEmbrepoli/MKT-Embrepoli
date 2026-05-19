@@ -310,6 +310,16 @@ function fileKind(file: File): "arquivo" | "foto" | "video" {
   return file.type.startsWith("image/") ? "foto" : file.type.startsWith("video/") ? "video" : "arquivo";
 }
 
+function sanitizeFileName(name: string): string {
+  // Remove acentos (ç→c, ã→a, etc.) e substitui caracteres inválidos por _
+  return name
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_(?=\.)$/g, "");
+}
+
 async function prepareUploadFile(file: File): Promise<PreparedUploadFile> {
   if (file.type.startsWith("video/") && file.size > maxVideoBytes) {
     throw new Error(`Vídeos podem ter no máximo ${formatBytes(maxVideoBytes)}. Para arquivos maiores, adicione um link do Google Drive.`);
@@ -1288,7 +1298,7 @@ export default function Home() {
       const prepared = await prepareUploadFile(file);
       let avatarUrl = URL.createObjectURL(prepared.file);
       if (supabase) {
-        const path = `avatars/${profileId}-${Date.now()}-${prepared.file.name}`;
+        const path = `avatars/${profileId}-${Date.now()}-${sanitizeFileName(prepared.file.name)}`;
         const { error } = await supabase.storage.from("profile-avatars").upload(path, prepared.file, { upsert: true });
         if (!error) {
           avatarUrl = supabase.storage.from("profile-avatars").getPublicUrl(path).data.publicUrl;
@@ -1325,7 +1335,7 @@ export default function Home() {
     setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
     const prepared = await prepareUploadFile(file);
     const type = fileKind(prepared.file);
-    const path = `${ideaId}/${Date.now()}-${prepared.file.name}`;
+    const path = `${ideaId}/${Date.now()}-${sanitizeFileName(prepared.file.name)}`;
     const url = await uploadFileToStorage("idea-attachments", path, prepared.file);
     if (prepared.notice) setSaveError(prepared.notice);
     return { id: crypto.randomUUID(), name: prepared.file.name, type, source: "upload" as const, url, previewUrl: url, originalSize: prepared.originalSize, compressedSize: prepared.compressedSize, mimeType: prepared.file.type };
@@ -1337,7 +1347,7 @@ export default function Home() {
     try {
       const prepared = await prepareUploadFile(file);
       const type = fileKind(prepared.file);
-      const path = `${taskId}/${Date.now()}-${prepared.file.name}`;
+      const path = `${taskId}/${Date.now()}-${sanitizeFileName(prepared.file.name)}`;
       const url = await uploadFileToStorage("task-attachments", path, prepared.file);
       const attachment: TaskAttachment = { id: crypto.randomUUID(), name: prepared.file.name, type, source: "upload", url, previewUrl: url, originalSize: prepared.originalSize, compressedSize: prepared.compressedSize, mimeType: prepared.file.type };
       if (prepared.notice) setSaveError(prepared.notice);
@@ -1428,7 +1438,7 @@ export default function Home() {
       try {
         const prepared = await prepareUploadFile(file);
         const type = fileKind(prepared.file);
-        const path = `${post.id}/${Date.now()}-${prepared.file.name}`;
+        const path = `${post.id}/${Date.now()}-${sanitizeFileName(prepared.file.name)}`;
         const url = await uploadFileToStorage("post-review-assets", path, prepared.file);
         if (prepared.notice) setSaveError(prepared.notice);
         uploaded.push({
