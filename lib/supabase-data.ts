@@ -407,7 +407,8 @@ export async function replacePosts(client: SupabaseClient, posts: EditorialPost[
     description: item.description,
     production_checklist: item.productionChecklist ?? [],
     published_video_id: item.publishedVideoId ?? null,
-    published_at: item.publishedAt ?? null
+    published_at: item.publishedAt ?? null,
+    extra_channels: item.extraChannels ?? []
   }));
   await replaceAssignees(client, "post_assignees", "post_id", organizationId, posts.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
 }
@@ -723,7 +724,7 @@ function mapPostTemplate(row: any): PostTemplate {
 }
 
 function mapPost(row: any, assignees: any[]): EditorialPost {
-  return { id: row.id, ideaId: row.idea_id ?? "", templateId: row.template_id ?? "", title: row.title, channelId: row.channel_id ?? "", campaignId: row.campaign_id ?? "", productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), status: row.status, format: row.format ?? "Post", order: row.sort_order ?? 1, publishAt: String(row.publish_at ?? "").slice(0, 16), description: row.description ?? "", productionChecklist: row.production_checklist ?? [], publishedVideoId: row.published_video_id ?? undefined, publishedAt: row.published_at ?? undefined };
+  return { id: row.id, ideaId: row.idea_id ?? "", templateId: row.template_id ?? "", title: row.title, channelId: row.channel_id ?? "", campaignId: row.campaign_id ?? "", productLineId: row.product_line_id ?? "", vehicleTypeId: row.vehicle_type_id ?? "", contentTypeId: row.content_type_id ?? "", funnelStageId: row.funnel_stage_id ?? "", createdBy: row.created_by ?? "", assignedTo: assignees.map((item) => item.profile_id), status: row.status, format: row.format ?? "Post", extraChannels: Array.isArray(row.extra_channels) ? row.extra_channels : [], order: row.sort_order ?? 1, publishAt: String(row.publish_at ?? "").slice(0, 16), description: row.description ?? "", productionChecklist: row.production_checklist ?? [], publishedVideoId: row.published_video_id ?? undefined, publishedAt: row.published_at ?? undefined };
 }
 
 function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {

@@ -79,6 +79,11 @@ export type CampaignAudience = {
 
 export type PostStatus = string;
 
+export type PostChannelEntry = {
+  channelId: string;
+  format: string;
+};
+
 export type EditorialPost = {
   id: string;
   ideaId?: string;
@@ -94,6 +99,7 @@ export type EditorialPost = {
   assignedTo: string[];
   status: PostStatus;
   format: string;
+  extraChannels?: PostChannelEntry[];
   order?: number;
   publishAt: string;
   description: string;

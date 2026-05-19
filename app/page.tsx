@@ -120,6 +120,7 @@ import type {
   PostMetric,
   PostMetricSnapshot,
   PostTemplate,
+  PostChannelEntry,
   PostStatus,
   ProductLine,
   Profile,
@@ -207,13 +208,27 @@ type PreparedUploadFile = {
 
 function postFormatOptionsForChannel(channel?: Channel) {
   const normalized = normalizeText(channel?.name ?? "");
-  if (normalized.includes("instagram") || normalized.includes("facebook")) return ["Feed", "Story", "Reels"];
+  if (normalized.includes("instagram")) return ["Feed", "Story", "Reels"];
   if (normalized.includes("youtube")) return ["Vídeo", "Shorts"];
-  if (normalized.includes("tiktok")) return ["Vídeo", "Story", "Live"];
+  if (normalized.includes("tiktok")) return ["Vídeo", "Story", "Live", "Feed"];
+  if (normalized.includes("facebook")) return ["Feed", "Story", "Reels"];
+  if (normalized.includes("linkedin")) return ["Post", "Artigo", "Vídeo"];
+  if (normalized.includes("blog") || normalized.includes("site")) return ["Artigo", "Infográfico"];
+  if (normalized.includes("email") || normalized.includes("e-mail")) return ["Newsletter"];
+  if (normalized.includes("whatsapp")) return ["Status", "Mensagem"];
   return fallbackPostFormats;
 }
 
 function defaultPostFormatForChannel(channel?: Channel) {
+  const normalized = normalizeText(channel?.name ?? "");
+  if (normalized.includes("youtube")) return "Shorts";
+  if (normalized.includes("instagram")) return "Reels";
+  if (normalized.includes("tiktok")) return "Feed";
+  if (normalized.includes("facebook")) return "Feed";
+  if (normalized.includes("linkedin")) return "Post";
+  if (normalized.includes("blog") || normalized.includes("site")) return "Artigo";
+  if (normalized.includes("email") || normalized.includes("e-mail")) return "Newsletter";
+  if (normalized.includes("whatsapp")) return "Status";
   return postFormatOptionsForChannel(channel)[0] ?? "Post";
 }
 
@@ -3591,7 +3606,7 @@ function CalendarStatusColumn({ status, posts, ideas, channelById, setModal }: {
       <SortableContext items={posts.map((post) => `calendar-post:${post.id}`)} strategy={verticalListSortingStrategy}>
         <div className={`min-h-80 space-y-3 rounded-[24px] border border-dashed p-2 transition ${isOver ? "border-blue-300 bg-blue-100/50" : "border-transparent"}`}>
           {ideas.map((idea) => <DraggableCalendarIdeaCard key={idea.id} idea={idea} channel={channelById.get(idea.channelId)} setModal={setModal} />)}
-          {posts.map((post) => <SortableCalendarPostCard key={post.id} post={post} channel={channelById.get(post.channelId)} setModal={setModal} />)}
+          {posts.map((post) => <SortableCalendarPostCard key={post.id} post={post} channel={channelById.get(post.channelId)} channelById={channelById} setModal={setModal} />)}
           {!posts.length && !ideas.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">Solte um post aqui</div>}
         </div>
       </SortableContext>
@@ -3621,10 +3636,14 @@ function DraggableCalendarIdeaCard({ idea, channel, setModal }: { idea: Idea; ch
   );
 }
 
-function SortableCalendarPostCard({ post, channel, setModal }: { post: EditorialPost; channel?: Channel; setModal: Dispatch<SetStateAction<ModalState>> }) {
+function SortableCalendarPostCard({ post, channel, channelById, setModal }: { post: EditorialPost; channel?: Channel; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `calendar-post:${post.id}` });
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const movedPointer = useRef(false);
+  const allChannels = [
+    ...(channel ? [channel] : []),
+    ...(post.extraChannels ?? []).map((e) => channelById.get(e.channelId)).filter((c): c is Channel => !!c),
+  ];
   return (
     <article
       ref={setNodeRef}
@@ -3646,9 +3665,15 @@ function SortableCalendarPostCard({ post, channel, setModal }: { post: Editorial
       style={{ transform: CSS.Transform.toString(transform), transition }}
       className={`cursor-grab rounded-3xl border bg-slate-50 p-4 shadow-sm transition-[border-color,box-shadow,opacity] active:cursor-grabbing ${isDragging ? "border-blue-300 opacity-60 ring-2 ring-blue-200" : "border-slate-100 hover:border-blue-200 hover:shadow-md"}`}
     >
-      <div className="flex items-center gap-2 text-xs font-black text-blue-700">
-        <span className="h-2 w-2 rounded-full" style={{ background: channel?.color }} />
-        {channel?.name ?? "Canal"} · {new Date(post.publishAt).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-black text-blue-700">
+        {allChannels.length > 0 ? allChannels.map((ch) => (
+          <span key={ch.id} className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full" style={{ background: ch.color }} />
+            {ch.name}
+          </span>
+        )) : <span>Canal</span>}
+        <span className="text-slate-400">·</span>
+        <span>{new Date(post.publishAt).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</span>
       </div>
       <h4 className="mt-2 line-clamp-2 font-black">{post.title}</h4>
       <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{post.description || "Clique para editar o post."}</p>
@@ -6123,7 +6148,17 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
   const [selectedIdeaId, setSelectedIdeaId] = useState(initialIdea);
   const [selectedTemplateId, setSelectedTemplateId] = useState(initialTemplate);
   const [creationMode, setCreationMode] = useState<"zero" | "idea" | "template">(initialIdea ? "idea" : initialTemplate ? "template" : "zero");
-  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? ideaPrefill?.channelId ?? channels[0]?.id ?? "");
+  const [channelEntries, setChannelEntries] = useState<PostChannelEntry[]>(() => {
+    const mainChannelId = editing?.channelId ?? ideaPrefill?.channelId ?? channels[0]?.id ?? "";
+    const mainCh = channels.find((c) => c.id === mainChannelId);
+    const mainFormat = editing?.format ?? defaultPostFormatForChannel(mainCh);
+    return [{ channelId: mainChannelId, format: mainFormat }, ...(editing?.extraChannels ?? [])];
+  });
+  const selectedChannelId = channelEntries[0]?.channelId ?? "";
+  function setSelectedChannelId(id: string) {
+    const ch = channels.find((c) => c.id === id);
+    setChannelEntries((prev) => [{ channelId: id, format: defaultPostFormatForChannel(ch) }, ...prev.slice(1)]);
+  }
   const [productionChecklist, setProductionChecklist] = useState<ChecklistItem[]>(editing?.productionChecklist ?? []);
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
   const postFormatOptions = postFormatOptionsForChannel(selectedChannel);
@@ -6165,8 +6200,11 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
     for (const [name, value] of Object.entries({ productLineId: idea.productLineId, vehicleTypeId: idea.vehicleTypeId, contentTypeId: idea.contentTypeId, funnelStageId: idea.funnelStageId, channelId: idea.channelId })) {
       setFormValue(form, name, value);
     }
-    if (idea.channelId) setSelectedChannelId(idea.channelId);
-    if (idea.format) setFormValue(form, "format", idea.format);
+    if (idea.channelId) {
+      const ideaCh = channels.find((c) => c.id === idea.channelId);
+      const ideaFmt = idea.format || defaultPostFormatForChannel(ideaCh);
+      setChannelEntries((prev) => [{ channelId: idea.channelId, format: ideaFmt }, ...prev.slice(1)]);
+    }
     if (idea.templateId) {
       applyTemplate(idea.templateId, { keepTitleAndDescription: true });
     } else {
@@ -6192,10 +6230,11 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
     setFormValue(form, "templateId", templateId);
     setFormValue(form, "contentTypeId", template.contentTypeId);
     setFormValue(form, "funnelStageId", template.funnelStageId);
-    setFormValue(form, "channelId", template.channelId);
-    setFormValue(form, "format", template.format);
     if (!options.keepTitleAndDescription) setFormValue(form, "description", templateDescription(template));
-    if (template.channelId) setSelectedChannelId(template.channelId);
+    if (template.channelId) {
+      const tmplFmt = template.format || defaultPostFormatForChannel(channels.find((c) => c.id === template.channelId));
+      setChannelEntries((prev) => [{ channelId: template.channelId, format: tmplFmt }, ...prev.slice(1)]);
+    }
     const publishField = form.elements.namedItem("publishAt") as HTMLInputElement | null;
     if (publishField && template.suggestedTime) publishField.value = applyTimeToDateTimeLocal(publishField.value, template.suggestedTime);
     setProductionChecklist(cloneChecklist(template.checklistItems));
@@ -6206,7 +6245,8 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
     const form = formRef.current;
     const fallbackChannelId = channels[0]?.id ?? "";
     setSelectedTemplateId("");
-    setSelectedChannelId(fallbackChannelId);
+    const fallbackCh = channels.find((c) => c.id === fallbackChannelId);
+    setChannelEntries([{ channelId: fallbackChannelId, format: defaultPostFormatForChannel(fallbackCh) }]);
     setProductionChecklist([]);
     setFormValue(form, "ideaId", "");
     setFormValue(form, "templateId", "");
@@ -6216,8 +6256,6 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
     setFormValue(form, "vehicleTypeId", "");
     setFormValue(form, "contentTypeId", "");
     setFormValue(form, "funnelStageId", "");
-    setFormValue(form, "channelId", fallbackChannelId);
-    setFormValue(form, "format", defaultPostFormatForChannel(channels.find((channel) => channel.id === fallbackChannelId)));
     setFormValue(form, "campaignId", neutralCampaign?.id ?? campaigns[0]?.id ?? "");
     setFormValue(form, "publishAt", defaultPublishAt);
   }
@@ -6226,7 +6264,9 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const status = editing?.status ?? "Produção";
-    const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), ideaId: String(form.get("ideaId") ?? "") || undefined, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), channelId: String(form.get("channelId")), campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel), order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")), productionChecklist };
+    const validEntries = channelEntries.filter((e) => e.channelId);
+    const [mainEntry, ...extraEntries] = validEntries.length ? validEntries : [{ channelId: "", format: "" }];
+    const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), ideaId: String(form.get("ideaId") ?? "") || undefined, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), channelId: mainEntry.channelId, campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: mainEntry.format || defaultPostFormatForChannel(selectedChannel), extraChannels: extraEntries, order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")), productionChecklist };
     setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
     const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
     if (newAssignees.length) createNotifications(newAssignees, "Post atribuído", value.title, "post", value.id);
@@ -6252,8 +6292,51 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
           {creationMode === "idea" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Ideia de origem<select name="ideaId" value={selectedIdeaId} onChange={(event) => applyIdea(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem ideia vinculada</option>{postIdeas.map((idea) => <option key={idea.id} value={idea.id}>{idea.title}</option>)}</select></label> : <input type="hidden" name="ideaId" value={selectedIdeaId} />}
           {creationMode === "template" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Usar modelo<select name="templateId" value={selectedTemplateId} onChange={(event) => applyTemplate(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem modelo</option>{postTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label> : <input type="hidden" name="templateId" value={selectedTemplateId} />}
           <TextInput name="title" label="Título" required defaultValue={editing?.title ?? ideaPrefill?.title} />
-          <label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <Select key={selectedChannelId} name="format" label="Formato" defaultValue={defaultFormat} options={postFormatOptions.map((item) => [item, item])} />
+          <div className="md:col-span-2">
+            <label className="mb-2 block text-sm font-bold text-slate-600">Canais</label>
+            <div className="space-y-2">
+              {channelEntries.map((entry, idx) => {
+                const entryChannel = channels.find((c) => c.id === entry.channelId);
+                const fmtOpts = postFormatOptionsForChannel(entryChannel);
+                return (
+                  <div key={idx} className="flex items-center gap-2">
+                    <select
+                      value={entry.channelId}
+                      onChange={(e) => {
+                        const newCh = channels.find((c) => c.id === e.target.value);
+                        const newFmt = defaultPostFormatForChannel(newCh);
+                        if (idx === 0) setSelectedChannelId(e.target.value);
+                        setChannelEntries((prev) => prev.map((x, i) => i === idx ? { channelId: e.target.value, format: newFmt } : x));
+                      }}
+                      className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:border-blue-500"
+                    >
+                      {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <select
+                      value={entry.format}
+                      onChange={(e) => setChannelEntries((prev) => prev.map((x, i) => i === idx ? { ...x, format: e.target.value } : x))}
+                      className="w-32 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:border-blue-500"
+                    >
+                      {fmtOpts.map((f) => <option key={f} value={f}>{f}</option>)}
+                    </select>
+                    {idx > 0 && (
+                      <button type="button" onClick={() => setChannelEntries((prev) => prev.filter((_, i) => i !== idx))}
+                        className="rounded-full p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50">
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+              <button type="button" onClick={() => {
+                const firstUnused = channels.find((c) => !channelEntries.some((e) => e.channelId === c.id));
+                const newCh = firstUnused ?? channels[0];
+                setChannelEntries((prev) => [...prev, { channelId: newCh?.id ?? "", format: defaultPostFormatForChannel(newCh) }]);
+              }} className="flex items-center gap-1.5 text-sm font-black text-blue-600 hover:text-blue-800">
+                <Plus size={14} /> Adicionar canal
+              </button>
+            </div>
+          </div>
           <Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId ?? neutralCampaign?.id} options={campaigns.map((item) => [item.id, item.name])} />
           <Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId ?? ideaPrefill?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} />
           <Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId ?? ideaPrefill?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} />
