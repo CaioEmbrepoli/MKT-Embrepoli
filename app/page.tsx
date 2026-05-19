@@ -741,6 +741,7 @@ export default function Home() {
   const pendingSaveCount = useRef(0);
   const realtimeReloadTimer = useRef<number | null>(null);
   const remoteReady = useRef(false);
+  const lastLocalSaveAt = useRef(0);
 
   const emptyUser: Profile = { id: "", organizationId: "", role: "colaborador", name: "", email: "", phone: "", bio: "", active: false, notificationSound: false, avatarUrl: "" };
   const currentUser = profiles.find((profile) => profile.id === currentUserId)
@@ -1007,7 +1008,11 @@ export default function Home() {
           table,
           ...(orgId ? { filter: `organization_id=eq.${orgId}` } : {})
         },
-        () => { scheduleRealtimeReload(); }
+        () => {
+          // Anti-eco: ignorar eventos disparados pelo próprio save recente
+          if (Date.now() - lastLocalSaveAt.current < 2000) return;
+          scheduleRealtimeReload();
+        }
       );
     });
     channel.subscribe();
@@ -1042,7 +1047,7 @@ export default function Home() {
     return (action: SetStateAction<AppData[K]>) => {
       setter((current) => {
         const next = typeof action === "function" ? (action as (value: AppData[K]) => AppData[K])(current) : action as AppData[K];
-        if (supabase && isSupabaseConfigured && remoteReady.current && !realtimeReloading.current) {
+        if (supabase && isSupabaseConfigured && remoteReady.current) {
           setSaveStatus("saving");
           setSaveError("");
           pendingSaveCount.current += 1;
@@ -1052,10 +1057,11 @@ export default function Home() {
               console.error(`Erro ao salvar ${String(key)} no Supabase`, error);
               setSaveStatus("error");
               setSaveError(friendlySaveError(error));
+              scheduleRealtimeReload();
             })
             .finally(() => {
+              lastLocalSaveAt.current = Date.now();
               pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
-              if (pendingSaveCount.current === 0) scheduleRealtimeReload();
             });
         }
         return next;
@@ -3662,16 +3668,29 @@ function SortableGoalCard({ task, setModal, setTasks, openTaskMenu }: { task: Ta
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `task:${task.id}` });
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const movedPointer = useRef(false);
-  const status = computeGoalStatus(task);
-  const colors = goalStatusColors(status.kind);
+  const [displayValue, setDisplayValue] = useState(task.currentValue ?? 0);
+  const adjustTimer = useRef<number | null>(null);
+  useEffect(() => {
+    if (!adjustTimer.current) {
+      setDisplayValue(task.currentValue ?? 0);
+    }
+  }, [task.currentValue]);
   const target = task.targetValue ?? 0;
-  const current = task.currentValue ?? 0;
   const unit = task.unit || "";
+  const displayTask = { ...task, currentValue: displayValue };
+  const status = computeGoalStatus(displayTask);
+  const colors = goalStatusColors(status.kind);
 
   function adjust(delta: number, event: React.MouseEvent) {
     event.stopPropagation();
     const step = event.shiftKey ? 10 * delta : delta;
-    setTasks((all) => all.map((t) => t.id === task.id ? { ...t, currentValue: Math.max(0, (t.currentValue ?? 0) + step) } : t));
+    const newValue = Math.max(0, displayValue + step);
+    setDisplayValue(newValue);
+    if (adjustTimer.current) clearTimeout(adjustTimer.current);
+    adjustTimer.current = window.setTimeout(() => {
+      adjustTimer.current = null;
+      setTasks((all) => all.map((t) => t.id === task.id ? { ...t, currentValue: newValue } : t));
+    }, 500);
   }
 
   return (
@@ -3694,7 +3713,7 @@ function SortableGoalCard({ task, setModal, setTasks, openTaskMenu }: { task: Ta
         <Badge tone={colors.badge}>{colors.label}</Badge>
       </div>
       <div className="mt-3 flex items-baseline gap-1">
-        <span className="text-2xl font-black text-slate-950">{current.toLocaleString("pt-BR")}</span>
+        <span className="text-2xl font-black text-slate-950">{displayValue.toLocaleString("pt-BR")}</span>
         <span className="text-sm font-bold text-slate-400">/ {target.toLocaleString("pt-BR")}{unit ? ` ${unit}` : ""}</span>
       </div>
       <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
