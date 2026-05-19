@@ -2,6 +2,7 @@
 
 export type Profile = {
   id: string;
+  organizationId: string;
   name: string;
   email: string;
   phone: string;

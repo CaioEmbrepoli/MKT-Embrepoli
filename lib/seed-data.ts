@@ -22,6 +22,7 @@
 export const profiles: Profile[] = [
   {
     id: "user-admin",
+    organizationId: "",
     name: "Caio Embrepoli",
     email: "caio@embrepoli.com.br",
     phone: "(00) 00000-0000",
@@ -33,6 +34,7 @@ export const profiles: Profile[] = [
   },
   {
     id: "user-gestor",
+    organizationId: "",
     name: "Gestor Marketing",
     email: "gestor@embrepoli.com.br",
     phone: "",
@@ -44,6 +46,7 @@ export const profiles: Profile[] = [
   },
   {
     id: "user-design",
+    organizationId: "",
     name: "Design",
     email: "design@embrepoli.com.br",
     phone: "",
@@ -55,6 +58,7 @@ export const profiles: Profile[] = [
   },
   {
     id: "user-conteudo",
+    organizationId: "",
     name: "Conteúdo",
     email: "conteudo@embrepoli.com.br",
     phone: "",

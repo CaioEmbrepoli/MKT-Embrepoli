@@ -564,6 +564,7 @@ export default function Home() {
   // Em dev: começa false (sem spinner) para evitar travamento do bypass local
   // Em produção: começa true (mostra spinner) para evitar flash da tela de login
   const [initializing, setInitializing] = useState(process.env.NODE_ENV !== "development");
+  const [realtimeSyncing, setRealtimeSyncing] = useState(false);
   const [activeSection, setActiveSection] = useState("painel");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
@@ -607,7 +608,7 @@ export default function Home() {
   const realtimeReloadTimer = useRef<number | null>(null);
   const remoteReady = useRef(false);
 
-  const emptyUser: Profile = { id: "", role: "colaborador", name: "", email: "", phone: "", bio: "", active: false, notificationSound: false, avatarUrl: "" };
+  const emptyUser: Profile = { id: "", organizationId: "", role: "colaborador", name: "", email: "", phone: "", bio: "", active: false, notificationSound: false, avatarUrl: "" };
   const currentUser = profiles.find((profile) => profile.id === currentUserId)
     ?? profiles.find((profile) => profile.id === sessionUserId)
     ?? (!isSupabaseConfigured ? profiles[0] : undefined)
@@ -768,9 +769,11 @@ export default function Home() {
       return;
     }
     realtimeReloading.current = true;
+    setRealtimeSyncing(true);
     const data = await loadAppData(supabase);
     if (pendingSaveCount.current > 0) {
       realtimeReloading.current = false;
+      setRealtimeSyncing(false);
       scheduleRealtimeReload();
       return;
     }
@@ -800,6 +803,7 @@ export default function Home() {
       setCurrentUserId(current?.id ?? authUserId);
     }
     remoteReady.current = true;
+    setRealtimeSyncing(false);
     window.setTimeout(() => {
       realtimeReloading.current = false;
     }, 0);
@@ -808,6 +812,7 @@ export default function Home() {
   useEffect(() => {
     if (!loggedIn || !supabase || !isSupabaseConfigured) return;
     void reloadFromSupabase();
+    const orgId = currentUser.organizationId;
     const tables = [
       "profiles",
       "channels",
@@ -833,19 +838,30 @@ export default function Home() {
       "task_checklist_items",
       "task_comments",
       "task_attachments",
-      "task_reset_history",
       "post_metrics",
       "notifications"
     ];
     const channel = supabase.channel("embrepoli-marketing-realtime");
     tables.forEach((table) => {
-      channel.on("postgres_changes", { event: "*", schema: "public", table }, () => {
-        scheduleRealtimeReload();
-      });
+      channel.on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table,
+          ...(orgId ? { filter: `organization_id=eq.${orgId}` } : {})
+        },
+        () => { scheduleRealtimeReload(); }
+      );
     });
     channel.subscribe();
+    // Fallback: reload periódico a cada 60s caso eventos WebSocket sejam perdidos
+    const fallbackInterval = window.setInterval(() => {
+      scheduleRealtimeReload();
+    }, 60_000);
     return () => {
       if (realtimeReloadTimer.current) window.clearTimeout(realtimeReloadTimer.current);
+      window.clearInterval(fallbackInterval);
       void supabase?.removeChannel(channel);
     };
   }, [loggedIn]);
@@ -1176,7 +1192,7 @@ export default function Home() {
       return;
     }
 
-    setProfiles((current) => [{ id: crypto.randomUUID(), name, email, phone: "", bio: "", role: "colaborador", avatarUrl: "", active: false, notificationSound: true }, ...current]);
+    setProfiles((current) => [{ id: crypto.randomUUID(), organizationId: current[0]?.organizationId ?? "", name, email, phone: "", bio: "", role: "colaborador", avatarUrl: "", active: false, notificationSound: true }, ...current]);
     setPendingSignupEmail(email);
     setAuthMode("checkEmail");
     setAuthMessage("");
@@ -1674,6 +1690,7 @@ export default function Home() {
             saveStatus={saveStatus}
             saveError={saveError}
             logout={handleLogout}
+            realtimeSyncing={realtimeSyncing}
           />
 
           {activeSection === "painel" && (
@@ -2439,7 +2456,8 @@ function Header({
   canReviewAssets,
   saveStatus,
   saveError,
-  logout
+  logout,
+  realtimeSyncing
 }: {
   activeSection: string;
   currentUser: Profile;
@@ -2458,6 +2476,7 @@ function Header({
   saveStatus: SaveStatus;
   saveError: string;
   logout: () => void;
+  realtimeSyncing?: boolean;
 }) {
   const title = menu.find((item) => item.id === activeSection)?.label ?? "Painel";
   const unreadCount = notifications.filter((item) => !item.read).length;
@@ -2538,6 +2557,12 @@ function Header({
         {saveStatus !== "idle" && (
           <div className={`hidden rounded-2xl px-3 py-2 text-xs font-black md:block ${saveStatus === "error" ? "bg-rose-100 text-rose-700" : saveStatus === "saving" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`} title={saveError || undefined}>
             {saveStatus === "saving" ? saveError || "Salvando..." : saveStatus === "error" ? "Erro ao salvar" : saveError || "Salvo"}
+          </div>
+        )}
+        {realtimeSyncing && saveStatus === "idle" && (
+          <div className="hidden items-center gap-1.5 rounded-2xl bg-blue-50 px-3 py-2 text-xs font-bold text-blue-600 md:flex">
+            <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+            Sincronizando…
           </div>
         )}
         <div className="relative">
@@ -4434,7 +4459,7 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
     event.preventDefault();
     if (!canManageTeam) return;
     const form = new FormData(event.currentTarget);
-    setProfiles((current) => [...current, { id: crypto.randomUUID(), name: String(form.get("name")), email: String(form.get("email")), phone: "", bio: "", role: String(form.get("role")) as Role, avatarUrl: "", active: true, notificationSound: true }]);
+    setProfiles((current) => [...current, { id: crypto.randomUUID(), organizationId: current[0]?.organizationId ?? "", name: String(form.get("name")), email: String(form.get("email")), phone: "", bio: "", role: String(form.get("role")) as Role, avatarUrl: "", active: true, notificationSound: true }]);
     event.currentTarget.reset();
   }
   const pendingCount = profiles.filter((p) => !p.active).length;

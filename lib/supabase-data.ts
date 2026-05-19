@@ -664,7 +664,7 @@ function textLines(value: string) {
 }
 
 function mapProfile(row: any): Profile {
-  return { id: row.id, name: row.name, email: row.email, phone: row.phone ?? "", bio: row.bio ?? "", role: row.role, avatarUrl: row.avatar_url ?? "", active: row.active ?? true, notificationSound: row.notification_sound ?? true };
+  return { id: row.id, organizationId: row.organization_id ?? "", name: row.name, email: row.email, phone: row.phone ?? "", bio: row.bio ?? "", role: row.role, avatarUrl: row.avatar_url ?? "", active: row.active ?? true, notificationSound: row.notification_sound ?? true };
 }
 
 function mapChannel(row: any): Channel {
