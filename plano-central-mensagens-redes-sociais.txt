@@ -1,0 +1,152 @@
+Plano complementar: Central de mensagens das redes sociais
+
+Objetivo
+Criar futuramente uma Central de Mensagens dentro do Embrepoli Marketing, onde a equipe consiga visualizar, organizar e responder mensagens, comentarios e duvidas vindas das redes sociais em um unico lugar. Essa funcionalidade complementa o plano de sugestao de respostas, porque as mensagens coletadas alimentam o banco de duvidas e a base de conhecimento da empresa.
+
+1. Redes prioritarias
+
+Instagram e Facebook
+Sao as redes mais viaveis para iniciar uma central de mensagens. A Meta possui APIs para Messenger/Facebook e mensagens do Instagram, permitindo receber mensagens via webhook, salvar no sistema e responder pela propria API, desde que a conta esteja conectada, o app tenha as permissoes corretas e a Meta aprove o uso quando necessario.
+
+YouTube
+No YouTube, o foco inicial nao seria mensagem direta, e sim comentarios e respostas nos videos. A API do YouTube permite buscar comentarios, respostas e responder comentarios, entao pode entrar como uma caixa de atendimento de comentarios.
+
+TikTok
+O TikTok e mais limitado. Existem recursos de mensagens para contas comerciais e parceiros de mensagens, mas o acesso pode depender de liberacao, elegibilidade da conta ou uso de um parceiro/intermediario. Por isso, TikTok deve entrar como fase posterior, depois de Instagram/Facebook e YouTube.
+
+2. Como funcionaria dentro do sistema
+
+Fluxo geral:
+1. Cliente manda mensagem ou comentario em uma rede social.
+2. A plataforma envia essa informacao para o sistema por API/webhook, quando disponivel.
+3. O sistema salva a conversa no Supabase.
+4. A equipe ve a mensagem na Central de Mensagens.
+5. A IA procura duvidas parecidas no banco de conhecimento.
+6. O sistema sugere uma resposta.
+7. A equipe aprova, edita ou descarta a resposta.
+8. A resposta e enviada pela API da plataforma.
+9. A conversa fica registrada no historico do cliente e da empresa.
+
+3. Area no app
+
+Criar uma nova area chamada Central de Mensagens.
+
+Possiveis filtros:
+- rede social: Instagram, Facebook, TikTok, YouTube;
+- status: nova, em atendimento, respondida, arquivada;
+- responsavel;
+- campanha;
+- post ou video relacionado;
+- produto ou linha;
+- tipo de veiculo;
+- tipo de duvida;
+- prioridade;
+- data.
+
+Cada conversa pode mostrar:
+- nome ou identificador do cliente, quando permitido;
+- rede social de origem;
+- texto da mensagem ou comentario;
+- historico de respostas;
+- post, video ou campanha relacionada;
+- sugestao de resposta da IA;
+- respostas parecidas ja usadas;
+- status do atendimento;
+- responsavel interno;
+- tags/categorias;
+- botao para responder.
+
+4. Banco de dados no Supabase
+
+Tabelas sugeridas:
+- social_accounts;
+- social_conversations;
+- social_messages;
+- social_comments;
+- social_message_tags;
+- social_message_assignments;
+- suggested_replies;
+- customer_questions;
+- knowledge_base.
+
+Campos importantes:
+- rede social;
+- id externo da conversa/mensagem;
+- texto;
+- autor externo;
+- data de recebimento;
+- status;
+- responsavel;
+- resposta enviada;
+- data da resposta;
+- usuario interno que respondeu;
+- post/video/campanha relacionada;
+- se a mensagem virou item da base de conhecimento.
+
+5. Relacao com sugestao de respostas
+
+A Central de Mensagens e a entrada principal de novas duvidas reais.
+
+As mensagens importadas podem:
+- virar pergunta no Banco de duvidas dos clientes;
+- alimentar a base de conhecimento;
+- gerar sugestoes automaticas de resposta;
+- revelar duvidas frequentes;
+- mostrar quais produtos ou linhas geram mais perguntas;
+- indicar assuntos para novos posts, ideias e campanhas.
+
+6. IA e atendimento assistido
+
+No inicio, a IA deve apenas sugerir respostas, nao responder automaticamente.
+
+Fluxo seguro:
+1. IA le a mensagem do cliente.
+2. IA busca perguntas semelhantes no Supabase.
+3. IA usa a base aprovada da Embrepoli.
+4. IA gera uma sugestao.
+5. A equipe revisa.
+6. Somente depois da aprovacao humana a resposta e enviada.
+
+Mais para frente, algumas respostas simples e muito confiaveis podem ser automatizadas, mas isso deve ser feito com cuidado.
+
+7. Limitacoes importantes
+
+Nem todas as plataformas permitem puxar tudo livremente.
+
+Instagram/Facebook:
+- dependem de permissoes da Meta;
+- podem exigir revisao do app;
+- precisam de conta profissional/pagina conectada;
+- podem ter regras de janela de resposta.
+
+YouTube:
+- mais simples para comentarios;
+- depende da conexao Google/YouTube da empresa.
+
+TikTok:
+- acesso mais restrito;
+- pode depender de conta comercial, Business Center, parceiro de mensagens ou aprovacao.
+
+8. Fases sugeridas
+
+Fase 1
+Criar estrutura da Central de Mensagens no app e no Supabase, ainda sem integracao automatica completa.
+
+Fase 2
+Integrar comentarios do YouTube.
+
+Fase 3
+Integrar Instagram e Facebook via Meta API/webhooks.
+
+Fase 4
+Adicionar sugestao de resposta usando o Banco de duvidas dos clientes.
+
+Fase 5
+Adicionar distribuicao por responsavel, status e tags.
+
+Fase 6
+Avaliar integracao com TikTok, diretamente ou via parceiro.
+
+9. Observacao final
+
+Essa funcionalidade tem grande valor para a Embrepoli porque transforma atendimento, comentarios e perguntas repetidas em conhecimento organizado. Alem de facilitar respostas futuras, ela ajuda a descobrir quais duvidas merecem virar posts, campanhas, modelos de conteudo ou melhorias no site.

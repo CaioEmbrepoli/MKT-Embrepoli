@@ -466,30 +466,30 @@ export async function replaceTasks(client: SupabaseClient, tasks: Task[], previo
   await replaceSimpleWithOrg(client, "tasks", organizationId, tasks, previous, (item) => ({
     id: item.id,
     organization_id: organizationId,
-    parent_task_id: item.parentTaskId ?? null,
+    parent_task_id: nullableText(item.parentTaskId),
     task_column_id: item.columnId,
-    funnel_stage_id: item.funnelStageId,
-    created_by: item.createdBy,
+    funnel_stage_id: nullableText(item.funnelStageId),
+    created_by: nullableText(item.createdBy),
     title: item.title,
     priority: item.priority,
     progress: item.progress,
-    related_to: item.relatedTo,
-    description: item.description,
-    due_date: item.dueDate,
+    related_to: item.relatedTo ?? "",
+    description: item.description ?? "",
+    due_date: nullableText(item.dueDate),
     sort_order: item.order,
     reset_frequency: item.resetFrequency ?? "none",
     reset_time: item.resetTime ?? "23:59",
-    reset_weekday: item.resetWeekday ?? null,
-    reset_month_day: item.resetMonthDay ?? null,
+    reset_weekday: nullableNumber(item.resetWeekday),
+    reset_month_day: nullableNumber(item.resetMonthDay),
     reset_month_last_day: item.resetMonthLastDay ?? false,
-    fixed_goal_key: item.fixedGoalKey ?? null,
-    last_reset_at: item.lastResetAt ?? null,
-    next_reset_at: item.nextResetAt ?? null
+    fixed_goal_key: nullableText(item.fixedGoalKey),
+    last_reset_at: nullableText(item.lastResetAt),
+    next_reset_at: nullableText(item.nextResetAt)
   }));
-  await replaceAssignees(client, "task_assignees", "task_id", organizationId, tasks.map((item) => ({ parentId: item.id, assignees: item.assignedTo })));
-  await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.checklist.map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
-  await replaceChildRows(client, "task_comments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.comments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, author_id: item.authorId, message: item.message, created_at: item.createdAt }))));
-  await replaceChildRows(client, "task_attachments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => task.attachments.map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, uploaded_by: task.createdBy, name: item.name, file_type: item.type, source: item.source, storage_path: item.url, public_url: item.url, preview_url: item.previewUrl, original_size: item.originalSize, compressed_size: item.compressedSize, mime_type: item.mimeType }))));
+  await replaceAssignees(client, "task_assignees", "task_id", organizationId, tasks.map((item) => ({ parentId: item.id, assignees: item.assignedTo ?? [] })));
+  await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => (task.checklist ?? []).map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
+  await replaceChildRows(client, "task_comments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => (task.comments ?? []).map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, author_id: nullableText(item.authorId), message: item.message, created_at: item.createdAt }))));
+  await replaceChildRows(client, "task_attachments", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => (task.attachments ?? []).map((item) => ({ id: item.id, organization_id: organizationId, task_id: task.id, uploaded_by: nullableText(task.createdBy), name: item.name, file_type: item.type, source: item.source, storage_path: item.url, public_url: item.url, preview_url: item.previewUrl, original_size: item.originalSize, compressed_size: item.compressedSize, mime_type: item.mimeType }))));
 }
 
 export async function saveTask(client: SupabaseClient, task: Task) {
@@ -634,6 +634,15 @@ async function deleteRemovedRows<T extends { id: string }>(client: SupabaseClien
 async function deleteById(client: SupabaseClient, table: string, id: string) {
   const organizationId = await currentOrganizationId(client);
   await client.from(table).delete().eq("organization_id", organizationId).eq("id", id);
+}
+
+function nullableText(value: string | null | undefined) {
+  const text = value?.trim();
+  return text ? text : null;
+}
+
+function nullableNumber(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 async function currentOrganizationId(client: SupabaseClient) {

@@ -910,7 +910,7 @@ export default function Home() {
             .catch((error) => {
               console.error(`Erro ao salvar ${String(key)} no Supabase`, error);
               setSaveStatus("error");
-              setSaveError("Erro ao salvar. Verifique a conexão e tente novamente.");
+              setSaveError(friendlySaveError(error));
             })
             .finally(() => {
               pendingSaveCount.current = Math.max(0, pendingSaveCount.current - 1);
@@ -920,6 +920,20 @@ export default function Home() {
         return next;
       });
     };
+  }
+
+  function friendlySaveError(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/column .* does not exist|schema cache|could not find .*column|relationship .* does not exist/i.test(message)) {
+      return "Erro ao salvar: o banco precisa ser atualizado. Rode a migração do Supabase e tente novamente.";
+    }
+    if (/row-level security|violates row-level security|permission denied/i.test(message)) {
+      return "Erro ao salvar: sua conta não tem permissão para esta ação ou as políticas do Supabase precisam ser ajustadas.";
+    }
+    if (/foreign key|violates .*constraint/i.test(message)) {
+      return "Erro ao salvar: algum vínculo selecionado não existe mais. Recarregue a página e tente novamente.";
+    }
+    return "Erro ao salvar. Verifique a conexão e tente novamente.";
   }
 
   const syncProfiles = syncState("profiles", setProfiles, (previous, next) => persistArrayChanges(previous, next, (item) => saveProfile(supabase!, item), (id) => deleteProfile(supabase!, id)));
@@ -1257,6 +1271,20 @@ export default function Home() {
     }
     setAuthMessage("No modo local, a recuperação de senha fica disponível quando o Supabase estiver configurado.");
     setAuthLoading(false);
+  }
+
+  async function sendPasswordResetForProfile(profile: Profile) {
+    if (!profile.email.trim()) throw new Error("Este membro não tem email cadastrado.");
+    if (!supabase || !isSupabaseConfigured) throw new Error("Redefinição disponível apenas com Supabase configurado.");
+    const { error } = await supabase.auth.resetPasswordForEmail(profile.email, {
+      redirectTo: authRedirectUrl()
+    });
+    if (error) {
+      if (/rate limit|too many|exceeded/i.test(error.message)) {
+        throw new Error("Limite de envio de emails atingido. Aguarde alguns minutos e tente novamente.");
+      }
+      throw new Error("Não foi possível enviar o email de redefinição. Verifique o email do membro e tente novamente.");
+    }
   }
 
   async function handleResetPassword(password: string) {
@@ -1825,6 +1853,7 @@ export default function Home() {
               setCalendarDates={syncCalendarDates}
               setFunnelStages={syncFunnelStages}
               uploadProfilePhoto={uploadProfilePhoto}
+              sendPasswordResetForProfile={sendPasswordResetForProfile}
               setModal={setModal}
             />
           )}
@@ -4473,6 +4502,7 @@ function SettingsPanel(props: {
   setFunnelStages: Dispatch<SetStateAction<FunnelStage[]>>;
   setCalendarDates: Dispatch<SetStateAction<CalendarDate[]>>;
   uploadProfilePhoto: (profileId: string, file: File) => void;
+  sendPasswordResetForProfile: (profile: Profile) => Promise<void>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
   return (
@@ -4496,20 +4526,30 @@ function SettingsPanel(props: {
   );
 }
 
-function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, setModal }: Parameters<typeof SettingsPanel>[0]) {
+function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, setModal, sendPasswordResetForProfile }: Parameters<typeof SettingsPanel>[0]) {
   const canManageTeam = currentUser.role === "admin" || currentUser.role === "gestor";
-  function addMember(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!canManageTeam) return;
-    const form = new FormData(event.currentTarget);
-    setProfiles((current) => [...current, { id: crypto.randomUUID(), organizationId: current[0]?.organizationId ?? "", name: String(form.get("name")), email: String(form.get("email")), phone: "", bio: "", role: String(form.get("role")) as Role, avatarUrl: "", active: true, notificationSound: true }]);
-    event.currentTarget.reset();
-  }
+  const [resettingProfileId, setResettingProfileId] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
+  const [resetError, setResetError] = useState("");
   const pendingCount = profiles.filter((p) => !p.active).length;
   const sortedProfiles = [...profiles].sort((a, b) => {
     if (a.active === b.active) return a.name.localeCompare(b.name);
     return a.active ? 1 : -1;
   });
+  async function sendReset(profile: Profile) {
+    if (!canManageTeam || resettingProfileId) return;
+    setResettingProfileId(profile.id);
+    setResetMessage("");
+    setResetError("");
+    try {
+      await sendPasswordResetForProfile(profile);
+      setResetMessage(`Email de redefinição enviado para ${profile.email}.`);
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : "Não foi possível enviar o email de redefinição.");
+    } finally {
+      setResettingProfileId("");
+    }
+  }
   return (
     <Panel title="Equipe">
       {pendingCount > 0 && canManageTeam && (
@@ -4518,18 +4558,17 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
         </div>
       )}
       {canManageTeam && (
-        <form onSubmit={addMember} className="mb-5 grid gap-3 lg:grid-cols-[1fr_1fr_180px_auto] lg:items-end">
-          <TextInput name="name" label="Nome" required />
-          <TextInput name="email" label="Email" type="email" required />
-          <Select name="role" label="Função" options={roles.map((role) => [role, roleLabel[role]])} />
-          <SubmitButton>Adicionar</SubmitButton>
-        </form>
+        <div className="mb-5 rounded-3xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-900">
+          Novas pessoas entram pelo botão "Criar conta" na tela de login. Depois disso, um Gestor ou Administrador aprova o cadastro aqui.
+        </div>
       )}
+      {resetMessage && <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">{resetMessage}</div>}
+      {resetError && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{resetError}</div>}
       <div className="grid gap-3">
         {sortedProfiles.map((profile) => (
           <div
             key={profile.id}
-            className={`grid gap-3 rounded-3xl border p-4 shadow-sm md:grid-cols-[auto_1fr_190px_auto] md:items-center ${
+            className={`grid gap-3 rounded-3xl border p-4 shadow-sm md:grid-cols-[auto_1fr_190px_auto_auto] md:items-center ${
               !profile.active ? "border-amber-300 bg-amber-50/40" : "border-slate-100 bg-white"
             }`}
           >
@@ -4547,7 +4586,15 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
             </div>
             <Badge tone="blue">{roleLabel[profile.role]}</Badge>
             {canManageTeam && (
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={resettingProfileId === profile.id}
+                  onClick={() => sendReset(profile)}
+                  className="rounded-2xl bg-emerald-100 px-3 py-2 text-sm font-black text-emerald-700 disabled:cursor-wait disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  {resettingProfileId === profile.id ? "Enviando..." : "Redefinir senha"}
+                </button>
                 <button onClick={() => setModal({ kind: "teamMember", id: profile.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">editar</button>
                 <button onClick={() => setProfiles((current) => current.filter((item) => item.id !== profile.id))} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600">excluir</button>
               </div>
