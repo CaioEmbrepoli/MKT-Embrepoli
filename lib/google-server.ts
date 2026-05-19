@@ -109,7 +109,7 @@ export function verifyGoogleState<T extends Record<string, unknown>>(state: stri
   return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as T;
 }
 
-async function exchangeRefreshToken(refreshToken: string) {
+export async function exchangeRefreshToken(refreshToken: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) throw new Error("GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET nao configurados.");

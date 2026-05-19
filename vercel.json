@@ -3,6 +3,10 @@
     {
       "path": "/api/task-resets",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/cron/metrics-update",
+      "schedule": "0 10 * * *"
     }
   ]
 }
