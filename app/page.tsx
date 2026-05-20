@@ -2219,7 +2219,7 @@ function LoginScreen({
             {mode === "signup" && (
               <label className="block text-sm font-bold text-slate-600">
                 Nome
-                <input type="text" required autoComplete="name" value={nameValue} onChange={(e) => setNameValue(e.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" />
+                <input type="text" required autoComplete="name" value={nameValue} onChange={(e) => setNameValue(e.target.value)} spellCheck autoCorrect="on" autoCapitalize="words" className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" />
               </label>
             )}
             {mode !== "reset" && (
@@ -6806,7 +6806,7 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
               {productionChecklist.map((item) => (
                 <div key={item.id} className="flex items-center gap-3 rounded-2xl bg-white p-3">
                   <input type="checkbox" checked={item.done} onChange={(event) => setProductionChecklist((current) => current.map((check) => check.id === item.id ? { ...check, done: event.target.checked } : check))} />
-                  <input value={item.label} onChange={(event) => setProductionChecklist((current) => current.map((check) => check.id === item.id ? { ...check, label: event.target.value } : check))} className="min-w-0 flex-1 bg-transparent font-bold outline-none" />
+                  <input value={item.label} onChange={(event) => setProductionChecklist((current) => current.map((check) => check.id === item.id ? { ...check, label: event.target.value } : check))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 bg-transparent font-bold outline-none" />
                   <button type="button" onClick={() => setProductionChecklist((current) => current.filter((check) => check.id !== item.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700" title="Excluir item"><Trash2 size={15} /></button>
                 </div>
               ))}
@@ -7487,7 +7487,7 @@ function TextInput({ label, name, type = "text", required = false, defaultValue,
 }
 
 function TextArea({ label, name, defaultValue }: { label: string; name: string; defaultValue?: string }) {
-  return <label className="block text-sm font-bold text-slate-600 md:col-span-2">{label}<textarea name={name} rows={4} defaultValue={defaultValue} spellCheck autoCorrect="on" autoCapitalize="sentences" className="mt-1 w-full resize-none rounded-3xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
+  return <label className="block text-sm font-bold text-slate-600 md:col-span-2">{label}<textarea name={name} rows={8} defaultValue={defaultValue} spellCheck autoCorrect="on" autoCapitalize="sentences" className="mt-1 w-full resize-none rounded-3xl border border-slate-200 px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
 }
 
 function Select({ label, name, options, defaultValue }: { label: string; name: string; options: string[][]; defaultValue?: string }) {
