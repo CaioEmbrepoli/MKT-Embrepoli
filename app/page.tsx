@@ -7802,25 +7802,32 @@ function YoutubeImportModal({
       }
     }
 
-    const toAdd: CustomerQuestion[] = allComments
-      .filter((c) => !existingIds.has(`yt_comment:${c.id}`))
-      .map((c) => ({
-        id: crypto.randomUUID(),
-        organizationId: currentUser.organizationId,
-        source: "youtube" as const,
-        externalId: `yt_comment:${c.id}`,
-        videoId: c.videoId,
-        videoTitle: videoTitleMap[c.videoId] ?? "",
-        questionText: c.text,
-        answerText: "",
-        authorName: c.authorName,
-        likes: c.likes,
-        status: "pendente" as const,
-        category: "",
-        learning: "",
-        publishedAt: c.publishedAt,
-        createdAt: c.publishedAt
-      }));
+    // Deduplica por externalId: filtra contra o estado existente E contra duplicatas no próprio batch
+    const seenExtIds = new Set<string>();
+    const toAdd: CustomerQuestion[] = [];
+    for (const c of allComments) {
+      const extId = `yt_comment:${c.id}`;
+      if (!existingIds.has(extId) && !seenExtIds.has(extId)) {
+        seenExtIds.add(extId);
+        toAdd.push({
+          id: crypto.randomUUID(),
+          organizationId: currentUser.organizationId,
+          source: "youtube" as const,
+          externalId: extId,
+          videoId: c.videoId,
+          videoTitle: videoTitleMap[c.videoId] ?? "",
+          questionText: c.text,
+          answerText: c.channelReply ?? "",
+          authorName: c.authorName,
+          likes: c.likes,
+          status: "pendente" as const,
+          category: "",
+          learning: "",
+          publishedAt: c.publishedAt,
+          createdAt: c.publishedAt
+        });
+      }
+    }
 
     try {
       if (toAdd.length > 0) await onImport(toAdd);

@@ -8,6 +8,7 @@ type CommentResult = {
   authorName: string;
   likes: number;
   publishedAt: string;
+  channelReply?: string;
 };
 
 class CommentsDisabledError extends Error {
@@ -37,7 +38,7 @@ export async function GET(request: Request) {
     let pageToken = "";
     do {
       const params = new URLSearchParams({
-        part: "snippet",
+        part: "snippet,replies",
         videoId,
         textFormat: "plainText",
         maxResults: "100",
@@ -50,13 +51,19 @@ export async function GET(request: Request) {
       );
       for (const item of page.items ?? []) {
         const s = item.snippet?.topLevelComment?.snippet ?? {};
+        // Pega a primeira resposta (geralmente a resposta do canal) se existir
+        const firstReply = (item.replies?.comments ?? [])[0];
+        const channelReply: string | undefined = firstReply?.snippet?.textDisplay
+          ? String(firstReply.snippet.textDisplay)
+          : undefined;
         comments.push({
           id: item.id as string,
           videoId: (item.snippet?.videoId as string) ?? videoId,
           text: (s.textDisplay as string) ?? "",
           authorName: (s.authorDisplayName as string) ?? "",
           likes: (s.likeCount as number) ?? 0,
-          publishedAt: (s.publishedAt as string) ?? new Date().toISOString()
+          publishedAt: (s.publishedAt as string) ?? new Date().toISOString(),
+          channelReply
         });
       }
       pageToken = (page.nextPageToken as string) ?? "";

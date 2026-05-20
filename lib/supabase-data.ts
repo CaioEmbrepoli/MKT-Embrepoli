@@ -939,10 +939,10 @@ export async function insertCustomerQuestions(
     published_at: q.publishedAt ?? null,
     answered_at: q.answeredAt ?? null
   }));
-  // Usa upsert com onConflict no external_id para evitar duplicatas mesmo em reimportações
+  // ON CONFLICT (organization_id, external_id) DO NOTHING — idempotente para reimportações
   const { error } = await client
     .from("customer_questions")
-    .insert(rows);
+    .upsert(rows, { onConflict: "organization_id,external_id", ignoreDuplicates: true });
   if (error) throw new Error(`customer_questions insert: ${error.message}`);
 }
 

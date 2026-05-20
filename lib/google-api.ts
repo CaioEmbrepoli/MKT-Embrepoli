@@ -215,6 +215,7 @@ export type YouTubeCommentResult = {
   authorName: string;
   likes: number;
   publishedAt: string;
+  channelReply?: string;
 };
 
 export async function listYouTubeVideoComments(videoId: string): Promise<YouTubeCommentResult[]> {
