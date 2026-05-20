@@ -3613,6 +3613,7 @@ function TaskColumnView({
             <input
               value={column.name}
               onChange={(event) => setTaskColumns((current) => current.map((item) => item.id === column.id ? { ...item, name: event.target.value } : item))}
+              spellCheck autoCorrect="on" autoCapitalize="sentences"
               className="min-w-0 bg-transparent font-black outline-none"
             />
           )}
@@ -4937,7 +4938,7 @@ function FunnelStageRow({ stage, index, total, setFunnelStages }: { stage: Funne
   return (
     <div ref={setNodeRef} style={{ transform: CSS.Transform.toString(transform), transition, width: `${width}%`, backgroundColor: stage.color }} className="mx-auto flex items-center gap-3 rounded-3xl px-4 py-4 text-white shadow-lg">
       <button {...attributes} {...listeners} className="rounded-xl bg-white/20 p-1"><GripVertical size={18} /></button>
-      <input value={stage.name} onChange={(event) => setFunnelStages((current) => current.map((item) => item.id === stage.id ? { ...item, name: event.target.value } : item))} className="min-w-0 flex-1 bg-transparent font-black outline-none" />
+      <input value={stage.name} onChange={(event) => setFunnelStages((current) => current.map((item) => item.id === stage.id ? { ...item, name: event.target.value } : item))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 bg-transparent font-black outline-none" />
       <button onClick={() => window.confirm("Excluir etapa do funil?") && setFunnelStages((current) => current.filter((item) => item.id !== stage.id).map((item, nextIndex) => ({ ...item, order: nextIndex + 1 })))} className="rounded-xl bg-white/20 p-1" title="Excluir etapa">
         <Trash2 size={16} />
       </button>
@@ -4989,7 +4990,7 @@ function SimpleConfigPanel<T extends { id: string; name: string }>({ title, addL
       <div className="space-y-2">
         {items.map((item) => (
           <div key={item.id} className="flex gap-2">
-            <input value={item.name} onChange={(event) => setItems((current) => current.map((currentItem) => currentItem.id === item.id ? { ...currentItem, name: event.target.value } : currentItem))} className="min-w-0 flex-1 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500" />
+            <input value={item.name} onChange={(event) => setItems((current) => current.map((currentItem) => currentItem.id === item.id ? { ...currentItem, name: event.target.value } : currentItem))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500" />
             <button onClick={() => window.confirm(deleteLabel) && setItems((current) => current.filter((currentItem) => currentItem.id !== item.id))} className="rounded-2xl bg-rose-100 px-3 text-rose-700"><Trash2 size={16} /></button>
           </div>
         ))}
@@ -5100,7 +5101,7 @@ function ListEditor({ title, items, setItems }: { title: string; items: string[]
       {items.map((item, index) => (
         <div key={index} className="flex items-center gap-2">
           <span className="grid h-7 w-7 place-items-center rounded-full bg-blue-100 text-xs font-black text-blue-700">{index + 1}</span>
-          <input value={item} onChange={(event) => setItems((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" />
+          <input value={item} onChange={(event) => setItems((current) => current.map((value, itemIndex) => itemIndex === index ? event.target.value : value))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" />
           <button type="button" onClick={() => setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
         </div>
       ))}
@@ -5116,7 +5117,7 @@ function ChecklistEditor({ title, items, setItems }: { title: string; items: Che
       {items.map((item) => (
         <div key={item.id} className="flex items-center gap-2">
           <input type="checkbox" checked={item.done} onChange={(event) => setItems((current) => current.map((value) => value.id === item.id ? { ...value, done: event.target.checked } : value))} />
-          <input value={item.label} onChange={(event) => setItems((current) => current.map((value) => value.id === item.id ? { ...value, label: event.target.value } : value))} className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" />
+          <input value={item.label} onChange={(event) => setItems((current) => current.map((value) => value.id === item.id ? { ...value, label: event.target.value } : value))} spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 font-bold outline-none focus:border-blue-500" />
           <button type="button" onClick={() => setItems((current) => current.filter((value) => value.id !== item.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
         </div>
       ))}
@@ -5801,6 +5802,7 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar por título…"
+            spellCheck autoCorrect="on" autoCapitalize="sentences"
             className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
           />
           <select
@@ -6118,6 +6120,7 @@ function YouTubeSearchModal({ onSelect, onClose }: { onSelect: (video: YouTubeVi
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Pesquisar vídeos no YouTube..."
             autoFocus
+            spellCheck autoCorrect="on" autoCapitalize="sentences"
             className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-4 py-2 outline-none focus:border-red-400"
           />
           <button disabled={loading || !query.trim()} className="rounded-2xl bg-red-600 px-4 font-black text-white disabled:bg-slate-200 disabled:text-slate-400">
@@ -7499,7 +7502,7 @@ function SelectControlled({ label, value, options, onChange }: { label: string; 
 }
 
 function TextInputControlled({ label, value, onChange, type = "text", min, max }: { label: string; value: string; onChange: (value: string) => void; type?: string; min?: number; max?: number }) {
-  return <label className="block text-sm font-bold text-slate-600">{label}<input value={value} onChange={(event) => onChange(event.target.value)} type={type} min={min} max={max} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
+  return <label className="block text-sm font-bold text-slate-600">{label}<input value={value} onChange={(event) => onChange(event.target.value)} type={type} min={min} max={max} spellCheck={type === "text"} autoCorrect={type === "text" ? "on" : "off"} autoCapitalize={type === "text" ? "sentences" : "off"} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500" /></label>;
 }
 
 function FileDropZone({
