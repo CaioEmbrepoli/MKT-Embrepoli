@@ -914,3 +914,35 @@ export async function replaceCustomerQuestions(
   if (error) throw new Error(`customer_questions upsert: ${error.message}`);
 }
 
+// Insere apenas perguntas NOVAS (importação YouTube) — não faz delete/replace
+export async function insertCustomerQuestions(
+  client: SupabaseClient,
+  questions: CustomerQuestion[]
+) {
+  if (!questions.length) return;
+  const organizationId = await currentOrganizationId(client);
+  const rows = questions.map((q) => ({
+    id: q.id,
+    organization_id: organizationId,
+    source: q.source,
+    external_id: q.externalId ?? null,
+    video_id: q.videoId ?? null,
+    video_title: q.videoTitle ?? null,
+    question_text: q.questionText,
+    answer_text: q.answerText || null,
+    author_name: q.authorName || null,
+    likes: q.likes ?? 0,
+    status: q.status,
+    category: q.category || null,
+    reviewer_id: q.reviewerId ?? null,
+    learning: q.learning || null,
+    published_at: q.publishedAt ?? null,
+    answered_at: q.answeredAt ?? null
+  }));
+  // Usa upsert com onConflict no external_id para evitar duplicatas mesmo em reimportações
+  const { error } = await client
+    .from("customer_questions")
+    .upsert(rows, { onConflict: "external_id", ignoreDuplicates: true });
+  if (error) throw new Error(`customer_questions insert: ${error.message}`);
+}
+

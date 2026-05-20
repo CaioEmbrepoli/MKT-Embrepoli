@@ -96,6 +96,7 @@ import {
   saveMetricSnapshots,
   replaceMetrics,
   replaceCustomerQuestions,
+  insertCustomerQuestions,
   saveNotification,
   savePost,
   savePostReviewAsset,
@@ -2019,6 +2020,10 @@ export default function Home() {
                 const prev = customerQuestions;
                 setCustomerQuestions(next);
                 replaceCustomerQuestions(supabase!, next, prev).catch(() => setCustomerQuestions(prev));
+              }}
+              onYoutubeImport={async (newOnes) => {
+                setCustomerQuestions((prev) => [...newOnes, ...prev]);
+                await insertCustomerQuestions(supabase!, newOnes);
               }}
               currentUser={currentUser}
               profiles={profiles}
@@ -7742,7 +7747,7 @@ function YoutubeImportModal({
   currentUser
 }: {
   existingQuestions: CustomerQuestion[];
-  onImport: (newOnes: CustomerQuestion[]) => void;
+  onImport: (newOnes: CustomerQuestion[]) => Promise<void>;
   onClose: () => void;
   currentUser: Profile;
 }) {
@@ -7817,8 +7822,14 @@ function YoutubeImportModal({
         createdAt: c.publishedAt
       }));
 
+    try {
+      if (toAdd.length > 0) await onImport(toAdd);
+    } catch (insertErr) {
+      setErrorMsg(insertErr instanceof Error ? insertErr.message : "Erro ao salvar no banco de dados.");
+      setPhase("error");
+      return;
+    }
     setResult({ imported: toAdd.length, skipped: allComments.length - toAdd.length });
-    if (toAdd.length > 0) onImport(toAdd);
     setPhase("done");
   }
 
@@ -7979,11 +7990,13 @@ function YoutubeImportModal({
 function BancoDeDuvidas({
   questions,
   setQuestions,
+  onYoutubeImport,
   currentUser,
   profiles
 }: {
   questions: CustomerQuestion[];
   setQuestions: (next: CustomerQuestion[]) => void;
+  onYoutubeImport: (newOnes: CustomerQuestion[]) => Promise<void>;
   currentUser: Profile;
   profiles: Profile[];
 }) {
@@ -8261,7 +8274,7 @@ function BancoDeDuvidas({
       {ytModal && (
         <YoutubeImportModal
           existingQuestions={questions}
-          onImport={(newOnes) => setQuestions([...newOnes, ...questions])}
+          onImport={onYoutubeImport}
           onClose={() => setYtModal(false)}
           currentUser={currentUser}
         />
