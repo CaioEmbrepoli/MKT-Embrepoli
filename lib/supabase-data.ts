@@ -944,5 +944,23 @@ export async function insertCustomerQuestions(
     .from("customer_questions")
     .upsert(rows, { onConflict: "organization_id,external_id", ignoreDuplicates: true });
   if (error) throw new Error(`customer_questions insert: ${error.message}`);
+
+  // Segundo passo: preenche answer_text em rows existentes que ainda estão com NULL
+  // (comentários importados antes do channelReply ser extraído)
+  // Só atualiza se: tem external_id + tem answer_text + o valor atual no banco é NULL
+  // Preserva respostas já editadas manualmente pelo usuário.
+  const rowsWithReply = rows.filter((r) => r.external_id && r.answer_text);
+  if (rowsWithReply.length > 0) {
+    await Promise.all(
+      rowsWithReply.map((r) =>
+        client
+          .from("customer_questions")
+          .update({ answer_text: r.answer_text })
+          .eq("organization_id", r.organization_id)
+          .eq("external_id", r.external_id!)
+          .is("answer_text", null)
+      )
+    );
+  }
 }
 
