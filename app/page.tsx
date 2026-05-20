@@ -7753,6 +7753,7 @@ function YoutubeImportModal({
   const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const [search, setSearch] = useState("");
+  const [importProgress, setImportProgress] = useState<{ current: number; total: number; videoTitle: string }>({ current: 0, total: 0, videoTitle: "" });
 
   useEffect(() => {
     listMyYouTubeChannelVideos()
@@ -7772,46 +7773,53 @@ function YoutubeImportModal({
 
   async function runImport() {
     setPhase("importing");
-    try {
-      const existingIds = new Set(existingQuestions.map((q) => q.externalId).filter(Boolean));
-      const videoTitleMap: Record<string, string> = {};
-      for (const v of videos) videoTitleMap[v.videoId] = v.title;
+    const existingIds = new Set(existingQuestions.map((q) => q.externalId).filter(Boolean));
+    const videoTitleMap: Record<string, string> = {};
+    for (const v of videos) videoTitleMap[v.videoId] = v.title;
 
-      const targetVideos = selectedVideoId === "all" ? videos.map((v) => v.videoId) : [selectedVideoId];
-      const allComments: YouTubeCommentResult[] = [];
+    const targetVideos = selectedVideoId === "all"
+      ? videos.filter((v) => v.commentCount > 0).map((v) => v.videoId)
+      : [selectedVideoId];
 
-      for (const vid of targetVideos) {
+    setImportProgress({ current: 0, total: targetVideos.length, videoTitle: "" });
+
+    const allComments: YouTubeCommentResult[] = [];
+
+    for (let i = 0; i < targetVideos.length; i++) {
+      const vid = targetVideos[i];
+      const title = videoTitleMap[vid] ?? "";
+      setImportProgress({ current: i + 1, total: targetVideos.length, videoTitle: title });
+      try {
         const comments = await listYouTubeVideoComments(vid);
         for (const c of comments) allComments.push(c);
+      } catch {
+        // pula vídeos com erro (comentários desativados, privado, etc.)
       }
-
-      const toAdd: CustomerQuestion[] = allComments
-        .filter((c) => !existingIds.has(`yt_comment:${c.id}`))
-        .map((c) => ({
-          id: crypto.randomUUID(),
-          organizationId: currentUser.organizationId,
-          source: "youtube" as const,
-          externalId: `yt_comment:${c.id}`,
-          videoId: c.videoId,
-          videoTitle: videoTitleMap[c.videoId] ?? "",
-          questionText: c.text,
-          answerText: "",
-          authorName: c.authorName,
-          likes: c.likes,
-          status: "pendente" as const,
-          category: "",
-          learning: "",
-          publishedAt: c.publishedAt,
-          createdAt: c.publishedAt
-        }));
-
-      setResult({ imported: toAdd.length, skipped: allComments.length - toAdd.length });
-      if (toAdd.length > 0) onImport(toAdd);
-      setPhase("done");
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Erro ao importar comentários.");
-      setPhase("error");
     }
+
+    const toAdd: CustomerQuestion[] = allComments
+      .filter((c) => !existingIds.has(`yt_comment:${c.id}`))
+      .map((c) => ({
+        id: crypto.randomUUID(),
+        organizationId: currentUser.organizationId,
+        source: "youtube" as const,
+        externalId: `yt_comment:${c.id}`,
+        videoId: c.videoId,
+        videoTitle: videoTitleMap[c.videoId] ?? "",
+        questionText: c.text,
+        answerText: "",
+        authorName: c.authorName,
+        likes: c.likes,
+        status: "pendente" as const,
+        category: "",
+        learning: "",
+        publishedAt: c.publishedAt,
+        createdAt: c.publishedAt
+      }));
+
+    setResult({ imported: toAdd.length, skipped: allComments.length - toAdd.length });
+    if (toAdd.length > 0) onImport(toAdd);
+    setPhase("done");
   }
 
   const filteredVideos = videos.filter((v) =>
@@ -7917,7 +7925,22 @@ function YoutubeImportModal({
           <div className="flex flex-col items-center gap-4 py-8">
             <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-red-600" />
             <p className="font-bold text-slate-700">Importando comentários...</p>
-            <p className="text-sm text-slate-400">Isso pode levar alguns segundos</p>
+            {importProgress.total > 1 ? (
+              <div className="w-full text-center">
+                <p className="text-sm text-slate-500">
+                  Vídeo {importProgress.current} de {importProgress.total}
+                </p>
+                <p className="mt-1 line-clamp-1 text-xs text-slate-400">{importProgress.videoTitle}</p>
+                <div className="mx-auto mt-2 h-1.5 w-48 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-red-500 transition-all"
+                    style={{ width: `${Math.round((importProgress.current / importProgress.total) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-400">Isso pode levar alguns segundos</p>
+            )}
           </div>
         )}
 

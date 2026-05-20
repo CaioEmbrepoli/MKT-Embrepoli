@@ -24,20 +24,32 @@ async function getAuthHeaders(): Promise<HeadersInit> {
   return { Authorization: `Bearer ${token}` };
 }
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 20000): Promise<T> {
   const headers = await getAuthHeaders();
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      ...headers,
-      ...(init?.headers ?? {})
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        ...headers,
+        ...(init?.headers ?? {})
+      }
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error ?? "Erro na integracao Google.");
     }
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data?.error ?? "Erro na integracao Google.");
+    return data as T;
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Tempo limite excedido. Tente novamente.");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  return data as T;
 }
 
 export type GoogleService = "drive" | "youtube";
