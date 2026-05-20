@@ -10,10 +10,18 @@ type CommentResult = {
   publishedAt: string;
 };
 
+class CommentsDisabledError extends Error {
+  constructor() { super("commentsDisabled"); }
+}
+
 async function ytFetch(url: string, token: string) {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message ?? `Erro YouTube API (${res.status}).`);
+  if (!res.ok) {
+    const reason = data?.error?.errors?.[0]?.reason;
+    if (reason === "commentsDisabled") throw new CommentsDisabledError();
+    throw new Error(data?.error?.message ?? `Erro YouTube API (${res.status}).`);
+  }
   return data;
 }
 
@@ -56,6 +64,9 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ comments });
   } catch (error) {
+    if (error instanceof CommentsDisabledError) {
+      return NextResponse.json({ comments: [], commentsDisabled: true });
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao buscar comentários." },
       { status: 401 }

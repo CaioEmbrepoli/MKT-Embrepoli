@@ -206,10 +206,11 @@ export type YouTubeCommentResult = {
 };
 
 export async function listYouTubeVideoComments(videoId: string): Promise<YouTubeCommentResult[]> {
-  const data = await fetchJson<{ comments: YouTubeCommentResult[] }>(
+  const data = await fetchJson<{ comments: YouTubeCommentResult[]; commentsDisabled?: boolean }>(
     `/api/google/youtube/comments?videoId=${encodeURIComponent(videoId)}`
   );
-  return data.comments;
+  // Video tem comentários desativados — trata como zero comentários, não como erro
+  return data.comments ?? [];
 }
 
 export async function listMyYouTubeChannelVideos(
