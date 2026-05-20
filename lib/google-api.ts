@@ -196,6 +196,22 @@ export type YouTubeImportProgress =
   | { phase: "listing"; collected: number }
   | { phase: "stats"; done: number; total: number };
 
+export type YouTubeCommentResult = {
+  id: string;
+  videoId: string;
+  text: string;
+  authorName: string;
+  likes: number;
+  publishedAt: string;
+};
+
+export async function listYouTubeVideoComments(videoId: string): Promise<YouTubeCommentResult[]> {
+  const data = await fetchJson<{ comments: YouTubeCommentResult[] }>(
+    `/api/google/youtube/comments?videoId=${encodeURIComponent(videoId)}`
+  );
+  return data.comments;
+}
+
 export async function listMyYouTubeChannelVideos(
   tokenOrProgress?: string | ((p: YouTubeImportProgress) => void),
   maybeProgress?: (p: YouTubeImportProgress) => void

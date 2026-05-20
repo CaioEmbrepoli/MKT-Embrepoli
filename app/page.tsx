@@ -62,7 +62,7 @@ import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "
 import { useEffect, useMemo, useRef, useState } from "react";
 import { campaignAudiences as seedCampaignAudiences } from "@/lib/seed-data";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
+import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import {
   type AppData,
   deleteCampaign,
@@ -7726,6 +7726,233 @@ const STATUS_COLORS: Record<CustomerQuestionStatus, string> = {
   descartado: "bg-slate-100 text-slate-500"
 };
 
+type YtVideo = {
+  videoId: string;
+  title: string;
+  thumbnail: string;
+  commentCount: number;
+  publishedAt: string;
+};
+
+
+function YoutubeImportModal({
+  existingQuestions,
+  onImport,
+  onClose,
+  currentUser
+}: {
+  existingQuestions: CustomerQuestion[];
+  onImport: (newOnes: CustomerQuestion[]) => void;
+  onClose: () => void;
+  currentUser: Profile;
+}) {
+  const [phase, setPhase] = useState<"select" | "importing" | "done" | "error">("select");
+  const [videos, setVideos] = useState<YtVideo[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(true);
+  const [selectedVideoId, setSelectedVideoId] = useState<string>("all");
+  const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [search, setSearch] = useState("");
+
+  useEffect(() => {
+    listMyYouTubeChannelVideos()
+      .then((channelVideos) => {
+        const vids: YtVideo[] = channelVideos.map((v) => ({
+          videoId: v.videoId,
+          title: v.title,
+          thumbnail: v.thumbnail,
+          commentCount: v.commentCount,
+          publishedAt: v.publishedAt
+        }));
+        setVideos(vids);
+      })
+      .catch(() => setVideos([]))
+      .finally(() => setLoadingVideos(false));
+  }, []);
+
+  async function runImport() {
+    setPhase("importing");
+    try {
+      const existingIds = new Set(existingQuestions.map((q) => q.externalId).filter(Boolean));
+      const videoTitleMap: Record<string, string> = {};
+      for (const v of videos) videoTitleMap[v.videoId] = v.title;
+
+      const targetVideos = selectedVideoId === "all" ? videos.map((v) => v.videoId) : [selectedVideoId];
+      const allComments: YouTubeCommentResult[] = [];
+
+      for (const vid of targetVideos) {
+        const comments = await listYouTubeVideoComments(vid);
+        for (const c of comments) allComments.push(c);
+      }
+
+      const toAdd: CustomerQuestion[] = allComments
+        .filter((c) => !existingIds.has(`yt_comment:${c.id}`))
+        .map((c) => ({
+          id: crypto.randomUUID(),
+          organizationId: currentUser.organizationId,
+          source: "youtube" as const,
+          externalId: `yt_comment:${c.id}`,
+          videoId: c.videoId,
+          videoTitle: videoTitleMap[c.videoId] ?? "",
+          questionText: c.text,
+          answerText: "",
+          authorName: c.authorName,
+          likes: c.likes,
+          status: "pendente" as const,
+          category: "",
+          learning: "",
+          publishedAt: c.publishedAt,
+          createdAt: c.publishedAt
+        }));
+
+      setResult({ imported: toAdd.length, skipped: allComments.length - toAdd.length });
+      if (toAdd.length > 0) onImport(toAdd);
+      setPhase("done");
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : "Erro ao importar comentários.");
+      setPhase("error");
+    }
+  }
+
+  const filteredVideos = videos.filter((v) =>
+    !search || v.title.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="flex w-full max-w-lg flex-col gap-4 rounded-3xl bg-white p-6 shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-100">
+              <Youtube size={18} className="text-red-600" />
+            </div>
+            <h2 className="font-black text-lg">Importar do YouTube</h2>
+          </div>
+          {phase !== "importing" && (
+            <button onClick={onClose} className="rounded-xl bg-slate-100 p-1.5 hover:bg-slate-200">
+              <X size={16} />
+            </button>
+          )}
+        </div>
+
+        {/* Phase: select */}
+        {phase === "select" && (
+          <>
+            <p className="text-sm text-slate-500">Selecione de qual vídeo importar os comentários. Comentários já importados serão ignorados automaticamente.</p>
+
+            {/* Opção todos */}
+            <button
+              onClick={() => setSelectedVideoId("all")}
+              className={`flex items-center gap-3 rounded-2xl border p-3 text-left text-sm transition hover:border-red-300 ${selectedVideoId === "all" ? "border-red-500 bg-red-50" : "border-slate-200"}`}
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-red-100">
+                <Youtube size={16} className="text-red-600" />
+              </div>
+              <div>
+                <p className="font-black">Todos os vídeos</p>
+                <p className="text-xs text-slate-500">Importa comentários de {videos.length} vídeo{videos.length !== 1 ? "s" : ""} — pode demorar</p>
+              </div>
+              {selectedVideoId === "all" && <div className="ml-auto h-4 w-4 rounded-full bg-red-500" />}
+            </button>
+
+            {/* Busca */}
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar vídeo..."
+              lang="pt-BR" spellCheck autoCorrect="on"
+              className="rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-red-400"
+            />
+
+            {/* Lista de vídeos */}
+            <div className="max-h-60 overflow-auto flex flex-col gap-2">
+              {loadingVideos ? (
+                <p className="py-4 text-center text-sm text-slate-400">Carregando vídeos...</p>
+              ) : filteredVideos.length === 0 ? (
+                <p className="py-4 text-center text-sm text-slate-400">Nenhum vídeo encontrado</p>
+              ) : (
+                filteredVideos.map((v) => (
+                  <button
+                    key={v.videoId}
+                    onClick={() => setSelectedVideoId(v.videoId)}
+                    className={`flex items-center gap-3 rounded-2xl border p-2 text-left text-sm transition hover:border-red-300 ${selectedVideoId === v.videoId ? "border-red-500 bg-red-50" : "border-slate-100"}`}
+                  >
+                    {v.thumbnail ? (
+                      <img src={v.thumbnail} alt="" className="h-10 w-16 shrink-0 rounded-xl object-cover" />
+                    ) : (
+                      <div className="flex h-10 w-16 shrink-0 items-center justify-center rounded-xl bg-slate-100">
+                        <Youtube size={16} className="text-slate-400" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-1 font-bold text-slate-800">{v.title}</p>
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <span>{v.publishedAt}</span>
+                        <span className="rounded-xl bg-red-100 px-1.5 py-0.5 font-bold text-red-700">{v.commentCount} comentários</span>
+                      </div>
+                    </div>
+                    {selectedVideoId === v.videoId && <div className="ml-auto h-4 w-4 shrink-0 rounded-full bg-red-500" />}
+                  </button>
+                ))
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={onClose} className="flex-1 rounded-2xl bg-slate-100 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">Cancelar</button>
+              <button
+                onClick={runImport}
+                disabled={loadingVideos}
+                className="flex-1 rounded-2xl bg-red-600 py-2 text-sm font-black text-white hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400"
+              >
+                Importar comentários
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Phase: importing */}
+        {phase === "importing" && (
+          <div className="flex flex-col items-center gap-4 py-8">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-red-600" />
+            <p className="font-bold text-slate-700">Importando comentários...</p>
+            <p className="text-sm text-slate-400">Isso pode levar alguns segundos</p>
+          </div>
+        )}
+
+        {/* Phase: done */}
+        {phase === "done" && result && (
+          <div className="flex flex-col items-center gap-4 py-6">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+              <CheckCircle2 size={28} className="text-emerald-600" />
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-black text-slate-900">{result.imported} novos comentários</p>
+              <p className="text-sm text-slate-500 mt-1">{result.skipped} já existiam no banco</p>
+            </div>
+            <button onClick={onClose} className="w-full rounded-2xl bg-emerald-600 py-2 font-black text-white hover:bg-emerald-700">Fechar</button>
+          </div>
+        )}
+
+        {/* Phase: error */}
+        {phase === "error" && (
+          <div className="flex flex-col items-center gap-4 py-6">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-100">
+              <X size={28} className="text-rose-600" />
+            </div>
+            <p className="text-center text-sm font-bold text-slate-700">{errorMsg || "Erro ao importar comentários"}</p>
+            <div className="flex w-full gap-2">
+              <button onClick={() => setPhase("select")} className="flex-1 rounded-2xl bg-slate-100 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">Tentar novamente</button>
+              <button onClick={onClose} className="flex-1 rounded-2xl bg-rose-600 py-2 text-sm font-black text-white hover:bg-rose-700">Fechar</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BancoDeDuvidas({
   questions,
   setQuestions,
@@ -7745,6 +7972,7 @@ function BancoDeDuvidas({
   const [learningDraft, setLearningDraft] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
   const [newText, setNewText] = useState("");
+  const [ytModal, setYtModal] = useState(false);
 
   const filtered = questions.filter((q) => {
     if (filterStatus !== "todas" && q.status !== filterStatus) return false;
@@ -7829,9 +8057,8 @@ function BancoDeDuvidas({
             <Plus size={16} /> Nova pergunta
           </button>
           <button
-            disabled
-            title="Disponível na Fase 2"
-            className="flex cursor-not-allowed items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-black text-slate-400"
+            onClick={() => setYtModal(true)}
+            className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-black text-red-700 hover:bg-red-100"
           >
             <Youtube size={16} /> Importar do YouTube
           </button>
@@ -7910,7 +8137,7 @@ function BancoDeDuvidas({
             <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-slate-200 py-16 text-slate-400">
               <HelpCircle size={40} />
               <p className="font-bold">Nenhuma pergunta encontrada</p>
-              <p className="text-sm">Adicione manualmente ou importe do YouTube (Fase 2)</p>
+              <p className="text-sm">Adicione manualmente ou importe do YouTube</p>
             </div>
           ) : (
             filtered.map((q) => (
@@ -8007,6 +8234,15 @@ function BancoDeDuvidas({
           </div>
         )}
       </div>
+
+      {ytModal && (
+        <YoutubeImportModal
+          existingQuestions={questions}
+          onImport={(newOnes) => setQuestions([...newOnes, ...questions])}
+          onClose={() => setYtModal(false)}
+          currentUser={currentUser}
+        />
+      )}
     </div>
   );
 }
