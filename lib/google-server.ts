@@ -5,7 +5,10 @@ export type GoogleService = "drive" | "youtube";
 
 export const GOOGLE_SCOPES_BY_SERVICE: Record<GoogleService, string[]> = {
   drive: ["https://www.googleapis.com/auth/drive.readonly"],
-  youtube: ["https://www.googleapis.com/auth/youtube.readonly"]
+  youtube: [
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl"
+  ]
 };
 
 export function normalizeGoogleService(value: string | null | undefined): GoogleService {
