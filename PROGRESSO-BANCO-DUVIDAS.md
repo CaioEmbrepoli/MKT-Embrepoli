@@ -5,7 +5,7 @@ Planos de referência: `plano-sugestao-respostas.txt` e `plano-central-mensagens
 
 ---
 
-## ✅ Fase 1 — Estrutura base (em andamento)
+## ✅ Fase 1 — Estrutura base (concluída)
 - [x] Tabela `customer_questions` criada no Supabase
 - [x] Tipos TypeScript (`CustomerQuestion`, `CustomerQuestionStatus`, `CustomerQuestionSource`) em `lib/types.ts`
 - [x] Camada de dados em `lib/supabase-data.ts` (`loadAppData`, `replaceCustomerQuestions`)
