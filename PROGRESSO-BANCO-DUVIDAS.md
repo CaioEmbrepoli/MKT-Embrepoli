@@ -20,11 +20,13 @@ Planos de referência: `plano-sugestao-respostas.txt` e `plano-central-mensagens
 
 ---
 
-## ⏳ Fase 2 — Importação de comentários do YouTube
-- [ ] Endpoint `/api/google/youtube/comments` para buscar comentários via `commentThreads`
-- [ ] Botão "Importar do YouTube" na seção Banco de Dúvidas
-- [ ] Deduplicação por `external_id` (`yt_comment:<commentId>`)
-- [ ] Associar comentário ao post/vídeo correspondente quando existir
+## ✅ Fase 2 — Importação de comentários do YouTube (concluída)
+- [x] Endpoint `GET /api/google/youtube/comments?videoId=xxx` via `commentThreads` API com paginação
+- [x] Função exportada `listYouTubeVideoComments` em `lib/google-api.ts`
+- [x] Botão "Importar do YouTube" ativo na seção Banco de Dúvidas
+- [x] Modal com seleção de vídeo (ou "Todos os vídeos"), progresso e resultado
+- [x] Deduplicação por `external_id` = `yt_comment:<commentId>`
+- [x] `videoTitle` associado automaticamente ao comentário importado
 
 ---
 
