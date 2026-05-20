@@ -6,6 +6,7 @@ import type {
   Channel,
   ChecklistItem,
   ContentType,
+  CustomerQuestion,
   EditorialPost,
   FunnelStage,
   Idea,
@@ -44,6 +45,7 @@ export type AppData = {
   metrics: PostMetric[];
   notifications: Notification[];
   calendarDates: CalendarDate[];
+  customerQuestions: CustomerQuestion[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -102,7 +104,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     metrics,
     notifications,
     calendarDates,
-    ideaAttachments
+    ideaAttachments,
+    customerQuestions
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("channels").select("*").eq("organization_id", organizationId),
@@ -129,7 +132,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("post_metrics").select("*").eq("organization_id", organizationId),
     client.from("notifications").select("*").eq("organization_id", organizationId),
     client.from("calendar_dates").select("*").eq("organization_id", organizationId),
-    client.from("idea_attachments").select("*").eq("organization_id", organizationId)
+    client.from("idea_attachments").select("*").eq("organization_id", organizationId),
+    client.from("customer_questions").select("*").eq("organization_id", organizationId)
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -159,7 +163,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     tasks: (tasks.data ?? []).map((item) => mapTask(item, taskAssigneeMap.get(item.id) ?? [], checklistMap.get(item.id) ?? [], commentsMap.get(item.id) ?? [], attachmentsMap.get(item.id) ?? [])),
     metrics: (metrics.data ?? []).map(mapMetric),
     notifications: (notifications.data ?? []).map(mapNotification),
-    calendarDates: (calendarDates.data ?? []).map(mapCalendarDate)
+    calendarDates: (calendarDates.data ?? []).map(mapCalendarDate),
+    customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion)
   };
 }
 
@@ -854,5 +859,58 @@ function mapCalendarDate(row: any): CalendarDate {
 
 function mapFileAttachment(item: any): TaskAttachment {
   return { id: item.id, name: item.name, type: item.file_type, source: item.source ?? "upload", url: item.public_url || item.storage_path, previewUrl: item.preview_url || item.public_url || item.storage_path, originalSize: item.original_size ?? 0, compressedSize: item.compressed_size ?? item.original_size ?? 0, mimeType: item.mime_type ?? "" };
+}
+
+function mapCustomerQuestion(row: any): CustomerQuestion {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    source: row.source ?? "manual",
+    externalId: row.external_id ?? undefined,
+    videoId: row.video_id ?? undefined,
+    videoTitle: row.video_title ?? undefined,
+    questionText: row.question_text ?? "",
+    answerText: row.answer_text ?? "",
+    authorName: row.author_name ?? "",
+    likes: row.likes ?? 0,
+    status: row.status ?? "pendente",
+    category: row.category ?? "",
+    reviewerId: row.reviewer_id ?? undefined,
+    learning: row.learning ?? "",
+    publishedAt: row.published_at ?? undefined,
+    answeredAt: row.answered_at ?? undefined,
+    createdAt: row.created_at ?? new Date().toISOString()
+  };
+}
+
+export async function replaceCustomerQuestions(
+  client: SupabaseClient,
+  questions: CustomerQuestion[],
+  previous: CustomerQuestion[] = []
+) {
+  const organizationId = await currentOrganizationId(client);
+  await deleteRemovedRows(client, "customer_questions", organizationId, previous, questions);
+  if (!questions.length) return;
+  const { error } = await client.from("customer_questions").upsert(
+    questions.map((q) => ({
+      id: q.id,
+      organization_id: organizationId,
+      source: q.source,
+      external_id: q.externalId ?? null,
+      video_id: q.videoId ?? null,
+      video_title: q.videoTitle ?? null,
+      question_text: q.questionText,
+      answer_text: q.answerText || null,
+      author_name: q.authorName || null,
+      likes: q.likes,
+      status: q.status,
+      category: q.category || null,
+      reviewer_id: q.reviewerId ?? null,
+      learning: q.learning || null,
+      published_at: q.publishedAt ?? null,
+      answered_at: q.answeredAt ?? null
+    }))
+  );
+  if (error) throw new Error(`customer_questions upsert: ${error.message}`);
 }
 

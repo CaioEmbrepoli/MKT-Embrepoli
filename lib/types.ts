@@ -1,5 +1,28 @@
 ﻿export type Role = "admin" | "gestor" | "colaborador";
 
+export type CustomerQuestionStatus = "pendente" | "respondido" | "aprovado" | "descartado";
+export type CustomerQuestionSource = "youtube" | "manual";
+
+export type CustomerQuestion = {
+  id: string;
+  organizationId: string;
+  source: CustomerQuestionSource;
+  externalId?: string;
+  videoId?: string;
+  videoTitle?: string;
+  questionText: string;
+  answerText: string;
+  authorName: string;
+  likes: number;
+  status: CustomerQuestionStatus;
+  category: string;
+  reviewerId?: string;
+  learning: string;
+  publishedAt?: string;
+  answeredAt?: string;
+  createdAt: string;
+};
+
 export type Profile = {
   id: string;
   organizationId: string;

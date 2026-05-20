@@ -994,4 +994,34 @@ alter publication supabase_realtime add table
   public.task_reset_history,
   public.post_metrics,
   public.notifications,
-  public.google_connections;
+  public.google_connections,
+  public.customer_questions;
+
+-- Banco de Dúvidas dos Clientes
+CREATE TABLE IF NOT EXISTS customer_questions (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  organization_id TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('youtube', 'manual')),
+  external_id TEXT,
+  video_id TEXT,
+  video_title TEXT,
+  question_text TEXT NOT NULL,
+  answer_text TEXT,
+  author_name TEXT,
+  likes INTEGER DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pendente'
+    CHECK (status IN ('pendente', 'respondido', 'aprovado', 'descartado')),
+  category TEXT,
+  reviewer_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  learning TEXT,
+  published_at TIMESTAMPTZ,
+  answered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(organization_id, external_id)
+);
+CREATE INDEX IF NOT EXISTS idx_customer_questions_org ON customer_questions(organization_id);
+CREATE INDEX IF NOT EXISTS idx_customer_questions_status ON customer_questions(organization_id, status);
+ALTER TABLE customer_questions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "org members can manage questions"
+  ON customer_questions FOR ALL
+  USING (organization_id IN (SELECT organization_id FROM profiles WHERE id = auth.uid()::text));

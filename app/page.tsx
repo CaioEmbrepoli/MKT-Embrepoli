@@ -38,6 +38,7 @@ import {
   Folder,
   GripVertical,
   HardDrive,
+  HelpCircle,
   Bell,
   Eye,
   EyeOff,
@@ -94,6 +95,7 @@ import {
   saveMetric,
   saveMetricSnapshots,
   replaceMetrics,
+  replaceCustomerQuestions,
   saveNotification,
   savePost,
   savePostReviewAsset,
@@ -117,6 +119,9 @@ import type {
   FunnelStage,
   Idea,
   Notification,
+  CustomerQuestion,
+  CustomerQuestionStatus,
+  CustomerQuestionSource,
   PostReviewAsset,
   PostReviewComment,
   ReviewAssetStatus,
@@ -176,6 +181,7 @@ const menu = [
   { id: "revisoes", label: "Revisões", icon: CheckCircle2 },
   { id: "campanhas", label: "Campanhas", icon: Megaphone },
   { id: "metricas", label: "Métricas", icon: ClipboardList },
+  { id: "banco-duvidas", label: "Banco de Dúvidas", icon: HelpCircle },
   { id: "configuracoes", label: "Configurações", icon: Settings }
 ];
 
@@ -720,6 +726,7 @@ export default function Home() {
   const [calendarDates, setCalendarDates] = useState<CalendarDate[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [metrics, setMetrics] = useState<PostMetric[]>([]);
+  const [customerQuestions, setCustomerQuestions] = useState<CustomerQuestion[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [modal, setModal] = useState<ModalState>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -951,6 +958,7 @@ export default function Home() {
     setCalendarDates(data.calendarDates);
     setTasks(data.tasks);
     setMetrics(data.metrics);
+    setCustomerQuestions(data.customerQuestions);
     setNotifications(data.notifications);
     const { data: authData } = await supabase.auth.getUser();
     const authUserId = authData.user?.id ?? sessionUserId;
@@ -1864,6 +1872,7 @@ export default function Home() {
           <nav className="mt-8 space-y-2">
             {menu.map((item) => {
               if (item.id === "revisoes" && !canReviewAssets) return null;
+              if (item.id === "banco-duvidas" && currentUser.role !== "admin") return null;
               const Icon = item.icon;
               const selected = activeSection === item.id;
               const showPendingBadge = item.id === "configuracoes" && pendingApprovalsCount > 0;
@@ -2001,6 +2010,18 @@ export default function Home() {
               funnelById={funnelById}
               setModal={setModal}
               reloadData={reloadFromSupabase}
+            />
+          )}
+          {activeSection === "banco-duvidas" && currentUser.role === "admin" && (
+            <BancoDeDuvidas
+              questions={customerQuestions}
+              setQuestions={(next) => {
+                const prev = customerQuestions;
+                setCustomerQuestions(next);
+                replaceCustomerQuestions(supabase!, next, prev).catch(() => setCustomerQuestions(prev));
+              }}
+              currentUser={currentUser}
+              profiles={profiles}
             />
           )}
           {activeSection === "configuracoes" && (
@@ -7687,6 +7708,307 @@ function MultiSelectField({ label, name, values, profiles }: { label: string; na
 
 function SubmitButton({ children, full = false }: { children: ReactNode; full?: boolean }) {
   return <button type="submit" className={`${full ? "w-full" : ""} inline-flex items-center justify-center rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950`}>{children}</button>;
+}
+
+// ─── Banco de Dúvidas ───────────────────────────────────────────────────────
+
+const STATUS_LABELS: Record<CustomerQuestionStatus, string> = {
+  pendente: "Pendente",
+  respondido: "Respondido",
+  aprovado: "Aprovado",
+  descartado: "Descartado"
+};
+
+const STATUS_COLORS: Record<CustomerQuestionStatus, string> = {
+  pendente: "bg-amber-100 text-amber-700",
+  respondido: "bg-blue-100 text-blue-700",
+  aprovado: "bg-emerald-100 text-emerald-700",
+  descartado: "bg-slate-100 text-slate-500"
+};
+
+function BancoDeDuvidas({
+  questions,
+  setQuestions,
+  currentUser,
+  profiles
+}: {
+  questions: CustomerQuestion[];
+  setQuestions: (next: CustomerQuestion[]) => void;
+  currentUser: Profile;
+  profiles: Profile[];
+}) {
+  const [filterStatus, setFilterStatus] = useState<CustomerQuestionStatus | "todas">("todas");
+  const [filterSource, setFilterSource] = useState<CustomerQuestionSource | "todas">("todas");
+  const [search, setSearch] = useState("");
+  const [selected, setSelected] = useState<CustomerQuestion | null>(null);
+  const [answerDraft, setAnswerDraft] = useState("");
+  const [learningDraft, setLearningDraft] = useState("");
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [newText, setNewText] = useState("");
+
+  const filtered = questions.filter((q) => {
+    if (filterStatus !== "todas" && q.status !== filterStatus) return false;
+    if (filterSource !== "todas" && q.source !== filterSource) return false;
+    if (search && !q.questionText.toLowerCase().includes(search.toLowerCase()) && !q.authorName.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const counts = {
+    pendente: questions.filter((q) => q.status === "pendente").length,
+    respondido: questions.filter((q) => q.status === "respondido").length,
+    aprovado: questions.filter((q) => q.status === "aprovado").length,
+    descartado: questions.filter((q) => q.status === "descartado").length
+  };
+
+  function openQuestion(q: CustomerQuestion) {
+    setSelected(q);
+    setAnswerDraft(q.answerText);
+    setLearningDraft(q.learning);
+  }
+
+  function saveAnswer(status: CustomerQuestionStatus) {
+    if (!selected) return;
+    const now = new Date().toISOString();
+    const updated: CustomerQuestion = {
+      ...selected,
+      answerText: answerDraft,
+      learning: learningDraft,
+      status,
+      reviewerId: currentUser.id,
+      answeredAt: status === "pendente" ? undefined : (selected.answeredAt ?? now)
+    };
+    setQuestions(questions.map((q) => q.id === updated.id ? updated : q));
+    setSelected(updated);
+  }
+
+  function discardQuestion() {
+    if (!selected) return;
+    const updated: CustomerQuestion = { ...selected, status: "descartado", reviewerId: currentUser.id };
+    setQuestions(questions.map((q) => q.id === updated.id ? updated : q));
+    setSelected(updated);
+  }
+
+  function addManual(e: FormEvent) {
+    e.preventDefault();
+    if (!newText.trim()) return;
+    const newQ: CustomerQuestion = {
+      id: crypto.randomUUID(),
+      organizationId: currentUser.organizationId,
+      source: "manual",
+      questionText: newText.trim(),
+      answerText: "",
+      authorName: "",
+      likes: 0,
+      status: "pendente",
+      category: "",
+      learning: "",
+      createdAt: new Date().toISOString()
+    };
+    setQuestions([newQ, ...questions]);
+    setNewText("");
+    setShowNewForm(false);
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-6 overflow-auto p-6">
+      {/* Cabeçalho */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <HelpCircle size={28} className="text-blue-700" />
+          <div>
+            <h1 className="text-2xl font-black">Banco de Dúvidas</h1>
+            <p className="text-sm text-slate-500">Perguntas e comentários dos clientes</p>
+          </div>
+          <Badge tone="slate">{questions.length}</Badge>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowNewForm((v) => !v)}
+            className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white hover:bg-slate-950"
+          >
+            <Plus size={16} /> Nova pergunta
+          </button>
+          <button
+            disabled
+            title="Disponível na Fase 2"
+            className="flex cursor-not-allowed items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2 text-sm font-black text-slate-400"
+          >
+            <Youtube size={16} /> Importar do YouTube
+          </button>
+        </div>
+      </div>
+
+      {/* Cards de stats */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {(["pendente", "respondido", "aprovado", "descartado"] as CustomerQuestionStatus[]).map((s) => (
+          <button
+            key={s}
+            onClick={() => setFilterStatus(filterStatus === s ? "todas" : s)}
+            className={`rounded-2xl border p-4 text-left transition hover:border-blue-300 ${filterStatus === s ? "border-blue-500 bg-blue-50" : "border-slate-100 bg-white"}`}
+          >
+            <p className={`text-2xl font-black ${filterStatus === s ? "text-blue-700" : "text-slate-900"}`}>{counts[s]}</p>
+            <p className="text-sm font-bold text-slate-500">{STATUS_LABELS[s]}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* Formulário nova pergunta */}
+      {showNewForm && (
+        <form onSubmit={addManual} className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+          <p className="mb-2 text-sm font-black text-blue-700">Nova pergunta manual</p>
+          <textarea
+            value={newText}
+            onChange={(e) => setNewText(e.target.value)}
+            placeholder="Digite a pergunta ou comentário do cliente..."
+            lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+            rows={3}
+            className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
+          />
+          <div className="mt-2 flex gap-2">
+            <button type="submit" disabled={!newText.trim()} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Adicionar</button>
+            <button type="button" onClick={() => setShowNewForm(false)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600">Cancelar</button>
+          </div>
+        </form>
+      )}
+
+      {/* Filtros */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar pergunta ou autor..."
+          lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+          className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
+        />
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value as CustomerQuestionStatus | "todas")}
+          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+        >
+          <option value="todas">Todos os status</option>
+          {(["pendente", "respondido", "aprovado", "descartado"] as CustomerQuestionStatus[]).map((s) => (
+            <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+          ))}
+        </select>
+        <select
+          value={filterSource}
+          onChange={(e) => setFilterSource(e.target.value as CustomerQuestionSource | "todas")}
+          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+        >
+          <option value="todas">Todas as fontes</option>
+          <option value="youtube">YouTube</option>
+          <option value="manual">Manual</option>
+        </select>
+      </div>
+
+      {/* Layout lista + detalhe */}
+      <div className="flex min-h-0 flex-1 gap-4">
+        {/* Lista */}
+        <div className={`flex flex-col gap-2 overflow-auto ${selected ? "w-1/2" : "w-full"}`}>
+          {filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-slate-200 py-16 text-slate-400">
+              <HelpCircle size={40} />
+              <p className="font-bold">Nenhuma pergunta encontrada</p>
+              <p className="text-sm">Adicione manualmente ou importe do YouTube (Fase 2)</p>
+            </div>
+          ) : (
+            filtered.map((q) => (
+              <button
+                key={q.id}
+                onClick={() => openQuestion(q)}
+                className={`flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition hover:border-blue-300 ${selected?.id === q.id ? "border-blue-500 bg-blue-50" : "border-slate-100 bg-white"}`}
+              >
+                <div className="mt-0.5 shrink-0">
+                  {q.source === "youtube" ? (
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-100"><Youtube size={14} className="text-red-600" /></div>
+                  ) : (
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100"><MessageSquare size={14} className="text-slate-500" /></div>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="line-clamp-2 text-sm font-bold text-slate-800">{q.questionText}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    {q.authorName && <span>{q.authorName}</span>}
+                    {q.videoTitle && <span className="truncate max-w-[160px]">📹 {q.videoTitle}</span>}
+                    <span>{q.createdAt.slice(0, 10)}</span>
+                    {q.likes > 0 && <span>👍 {q.likes}</span>}
+                  </div>
+                </div>
+                <span className={`shrink-0 rounded-xl px-2 py-1 text-xs font-black ${STATUS_COLORS[q.status]}`}>
+                  {STATUS_LABELS[q.status]}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+
+        {/* Painel de detalhe */}
+        {selected && (
+          <div className="flex w-1/2 shrink-0 flex-col gap-4 overflow-auto rounded-3xl border border-slate-200 bg-white p-5">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                {selected.source === "youtube" ? (
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-100"><Youtube size={16} className="text-red-600" /></div>
+                ) : (
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100"><MessageSquare size={16} className="text-slate-500" /></div>
+                )}
+                <span className={`rounded-xl px-2 py-1 text-xs font-black ${STATUS_COLORS[selected.status]}`}>{STATUS_LABELS[selected.status]}</span>
+              </div>
+              <button onClick={() => setSelected(null)} className="rounded-xl bg-slate-100 p-1 hover:bg-slate-200"><X size={16} /></button>
+            </div>
+
+            {/* Metadados */}
+            <div className="space-y-1 rounded-2xl bg-slate-50 p-3 text-sm">
+              {selected.authorName && <p><span className="font-black text-slate-500">Autor:</span> {selected.authorName}</p>}
+              {selected.videoTitle && <p><span className="font-black text-slate-500">Vídeo:</span> {selected.videoTitle}</p>}
+              <p><span className="font-black text-slate-500">Data:</span> {selected.createdAt.slice(0, 10)}</p>
+              {selected.likes > 0 && <p><span className="font-black text-slate-500">Curtidas:</span> {selected.likes}</p>}
+            </div>
+
+            {/* Pergunta */}
+            <div>
+              <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Pergunta</p>
+              <p className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-800">{selected.questionText}</p>
+            </div>
+
+            {/* Resposta */}
+            <div>
+              <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Resposta</p>
+              <textarea
+                value={answerDraft}
+                onChange={(e) => setAnswerDraft(e.target.value)}
+                placeholder="Digite a resposta para esta pergunta..."
+                lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                rows={4}
+                className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Aprendizado */}
+            <div>
+              <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Aprendizado interno</p>
+              <textarea
+                value={learningDraft}
+                onChange={(e) => setLearningDraft(e.target.value)}
+                placeholder="Algum insight ou aprendizado para a equipe?"
+                lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                rows={2}
+                className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Ações */}
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => saveAnswer("respondido")} className="flex-1 rounded-2xl bg-blue-700 px-3 py-2 text-sm font-black text-white hover:bg-blue-800">Salvar resposta</button>
+              <button onClick={() => saveAnswer("aprovado")} className="flex-1 rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white hover:bg-emerald-700">Aprovar</button>
+              <button onClick={discardQuestion} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">Descartar</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 
