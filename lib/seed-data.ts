@@ -1,4 +1,5 @@
 ﻿import type {
+  AppArea,
   Campaign,
   CampaignAudience,
   CalendarDate,
@@ -13,11 +14,14 @@
   PostTemplate,
   ProductLine,
   Profile,
+  ProfileArea,
+  ProfileModulePermission,
   Task,
   TaskBoard,
   TaskColumn,
   VehicleType
 } from "./types";
+import { appAreas, marketingModules, moduleActions, salesModules } from "./modules";
 
 export const profiles: Profile[] = [
   {
@@ -68,6 +72,42 @@ export const profiles: Profile[] = [
     active: true,
     notificationSound: true
   }
+];
+
+function profileArea(profileId: string, area: AppArea): ProfileArea {
+  return { id: `${profileId}:${area}`, profileId, area, active: true };
+}
+
+function profilePermission(profileId: string, area: AppArea, moduleId: string, full = false): ProfileModulePermission {
+  const allowed = new Set<string>(full ? moduleActions.map((action) => action.key) : ["view", "create", "edit"]);
+  return {
+    id: `${profileId}:${area}:${moduleId}`,
+    profileId,
+    area,
+    moduleId,
+    canView: allowed.has("view"),
+    canCreate: allowed.has("create"),
+    canEdit: allowed.has("edit"),
+    canDelete: allowed.has("delete"),
+    canApprove: allowed.has("approve"),
+    canManage: allowed.has("manage")
+  };
+}
+
+export const profileAreas: ProfileArea[] = [
+  ...appAreas.map((area) => profileArea("user-admin", area.id)),
+  profileArea("user-gestor", "marketing"),
+  profileArea("user-design", "marketing"),
+  profileArea("user-conteudo", "marketing")
+];
+
+export const profileModulePermissions: ProfileModulePermission[] = [
+  ...appAreas.flatMap((area) => (area.id === "marketing" ? marketingModules : salesModules).map((module) => profilePermission("user-admin", area.id, module.moduleId, true))),
+  ...marketingModules.map((module) => profilePermission("user-gestor", "marketing", module.moduleId, true)),
+  ...["painel", "calendario", "ideias", "tarefas", "campanhas", "metricas", "comentarios", "banco-duvidas", "configuracoes"].flatMap((moduleId) => [
+    profilePermission("user-design", "marketing", moduleId),
+    profilePermission("user-conteudo", "marketing", moduleId)
+  ])
 ];
 
 export const channels: Channel[] = [
@@ -635,5 +675,6 @@ export const metrics: PostMetric[] = [
     learning: "Vídeo com aplicação real converte melhor no fundo do funil."
   }
 ];
+
 
 

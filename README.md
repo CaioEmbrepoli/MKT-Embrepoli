@@ -1,6 +1,6 @@
-﻿# Embrepoli Marketing
+﻿# Gestão Embrepoli
 
-App web interno para organizar o marketing da Embrepoli: calendário editorial, ideias de posts, tarefas em Kanban, campanhas, briefings, métricas e canais configuráveis.
+App web interno para organizar marketing e vendas da Embrepoli. A área de Marketing mantém calendário editorial, ideias, tarefas em Kanban, campanhas, briefings, métricas, comentários e banco de dúvidas; a área de Vendas fica preparada com menus e permissões isoladas para as próximas fases.
 
 ## Stack
 

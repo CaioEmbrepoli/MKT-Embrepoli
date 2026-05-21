@@ -226,6 +226,36 @@ export async function listYouTubeVideoComments(videoId: string): Promise<YouTube
   return data.comments ?? [];
 }
 
+export type YouTubeCommentItem = {
+  commentId: string;
+  videoId: string;
+  videoTitle: string;
+  authorName: string;
+  text: string;
+  likes: number;
+  publishedAt: string;
+};
+
+export async function listVideoComments(
+  videoId: string,
+  videoTitle: string,
+  maxComments = 200
+): Promise<YouTubeCommentItem[]> {
+  const params = new URLSearchParams({ videoId, maxResults: String(maxComments) });
+  const res = await fetchJson<{ comments: YouTubeCommentResult[]; commentsDisabled?: boolean }>(
+    `/api/google/youtube/comments?${params}`
+  );
+  return (res.comments ?? []).slice(0, maxComments).map((c) => ({
+    commentId: c.id,
+    videoId,
+    videoTitle,
+    authorName: c.authorName,
+    text: c.text,
+    likes: c.likes,
+    publishedAt: c.publishedAt,
+  }));
+}
+
 export async function listMyYouTubeChannelVideos(
   tokenOrProgress?: string | ((p: YouTubeImportProgress) => void),
   maybeProgress?: (p: YouTubeImportProgress) => void

@@ -1,7 +1,10 @@
 ﻿export type Role = "admin" | "gestor" | "colaborador";
 
+export type AppArea = "marketing" | "vendas";
+export type ModuleAction = "view" | "create" | "edit" | "delete" | "approve" | "manage";
+
 export type CustomerQuestionStatus = "pendente" | "respondido" | "aprovado" | "descartado";
-export type CustomerQuestionSource = "youtube" | "manual";
+export type CustomerQuestionSource = "youtube" | "instagram" | "facebook" | "tiktok" | "manual";
 
 export type CustomerQuestion = {
   id: string;
@@ -18,6 +21,13 @@ export type CustomerQuestion = {
   category: string;
   reviewerId?: string;
   learning: string;
+  fromCommentId?: string;
+  sourceCommentId?: string;
+  needsReview: boolean;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  aiConfidence?: number;
+  aiReason?: string;
   publishedAt?: string;
   answeredAt?: string;
   createdAt: string;
@@ -34,6 +44,26 @@ export type Profile = {
   avatarUrl: string;
   active: boolean;
   notificationSound: boolean;
+};
+
+export type ProfileArea = {
+  id: string;
+  profileId: string;
+  area: AppArea;
+  active: boolean;
+};
+
+export type ProfileModulePermission = {
+  id: string;
+  profileId: string;
+  area: AppArea;
+  moduleId: string;
+  canView: boolean;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canApprove: boolean;
+  canManage: boolean;
 };
 
 export type Channel = {
@@ -311,6 +341,35 @@ export type Notification = {
   read: boolean;
   targetKind: "post" | "task" | "review" | "idea" | "campaign" | "metric" | "calendar" | "system";
   targetId: string;
+};
+
+export type CommentStatus = "novo" | "respondido" | "ignorado";
+
+export type Comment = {
+  id: string;
+  source: "youtube" | "instagram" | "facebook" | "tiktok";
+  externalId?: string;
+  videoId?: string;
+  videoTitle?: string;
+  authorName: string;
+  text: string;
+  likes: number;
+  response?: string;
+  status: CommentStatus;
+  addedToBank: boolean;
+  bankQuestionId?: string;
+  publishedAt?: string;
+  createdAt: string;
+};
+
+export type AutoFilterMatchType = "contains" | "startsWith" | "exact";
+
+export type AutoFilter = {
+  id: string;
+  keyword: string;
+  matchType: AutoFilterMatchType;
+  active: boolean;
+  createdAt: string;
 };
 
 

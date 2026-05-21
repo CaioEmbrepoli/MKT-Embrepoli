@@ -36,6 +36,32 @@ create table if not exists public.profiles (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.profile_areas (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  profile_id text not null references public.profiles(id) on delete cascade,
+  area text not null check (area in ('marketing', 'vendas')),
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (profile_id, area)
+);
+
+create table if not exists public.profile_module_permissions (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  profile_id text not null references public.profiles(id) on delete cascade,
+  area text not null check (area in ('marketing', 'vendas')),
+  module_id text not null,
+  can_view boolean not null default false,
+  can_create boolean not null default false,
+  can_edit boolean not null default false,
+  can_delete boolean not null default false,
+  can_approve boolean not null default false,
+  can_manage boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique (profile_id, area, module_id)
+);
+
 create table if not exists public.channels (
   id text primary key default gen_random_uuid()::text,
   organization_id text not null references public.organizations(id) on delete cascade,
@@ -485,6 +511,83 @@ as $$
   select role from public.profiles where id = auth.uid()::text
 $$;
 
+create or replace function public.has_area_access(required_area text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce((
+    select p.active
+      and (
+        p.role = 'admin'
+        or exists (
+          select 1
+          from public.profile_areas pa
+          where pa.organization_id = p.organization_id
+            and pa.profile_id = p.id
+            and pa.area = required_area
+            and pa.active = true
+        )
+      )
+    from public.profiles p
+    where p.id = auth.uid()::text
+  ), false)
+$$;
+
+create or replace function public.has_module_permission(required_area text, required_module text, required_action text)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce((
+    select p.active
+      and (
+        p.role = 'admin'
+        or (
+          p.role = 'gestor'
+          and public.has_area_access(required_area)
+        )
+        or exists (
+          select 1
+          from public.profile_module_permissions pmp
+          where pmp.organization_id = p.organization_id
+            and pmp.profile_id = p.id
+            and pmp.area = required_area
+            and pmp.module_id = required_module
+            and case required_action
+              when 'view' then pmp.can_view
+              when 'create' then pmp.can_create
+              when 'edit' then pmp.can_edit
+              when 'delete' then pmp.can_delete
+              when 'approve' then pmp.can_approve
+              when 'manage' then pmp.can_manage
+              else false
+            end
+        )
+      )
+    from public.profiles p
+    where p.id = auth.uid()::text
+  ), false)
+$$;
+
+create or replace function public.can_manage_team_permissions()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce((
+    select p.active and p.role in ('admin', 'gestor')
+    from public.profiles p
+    where p.id = auth.uid()::text
+  ), false)
+$$;
+
 create or replace function public.can_access_item(created_by text, assigned_to text)
 returns boolean
 language sql
@@ -525,6 +628,8 @@ for each row execute function public.handle_new_auth_user();
 
 alter table public.organizations enable row level security;
 alter table public.profiles enable row level security;
+alter table public.profile_areas enable row level security;
+alter table public.profile_module_permissions enable row level security;
 alter table public.channels enable row level security;
 alter table public.product_lines enable row level security;
 alter table public.vehicle_types enable row level security;
@@ -584,6 +689,28 @@ create policy "admins and managers can manage profiles"
 on public.profiles for all
 using (public.current_member_role() in ('admin', 'gestor') and organization_id = public.current_organization_id())
 with check (public.current_member_role() in ('admin', 'gestor') and organization_id = public.current_organization_id());
+
+drop policy if exists "members can read profile areas" on public.profile_areas;
+create policy "members can read profile areas"
+on public.profile_areas for select
+using (organization_id = public.current_organization_id());
+
+drop policy if exists "admins and managers can manage profile areas" on public.profile_areas;
+create policy "admins and managers can manage profile areas"
+on public.profile_areas for all
+using (organization_id = public.current_organization_id() and public.can_manage_team_permissions())
+with check (organization_id = public.current_organization_id() and public.can_manage_team_permissions());
+
+drop policy if exists "members can read module permissions" on public.profile_module_permissions;
+create policy "members can read module permissions"
+on public.profile_module_permissions for select
+using (organization_id = public.current_organization_id());
+
+drop policy if exists "admins and managers can manage module permissions" on public.profile_module_permissions;
+create policy "admins and managers can manage module permissions"
+on public.profile_module_permissions for all
+using (organization_id = public.current_organization_id() and public.can_manage_team_permissions())
+with check (organization_id = public.current_organization_id() and public.can_manage_team_permissions());
 
 create policy "members manage channels" on public.channels for all
 using (organization_id = public.current_organization_id())
@@ -705,6 +832,65 @@ with check (organization_id = public.current_organization_id() and public.curren
 insert into public.organizations (id, name)
 values ('00000000-0000-0000-0000-000000000001', 'Embrepoli')
 on conflict (name) do nothing;
+
+insert into public.profile_areas (id, organization_id, profile_id, area, active)
+select p.id || ':marketing', p.organization_id, p.id, 'marketing', true
+from public.profiles p
+where p.organization_id = '00000000-0000-0000-0000-000000000001'
+  and p.active = true
+  and p.role in ('admin', 'gestor')
+on conflict (profile_id, area) do nothing;
+
+insert into public.profile_areas (id, organization_id, profile_id, area, active)
+select p.id || ':vendas', p.organization_id, p.id, 'vendas', true
+from public.profiles p
+where p.organization_id = '00000000-0000-0000-0000-000000000001'
+  and p.active = true
+  and p.role = 'admin'
+on conflict (profile_id, area) do nothing;
+
+with modules(area, module_id) as (
+  values
+    ('marketing', 'painel'),
+    ('marketing', 'calendario'),
+    ('marketing', 'ideias'),
+    ('marketing', 'tarefas'),
+    ('marketing', 'revisoes'),
+    ('marketing', 'campanhas'),
+    ('marketing', 'metricas'),
+    ('marketing', 'comentarios'),
+    ('marketing', 'banco-duvidas'),
+    ('marketing', 'configuracoes'),
+    ('vendas', 'painel'),
+    ('vendas', 'clientes'),
+    ('vendas', 'leads'),
+    ('vendas', 'funil-comercial'),
+    ('vendas', 'atividades'),
+    ('vendas', 'propostas'),
+    ('vendas', 'configuracoes')
+)
+insert into public.profile_module_permissions (
+  id, organization_id, profile_id, area, module_id,
+  can_view, can_create, can_edit, can_delete, can_approve, can_manage
+)
+select
+  p.id || ':' || modules.area || ':' || modules.module_id,
+  p.organization_id,
+  p.id,
+  modules.area,
+  modules.module_id,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true
+from public.profiles p
+join modules on p.role = 'admin' or modules.area = 'marketing'
+where p.organization_id = '00000000-0000-0000-0000-000000000001'
+  and p.active = true
+  and p.role in ('admin', 'gestor')
+on conflict (profile_id, area, module_id) do nothing;
 
 insert into storage.buckets (id, name, public)
 values
@@ -966,8 +1152,116 @@ values
   ('natal-2026', '00000000-0000-0000-0000-000000000001', 'Natal', '2026-12-25', 'Feriado', '#16a34a', '')
 on conflict (id) do nothing;
 
+-- Comentários e Banco de Dúvidas dos Clientes
+create table if not exists public.customer_questions (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  source text not null default 'manual',
+  external_id text,
+  video_id text,
+  video_title text,
+  question_text text not null,
+  answer_text text,
+  author_name text,
+  likes integer default 0,
+  status text not null default 'pendente',
+  category text,
+  reviewer_id text references public.profiles(id) on delete set null,
+  learning text,
+  from_comment_id text,
+  source_comment_id text,
+  needs_review boolean not null default false,
+  reviewed_at timestamptz,
+  reviewed_by text references public.profiles(id) on delete set null,
+  ai_confidence numeric,
+  ai_reason text,
+  published_at timestamptz,
+  answered_at timestamptz,
+  created_at timestamptz default now(),
+  unique (organization_id, external_id)
+);
+
+alter table public.customer_questions add column if not exists from_comment_id text;
+alter table public.customer_questions add column if not exists source_comment_id text;
+alter table public.customer_questions add column if not exists needs_review boolean not null default false;
+alter table public.customer_questions add column if not exists reviewed_at timestamptz;
+alter table public.customer_questions add column if not exists reviewed_by text references public.profiles(id) on delete set null;
+alter table public.customer_questions add column if not exists ai_confidence numeric;
+alter table public.customer_questions add column if not exists ai_reason text;
+alter table public.customer_questions drop constraint if exists customer_questions_source_check;
+alter table public.customer_questions add constraint customer_questions_source_check check (source in ('youtube', 'instagram', 'facebook', 'tiktok', 'manual'));
+alter table public.customer_questions drop constraint if exists customer_questions_status_check;
+alter table public.customer_questions add constraint customer_questions_status_check check (status in ('pendente', 'respondido', 'aprovado', 'descartado'));
+create index if not exists idx_customer_questions_org on public.customer_questions(organization_id);
+create index if not exists idx_customer_questions_status on public.customer_questions(organization_id, status);
+create index if not exists idx_customer_questions_review on public.customer_questions(organization_id, needs_review);
+
+create table if not exists public.comments (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  source text not null default 'youtube',
+  external_id text,
+  video_id text,
+  video_title text,
+  author_name text,
+  text text not null,
+  likes integer not null default 0,
+  response text,
+  status text not null default 'novo',
+  added_to_bank boolean not null default false,
+  bank_question_id text references public.customer_questions(id) on delete set null,
+  published_at timestamptz,
+  created_at timestamptz not null default now(),
+  unique (organization_id, external_id)
+);
+
+alter table public.comments add column if not exists bank_question_id text references public.customer_questions(id) on delete set null;
+alter table public.comments drop constraint if exists comments_source_check;
+alter table public.comments add constraint comments_source_check check (source in ('youtube', 'instagram', 'facebook', 'tiktok'));
+alter table public.comments drop constraint if exists comments_status_check;
+alter table public.comments add constraint comments_status_check check (status in ('novo', 'respondido', 'ignorado'));
+create index if not exists idx_comments_org on public.comments(organization_id);
+create index if not exists idx_comments_bank on public.comments(organization_id, added_to_bank);
+
+create table if not exists public.auto_filters (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  keyword text not null,
+  match_type text not null default 'contains',
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+alter table public.auto_filters drop constraint if exists auto_filters_match_type_check;
+alter table public.auto_filters add constraint auto_filters_match_type_check check (match_type in ('contains', 'startsWith', 'exact'));
+create index if not exists idx_auto_filters_org on public.auto_filters(organization_id);
+
+alter table public.customer_questions enable row level security;
+alter table public.comments enable row level security;
+alter table public.auto_filters enable row level security;
+
+drop policy if exists "org members can manage questions" on public.customer_questions;
+create policy "org members can manage questions"
+on public.customer_questions for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+drop policy if exists "org members can manage comments" on public.comments;
+create policy "org members can manage comments"
+on public.comments for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+drop policy if exists "org members can manage auto filters" on public.auto_filters;
+create policy "org members can manage auto filters"
+on public.auto_filters for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
 alter publication supabase_realtime add table
   public.profiles,
+  public.profile_areas,
+  public.profile_module_permissions,
   public.channels,
   public.product_lines,
   public.vehicle_types,
@@ -995,33 +1289,6 @@ alter publication supabase_realtime add table
   public.post_metrics,
   public.notifications,
   public.google_connections,
-  public.customer_questions;
-
--- Banco de Dúvidas dos Clientes
-CREATE TABLE IF NOT EXISTS customer_questions (
-  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-  organization_id TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('youtube', 'manual')),
-  external_id TEXT,
-  video_id TEXT,
-  video_title TEXT,
-  question_text TEXT NOT NULL,
-  answer_text TEXT,
-  author_name TEXT,
-  likes INTEGER DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'pendente'
-    CHECK (status IN ('pendente', 'respondido', 'aprovado', 'descartado')),
-  category TEXT,
-  reviewer_id TEXT REFERENCES profiles(id) ON DELETE SET NULL,
-  learning TEXT,
-  published_at TIMESTAMPTZ,
-  answered_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(organization_id, external_id)
-);
-CREATE INDEX IF NOT EXISTS idx_customer_questions_org ON customer_questions(organization_id);
-CREATE INDEX IF NOT EXISTS idx_customer_questions_status ON customer_questions(organization_id, status);
-ALTER TABLE customer_questions ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "org members can manage questions"
-  ON customer_questions FOR ALL
-  USING (organization_id IN (SELECT organization_id FROM profiles WHERE id = auth.uid()::text));
+  public.customer_questions,
+  public.comments,
+  public.auto_filters;

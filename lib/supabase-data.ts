@@ -1,10 +1,12 @@
 ﻿import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
+  AutoFilter,
   Campaign,
   CampaignAudience,
   CalendarDate,
   Channel,
   ChecklistItem,
+  Comment,
   ContentType,
   CustomerQuestion,
   EditorialPost,
@@ -18,6 +20,8 @@ import type {
   PostTemplate,
   ProductLine,
   Profile,
+  ProfileArea,
+  ProfileModulePermission,
   Task,
   TaskAttachment,
   TaskBoard,
@@ -28,6 +32,8 @@ import type {
 
 export type AppData = {
   profiles: Profile[];
+  profileAreas: ProfileArea[];
+  profileModulePermissions: ProfileModulePermission[];
   channels: Channel[];
   productLines: ProductLine[];
   vehicleTypes: VehicleType[];
@@ -46,6 +52,8 @@ export type AppData = {
   notifications: Notification[];
   calendarDates: CalendarDate[];
   customerQuestions: CustomerQuestion[];
+  ytComments: Comment[];
+  autoFilters: AutoFilter[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -80,6 +88,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
 
   const [
     profiles,
+    profileAreas,
+    profileModulePermissions,
     channels,
     productLines,
     vehicleTypes,
@@ -105,9 +115,13 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     notifications,
     calendarDates,
     ideaAttachments,
-    customerQuestions
+    customerQuestions,
+    ytCommentsData,
+    autoFiltersData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
+    client.from("profile_areas").select("*").eq("organization_id", organizationId),
+    client.from("profile_module_permissions").select("*").eq("organization_id", organizationId),
     client.from("channels").select("*").eq("organization_id", organizationId),
     client.from("product_lines").select("*").eq("organization_id", organizationId),
     client.from("vehicle_types").select("*").eq("organization_id", organizationId),
@@ -133,7 +147,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("notifications").select("*").eq("organization_id", organizationId),
     client.from("calendar_dates").select("*").eq("organization_id", organizationId),
     client.from("idea_attachments").select("*").eq("organization_id", organizationId),
-    client.from("customer_questions").select("*").eq("organization_id", organizationId)
+    client.from("customer_questions").select("*").eq("organization_id", organizationId),
+    client.from("comments").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
+    client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true })
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -147,6 +163,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
 
   return {
     profiles: (profiles.data ?? []).map(mapProfile),
+    profileAreas: (profileAreas.data ?? []).map(mapProfileArea),
+    profileModulePermissions: (profileModulePermissions.data ?? []).map(mapProfileModulePermission),
     channels: (channels.data ?? []).map(mapChannel),
     productLines: (productLines.data ?? []).map(mapProductLine),
     vehicleTypes: (vehicleTypes.data ?? []).map(mapVehicleType),
@@ -164,7 +182,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     metrics: (metrics.data ?? []).map(mapMetric),
     notifications: (notifications.data ?? []).map(mapNotification),
     calendarDates: (calendarDates.data ?? []).map(mapCalendarDate),
-    customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion)
+    customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion),
+    ytComments: (ytCommentsData.data ?? []).map(mapYtComment),
+    autoFilters: (autoFiltersData.data ?? []).map(mapAutoFilter)
   };
 }
 
@@ -192,6 +212,48 @@ export async function saveProfile(client: SupabaseClient, profile: Profile) {
 
 export async function deleteProfile(client: SupabaseClient, id: string) {
   await deleteById(client, "profiles", id);
+}
+
+export async function replaceProfileAreas(client: SupabaseClient, profileAreas: ProfileArea[], previous: ProfileArea[] = []) {
+  await replaceSimple(client, "profile_areas", profileAreas, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    profile_id: item.profileId,
+    area: item.area,
+    active: item.active
+  }));
+}
+
+export async function saveProfileArea(client: SupabaseClient, profileArea: ProfileArea) {
+  await replaceProfileAreas(client, [profileArea], [profileArea]);
+}
+
+export async function deleteProfileArea(client: SupabaseClient, id: string) {
+  await deleteById(client, "profile_areas", id);
+}
+
+export async function replaceProfileModulePermissions(client: SupabaseClient, permissions: ProfileModulePermission[], previous: ProfileModulePermission[] = []) {
+  await replaceSimple(client, "profile_module_permissions", permissions, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    profile_id: item.profileId,
+    area: item.area,
+    module_id: item.moduleId,
+    can_view: item.canView,
+    can_create: item.canCreate,
+    can_edit: item.canEdit,
+    can_delete: item.canDelete,
+    can_approve: item.canApprove,
+    can_manage: item.canManage
+  }));
+}
+
+export async function saveProfileModulePermission(client: SupabaseClient, permission: ProfileModulePermission) {
+  await replaceProfileModulePermissions(client, [permission], [permission]);
+}
+
+export async function deleteProfileModulePermission(client: SupabaseClient, id: string) {
+  await deleteById(client, "profile_module_permissions", id);
 }
 
 export async function replaceChannels(client: SupabaseClient, channels: Channel[], previous: Channel[] = []) {
@@ -685,6 +747,25 @@ function mapProfile(row: any): Profile {
   return { id: row.id, organizationId: row.organization_id ?? "", name: row.name, email: row.email, phone: row.phone ?? "", bio: row.bio ?? "", role: row.role, avatarUrl: row.avatar_url ?? "", active: row.active ?? true, notificationSound: row.notification_sound ?? true };
 }
 
+function mapProfileArea(row: any): ProfileArea {
+  return { id: row.id, profileId: row.profile_id, area: row.area, active: row.active ?? true };
+}
+
+function mapProfileModulePermission(row: any): ProfileModulePermission {
+  return {
+    id: row.id,
+    profileId: row.profile_id,
+    area: row.area,
+    moduleId: row.module_id,
+    canView: row.can_view ?? false,
+    canCreate: row.can_create ?? false,
+    canEdit: row.can_edit ?? false,
+    canDelete: row.can_delete ?? false,
+    canApprove: row.can_approve ?? false,
+    canManage: row.can_manage ?? false
+  };
+}
+
 function mapChannel(row: any): Channel {
   return { id: row.id, name: row.name, color: row.color };
 }
@@ -862,6 +943,7 @@ function mapFileAttachment(item: any): TaskAttachment {
 }
 
 function mapCustomerQuestion(row: any): CustomerQuestion {
+  const sourceCommentId = row.source_comment_id ?? row.from_comment_id ?? undefined;
   return {
     id: row.id,
     organizationId: row.organization_id,
@@ -877,6 +959,13 @@ function mapCustomerQuestion(row: any): CustomerQuestion {
     category: row.category ?? "",
     reviewerId: row.reviewer_id ?? undefined,
     learning: row.learning ?? "",
+    fromCommentId: row.from_comment_id ?? undefined,
+    sourceCommentId,
+    needsReview: row.needs_review ?? false,
+    reviewedAt: row.reviewed_at ?? undefined,
+    reviewedBy: row.reviewed_by ?? undefined,
+    aiConfidence: row.ai_confidence ?? undefined,
+    aiReason: row.ai_reason ?? undefined,
     publishedAt: row.published_at ?? undefined,
     answeredAt: row.answered_at ?? undefined,
     createdAt: row.created_at ?? new Date().toISOString()
@@ -907,10 +996,48 @@ export async function replaceCustomerQuestions(
       category: q.category || null,
       reviewer_id: q.reviewerId ?? null,
       learning: q.learning || null,
+      from_comment_id: q.fromCommentId ?? q.sourceCommentId ?? null,
+      source_comment_id: q.sourceCommentId ?? q.fromCommentId ?? null,
+      needs_review: q.needsReview,
+      reviewed_at: q.reviewedAt ?? null,
+      reviewed_by: q.reviewedBy ?? null,
+      ai_confidence: q.aiConfidence ?? null,
+      ai_reason: q.aiReason ?? null,
       published_at: q.publishedAt ?? null,
       answered_at: q.answeredAt ?? null
     }))
   );
+  if (error) throw new Error(`customer_questions upsert: ${error.message}`);
+}
+
+// Upsert de uma única pergunta (salvar resposta, revisão, etc.)
+export async function saveCustomerQuestion(client: SupabaseClient, q: CustomerQuestion) {
+  const organizationId = await currentOrganizationId(client);
+  const { error } = await client.from("customer_questions").upsert({
+    id: q.id,
+    organization_id: organizationId,
+    source: q.source,
+    external_id: q.externalId ?? null,
+    video_id: q.videoId ?? null,
+    video_title: q.videoTitle ?? null,
+    question_text: q.questionText,
+    answer_text: q.answerText || null,
+    author_name: q.authorName || null,
+    likes: q.likes ?? 0,
+    status: q.status,
+    category: q.category || null,
+    reviewer_id: q.reviewerId ?? null,
+    learning: q.learning || null,
+    from_comment_id: q.fromCommentId ?? q.sourceCommentId ?? null,
+    source_comment_id: q.sourceCommentId ?? q.fromCommentId ?? null,
+    needs_review: q.needsReview,
+    reviewed_at: q.reviewedAt ?? null,
+    reviewed_by: q.reviewedBy ?? null,
+    ai_confidence: q.aiConfidence ?? null,
+    ai_reason: q.aiReason ?? null,
+    published_at: q.publishedAt ?? null,
+    answered_at: q.answeredAt ?? null,
+  });
   if (error) throw new Error(`customer_questions upsert: ${error.message}`);
 }
 
@@ -936,6 +1063,13 @@ export async function insertCustomerQuestions(
     category: q.category || null,
     reviewer_id: q.reviewerId ?? null,
     learning: q.learning || null,
+    from_comment_id: q.fromCommentId ?? q.sourceCommentId ?? null,
+    source_comment_id: q.sourceCommentId ?? q.fromCommentId ?? null,
+    needs_review: q.needsReview,
+    reviewed_at: q.reviewedAt ?? null,
+    reviewed_by: q.reviewedBy ?? null,
+    ai_confidence: q.aiConfidence ?? null,
+    ai_reason: q.aiReason ?? null,
     published_at: q.publishedAt ?? null,
     answered_at: q.answeredAt ?? null
   }));
@@ -962,5 +1096,106 @@ export async function insertCustomerQuestions(
       )
     );
   }
+}
+
+// ─── Comments (YouTube CRM) ──────────────────────────────────────────────────
+
+function mapYtComment(row: any): Comment {
+  return {
+    id: row.id,
+    source: row.source ?? "youtube",
+    externalId: row.external_id ?? undefined,
+    videoId: row.video_id ?? undefined,
+    videoTitle: row.video_title ?? undefined,
+    authorName: row.author_name ?? "",
+    text: row.text ?? "",
+    likes: row.likes ?? 0,
+    response: row.response ?? undefined,
+    status: row.status ?? "novo",
+    addedToBank: row.added_to_bank ?? false,
+    bankQuestionId: row.bank_question_id ?? undefined,
+    publishedAt: row.published_at ?? undefined,
+    createdAt: row.created_at ?? new Date().toISOString()
+  };
+}
+
+export async function saveComment(client: SupabaseClient, comment: Comment) {
+  const organizationId = await currentOrganizationId(client);
+  const { error } = await client.from("comments").upsert({
+    id: comment.id,
+    organization_id: organizationId,
+    source: comment.source,
+    external_id: comment.externalId ?? null,
+    video_id: comment.videoId ?? null,
+    video_title: comment.videoTitle ?? null,
+    author_name: comment.authorName,
+    text: comment.text,
+    likes: comment.likes,
+    response: comment.response ?? null,
+    status: comment.status,
+    added_to_bank: comment.addedToBank,
+    bank_question_id: comment.bankQuestionId ?? null,
+    published_at: comment.publishedAt ?? null
+  });
+  if (error) throw new Error(`comments upsert: ${error.message}`);
+}
+
+export async function deleteComment(client: SupabaseClient, id: string) {
+  const { error } = await client.from("comments").delete().eq("id", id);
+  if (error) throw new Error(`comments delete: ${error.message}`);
+}
+
+export async function insertComments(client: SupabaseClient, items: Comment[]) {
+  if (!items.length) return;
+  const organizationId = await currentOrganizationId(client);
+  const rows = items.map((c) => ({
+    id: c.id,
+    organization_id: organizationId,
+    source: c.source,
+    external_id: c.externalId ?? null,
+    video_id: c.videoId ?? null,
+    video_title: c.videoTitle ?? null,
+    author_name: c.authorName,
+    text: c.text,
+    likes: c.likes,
+    response: c.response ?? null,
+    status: c.status,
+    added_to_bank: c.addedToBank,
+    bank_question_id: c.bankQuestionId ?? null,
+    published_at: c.publishedAt ?? null
+  }));
+  const { error } = await client
+    .from("comments")
+    .upsert(rows, { onConflict: "organization_id,external_id", ignoreDuplicates: true });
+  if (error) throw new Error(`comments insert: ${error.message}`);
+}
+
+// ─── Auto Filters ────────────────────────────────────────────────────────────
+
+function mapAutoFilter(row: any): AutoFilter {
+  return {
+    id: row.id,
+    keyword: row.keyword ?? "",
+    matchType: row.match_type ?? "contains",
+    active: row.active ?? true,
+    createdAt: row.created_at ?? new Date().toISOString()
+  };
+}
+
+export async function saveAutoFilter(client: SupabaseClient, filter: AutoFilter) {
+  const organizationId = await currentOrganizationId(client);
+  const { error } = await client.from("auto_filters").upsert({
+    id: filter.id,
+    organization_id: organizationId,
+    keyword: filter.keyword,
+    match_type: filter.matchType,
+    active: filter.active
+  });
+  if (error) throw new Error(`auto_filters upsert: ${error.message}`);
+}
+
+export async function deleteAutoFilter(client: SupabaseClient, id: string) {
+  const { error } = await client.from("auto_filters").delete().eq("id", id);
+  if (error) throw new Error(`auto_filters delete: ${error.message}`);
 }
 

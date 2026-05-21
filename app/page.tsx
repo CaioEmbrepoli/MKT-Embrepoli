@@ -50,6 +50,7 @@ import {
   Plus,
   Minus,
   Search,
+  Send,
   Settings,
   Trash2,
   UserRound,
@@ -60,9 +61,19 @@ import {
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { campaignAudiences as seedCampaignAudiences } from "@/lib/seed-data";
+import {
+  campaignAudiences as seedCampaignAudiences,
+  profileAreas as seedProfileAreas,
+  profileModulePermissions as seedProfileModulePermissions
+} from "@/lib/seed-data";
+import {
+  appAreas,
+  marketingModules,
+  moduleActions,
+  salesModules
+} from "@/lib/modules";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
-import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
+import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import {
   type AppData,
   deleteCampaign,
@@ -79,6 +90,8 @@ import {
   deletePostTemplate,
   deleteProductLine,
   deleteProfile,
+  deleteProfileArea,
+  deleteProfileModulePermission,
   deleteTask,
   deleteTaskBoard,
   deleteTaskColumn,
@@ -97,23 +110,35 @@ import {
   replaceMetrics,
   replaceCustomerQuestions,
   insertCustomerQuestions,
+  saveCustomerQuestion,
+  saveComment,
+  deleteComment,
+  insertComments,
+  saveAutoFilter,
+  deleteAutoFilter,
   saveNotification,
   savePost,
   savePostReviewAsset,
   savePostTemplate,
   saveProductLine,
   saveProfile,
+  saveProfileArea,
+  saveProfileModulePermission,
   saveTask,
   saveTaskBoard,
   saveTaskColumn,
   saveVehicleType
 } from "@/lib/supabase-data";
 import type {
+  AutoFilter,
+  AppArea,
   Campaign,
   CampaignAudience,
   CalendarDate,
   Channel,
   ChecklistItem,
+  Comment,
+  CommentStatus,
   ContentType,
   EditorialPost,
   FileAttachment,
@@ -133,6 +158,8 @@ import type {
   PostStatus,
   ProductLine,
   Profile,
+  ProfileArea,
+  ProfileModulePermission,
   Role,
   Task,
   TaskAttachment,
@@ -174,17 +201,33 @@ type MediaPreviewItem = Pick<FileAttachment, "name" | "type" | "source" | "url" 
 type AuthMode = "login" | "signup" | "forgot" | "reset" | "checkEmail" | "pending";
 type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
 
-const menu = [
-  { id: "painel", label: "Painel", icon: BarChart3 },
-  { id: "calendario", label: "Calendário", icon: CalendarDays },
-  { id: "ideias", label: "Ideias", icon: Lightbulb },
-  { id: "tarefas", label: "Tarefas", icon: KanbanSquare },
-  { id: "revisoes", label: "Revisões", icon: CheckCircle2 },
-  { id: "campanhas", label: "Campanhas", icon: Megaphone },
-  { id: "metricas", label: "Métricas", icon: ClipboardList },
-  { id: "banco-duvidas", label: "Banco de Dúvidas", icon: HelpCircle },
-  { id: "configuracoes", label: "Configurações", icon: Settings }
-];
+type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Conta e Permissões";
+type MenuItem = { sectionId: string; moduleId: string; area: AppArea; label: string; icon: LucideIcon };
+
+const moduleIcons: Record<string, LucideIcon> = {
+  painel: BarChart3,
+  calendario: CalendarDays,
+  ideias: Lightbulb,
+  tarefas: KanbanSquare,
+  revisoes: CheckCircle2,
+  campanhas: Megaphone,
+  metricas: ClipboardList,
+  comentarios: MessageSquare,
+  "banco-duvidas": HelpCircle,
+  configuracoes: Settings,
+  clientes: Users,
+  leads: UserRound,
+  "funil-comercial": KanbanSquare,
+  atividades: ClipboardList,
+  propostas: FileText
+};
+
+const marketingMenu: MenuItem[] = marketingModules.map((item) => ({ ...item, icon: moduleIcons[item.moduleId] ?? Settings }));
+const salesMenu: MenuItem[] = salesModules.map((item) => ({ ...item, icon: moduleIcons[item.moduleId] ?? Settings }));
+
+const menu = [...marketingMenu, ...salesMenu];
+const marketingConfigTabs: ConfigTab[] = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões"];
+const salesConfigTabs: ConfigTab[] = ["Equipe", "Conta e Permissões"];
 
 const postStatuses: PostStatus[] = ["Ideia", "Produção", "Revisão", "Aprovado", "Agendado", "Publicado"];
 const campaignAudienceOptions = seedCampaignAudiences.map((audience) => audience.name);
@@ -259,7 +302,6 @@ const priorityToneMap: Record<string, BadgeTone> = { Alta: "red", Média: "amber
 const progressToneMap: Record<string, BadgeTone> = { Bloqueada: "red", "No prazo": "blue", Atenção: "amber", Finalizando: "green" };
 const roles: Role[] = ["admin", "gestor", "colaborador"];
 const ideaTypes: Idea["type"][] = ["Postagem", "Melhoria", "Sistema", "Outros"];
-const configTabs = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões"] as const;
 const calendarTaskBoardId = "__calendar_posts__";
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 const maxImageBytes = 2 * 1024 * 1024;
@@ -668,6 +710,56 @@ function canSeeItem(user: Profile, createdBy: string, assignedTo: string[]) {
   return user.role !== "colaborador" || user.id === createdBy || assignedTo.includes(user.id);
 }
 
+function menusForArea(area: AppArea) {
+  return area === "marketing" ? marketingMenu : salesMenu;
+}
+
+function profileAreaId(profileId: string, area: AppArea) {
+  return `${profileId}:${area}`;
+}
+
+function profilePermissionId(profileId: string, area: AppArea, moduleId: string) {
+  return `${profileId}:${area}:${moduleId}`;
+}
+
+function permissionFlag(action: (typeof moduleActions)[number]["key"]) {
+  return `can${action.charAt(0).toUpperCase()}${action.slice(1)}` as keyof Pick<ProfileModulePermission, "canView" | "canCreate" | "canEdit" | "canDelete" | "canApprove" | "canManage">;
+}
+
+function roleDefaultPermission(profile: Profile, area: AppArea, moduleId: string, action: (typeof moduleActions)[number]["key"]) {
+  if (profile.role === "admin") return true;
+  if (area !== "marketing") return false;
+  if (profile.role === "gestor") return true;
+  const collaboratorModules = new Set(["painel", "calendario", "ideias", "tarefas", "campanhas", "metricas", "comentarios", "banco-duvidas", "configuracoes"]);
+  return collaboratorModules.has(moduleId) && ["view", "create", "edit"].includes(action);
+}
+
+function hasAreaAccess(profile: Profile, area: AppArea, profileAreas: ProfileArea[], permissions: ProfileModulePermission[]) {
+  if (!profile.id || !profile.active) return false;
+  if (profile.role === "admin") return true;
+  if (profileAreas.some((item) => item.profileId === profile.id && item.area === area && item.active)) return true;
+  return permissions.some((item) => item.profileId === profile.id && item.area === area && item.canView);
+}
+
+function hasModulePermission(
+  profile: Profile,
+  area: AppArea,
+  moduleId: string,
+  action: (typeof moduleActions)[number]["key"],
+  profileAreas: ProfileArea[],
+  permissions: ProfileModulePermission[]
+) {
+  if (!hasAreaAccess(profile, area, profileAreas, permissions)) return false;
+  if (profile.role === "admin") return true;
+  const permission = permissions.find((item) => item.profileId === profile.id && item.area === area && item.moduleId === moduleId);
+  if (permission) return Boolean(permission[permissionFlag(action)]);
+  return roleDefaultPermission(profile, area, moduleId, action);
+}
+
+function allowedAreasForProfile(profile: Profile, profileAreas: ProfileArea[], permissions: ProfileModulePermission[]) {
+  return appAreas.filter((area) => hasAreaAccess(profile, area.id, profileAreas, permissions)).map((area) => area.id);
+}
+
 function sameDay(left: Date, right: Date) {
   return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
 }
@@ -706,8 +798,11 @@ export default function Home() {
   // Em produção: começa true (mostra spinner) para evitar flash da tela de login
   const [initializing, setInitializing] = useState(process.env.NODE_ENV !== "development");
   const [realtimeSyncing, setRealtimeSyncing] = useState(false);
-  const [activeSection, setActiveSection] = useState("painel");
+  const [activeArea, setActiveArea] = useState<AppArea>("marketing");
+  const [activeSection, setActiveSection] = useState("marketing-painel");
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [profileAreas, setProfileAreas] = useState<ProfileArea[]>(seedProfileAreas);
+  const [profileModulePermissions, setProfileModulePermissions] = useState<ProfileModulePermission[]>(seedProfileModulePermissions);
   const [currentUserId, setCurrentUserId] = useState("");
   const [sessionUserId, setSessionUserId] = useState("");
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -728,6 +823,8 @@ export default function Home() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [metrics, setMetrics] = useState<PostMetric[]>([]);
   const [customerQuestions, setCustomerQuestions] = useState<CustomerQuestion[]>([]);
+  const [ytComments, setYtComments] = useState<Comment[]>([]);
+  const [autoFilters, setAutoFilters] = useState<AutoFilter[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [modal, setModal] = useState<ModalState>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -742,7 +839,8 @@ export default function Home() {
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem | null>(null);
   const [calendarMode, setCalendarMode] = useState<"Semana" | "Mês" | "Ano">("Mês");
   const [visibleMonth, setVisibleMonth] = useState(new Date());
-  const [configTab, setConfigTab] = useState<(typeof configTabs)[number]>("Equipe");
+  const [marketingConfigTab, setMarketingConfigTab] = useState<ConfigTab>("Equipe");
+  const [salesConfigTab, setSalesConfigTab] = useState<ConfigTab>("Equipe");
   const [ideasView, setIdeasView] = useState<"Quadro" | "Lista">("Quadro");
   const [ideasTab, setIdeasTab] = useState<"Todos" | "Estatísticas" | Idea["type"]>("Todos");
   const realtimeReloading = useRef(false);
@@ -779,8 +877,16 @@ export default function Home() {
       setActiveTaskBoardId(primaryTaskBoardId);
     }
   }, [taskBoards, primaryTaskBoardId, activeTaskBoardId]);
-  const canReviewAssets = currentUser.role === "admin" || currentUser.role === "gestor";
-  const canManageTeam = canReviewAssets;
+  const allowedAreas = useMemo(() => allowedAreasForProfile(currentUser, profileAreas, profileModulePermissions), [currentUser, profileAreas, profileModulePermissions]);
+  const activeConfigTab = activeArea === "marketing" ? marketingConfigTab : salesConfigTab;
+  const setActiveConfigTab = activeArea === "marketing" ? setMarketingConfigTab : setSalesConfigTab;
+  const visibleMenu = useMemo(
+    () => menusForArea(activeArea).filter((item) => hasModulePermission(currentUser, item.area, item.moduleId, "view", profileAreas, profileModulePermissions)),
+    [activeArea, currentUser, profileAreas, profileModulePermissions]
+  );
+  const canReviewAssets = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
+  const canManageTeam = hasModulePermission(currentUser, activeArea, "configuracoes", "manage", profileAreas, profileModulePermissions);
+  const userHasNoTeam = loggedIn && currentUser.active && currentUser.role !== "admin" && allowedAreas.length === 0;
   const pendingReviewAssets = postReviewAssets.filter((asset) => asset.status === "Aguardando revisão");
   const pendingApprovalsCount = canManageTeam ? profiles.filter((p) => !p.active).length : 0;
 
@@ -904,9 +1010,27 @@ export default function Home() {
     seenNotificationIds.current = new Set(unreadIds);
   }, [currentNotifications, currentUser.notificationSound]);
 
+  useEffect(() => {
+    if (!loggedIn || userHasNoTeam) return;
+    const nextArea = allowedAreas.includes(activeArea) ? activeArea : allowedAreas[0] ?? "marketing";
+    if (nextArea !== activeArea) {
+      setActiveArea(nextArea);
+      setActiveSection(menusForArea(nextArea)[0]?.sectionId ?? `${nextArea}-configuracoes`);
+      return;
+    }
+    const currentItem = menu.find((item) => item.sectionId === activeSection);
+    const allowedItem = currentItem && currentItem.area === activeArea && hasModulePermission(currentUser, currentItem.area, currentItem.moduleId, "view", profileAreas, profileModulePermissions);
+    if (!allowedItem) {
+      setActiveSection(visibleMenu[0]?.sectionId ?? `${activeArea}-configuracoes`);
+    }
+  }, [loggedIn, userHasNoTeam, allowedAreas, activeArea, activeSection, currentUser, profileAreas, profileModulePermissions, visibleMenu]);
+
   function openSection(sectionId: string) {
-    setActiveSection(sectionId);
-    if (sectionId === "tarefas") setActiveTaskBoardId(primaryTaskBoardId);
+    const item = menu.find((entry) => entry.sectionId === sectionId || entry.moduleId === sectionId);
+    if (!item) return;
+    setActiveArea(item.area);
+    setActiveSection(item.sectionId);
+    if (item.moduleId === "tarefas") setActiveTaskBoardId(primaryTaskBoardId);
   }
 
   useEffect(() => {
@@ -943,6 +1067,8 @@ export default function Home() {
       return;
     }
     setProfiles(data.profiles);
+    setProfileAreas(data.profileAreas);
+    setProfileModulePermissions(data.profileModulePermissions);
     setChannels(data.channels);
     setProductLines(data.productLines);
     setVehicleTypes(data.vehicleTypes);
@@ -960,6 +1086,8 @@ export default function Home() {
     setTasks(data.tasks);
     setMetrics(data.metrics);
     setCustomerQuestions(data.customerQuestions);
+    setYtComments(data.ytComments);
+    setAutoFilters(data.autoFilters);
     setNotifications(data.notifications);
     const { data: authData } = await supabase.auth.getUser();
     const authUserId = authData.user?.id ?? sessionUserId;
@@ -981,6 +1109,8 @@ export default function Home() {
     const orgId = currentUser.organizationId;
     const tables = [
       "profiles",
+      "profile_areas",
+      "profile_module_permissions",
       "channels",
       "product_lines",
       "vehicle_types",
@@ -1005,7 +1135,9 @@ export default function Home() {
       "task_comments",
       "task_attachments",
       "post_metrics",
-      "notifications"
+      "notifications",
+      "comments",
+      "auto_filters"
     ];
     const channel = supabase.channel("embrepoli-marketing-realtime");
     tables.forEach((table) => {
@@ -1093,6 +1225,8 @@ export default function Home() {
   }
 
   const syncProfiles = syncState("profiles", setProfiles, (previous, next) => persistArrayChanges(previous, next, (item) => saveProfile(supabase!, item), (id) => deleteProfile(supabase!, id)));
+  const syncProfileAreas = syncState("profileAreas", setProfileAreas, (previous, next) => persistArrayChanges(previous, next, (item) => saveProfileArea(supabase!, item), (id) => deleteProfileArea(supabase!, id)));
+  const syncProfileModulePermissions = syncState("profileModulePermissions", setProfileModulePermissions, (previous, next) => persistArrayChanges(previous, next, (item) => saveProfileModulePermission(supabase!, item), (id) => deleteProfileModulePermission(supabase!, id)));
   const syncChannels = syncState("channels", setChannels, (previous, next) => persistArrayChanges(previous, next, (item) => saveChannel(supabase!, item), (id) => deleteChannel(supabase!, id)));
   const syncProductLines = syncState("productLines", setProductLines, (previous, next) => persistArrayChanges(previous, next, (item) => saveProductLine(supabase!, item), (id) => deleteProductLine(supabase!, id)));
   const syncVehicleTypes = syncState("vehicleTypes", setVehicleTypes, (previous, next) => persistArrayChanges(previous, next, (item) => saveVehicleType(supabase!, item), (id) => deleteVehicleType(supabase!, id)));
@@ -1859,6 +1993,10 @@ export default function Home() {
     );
   }
 
+  if (userHasNoTeam) {
+    return <NoTeamScreen onRetry={() => void reloadFromSupabase()} onLogout={handleLogout} />;
+  }
+
   return (
     <main className="min-h-screen bg-slate-100 text-slate-950">
       <div className="grid min-h-screen lg:grid-cols-[276px_1fr]">
@@ -1867,20 +2005,36 @@ export default function Home() {
             <Image src="/embrepoli-logo.png" alt="Logo Embrepoli" width={58} height={58} className="h-14 w-14 object-contain" priority />
             <div>
               <p className="text-xs font-black uppercase tracking-[0.2em] text-blue-700">Embrepoli</p>
-              <h1 className="text-xl font-black">Marketing</h1>
+              <h1 className="text-xl font-black">Gestão</h1>
             </div>
           </div>
+          {allowedAreas.length > 1 && (
+            <div className="mt-6 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1">
+              {allowedAreas.map((area) => (
+                <button
+                  key={area}
+                  type="button"
+                  onClick={() => {
+                    setActiveArea(area);
+                    setActiveSection(menusForArea(area).find((item) => hasModulePermission(currentUser, item.area, item.moduleId, "view", profileAreas, profileModulePermissions))?.sectionId ?? `${area}-configuracoes`);
+                  }}
+                  className={`rounded-xl px-3 py-2 text-sm font-black transition ${activeArea === area ? "bg-blue-700 text-white shadow-sm" : "text-slate-500 hover:bg-white"}`}
+                >
+                  {appAreas.find((item) => item.id === area)?.label}
+                </button>
+              ))}
+            </div>
+          )}
           <nav className="mt-8 space-y-2">
-            {menu.map((item) => {
-              if (item.id === "revisoes" && !canReviewAssets) return null;
-              if (item.id === "banco-duvidas" && currentUser.role !== "admin") return null;
+            {visibleMenu.map((item) => {
+              if (item.moduleId === "revisoes" && !canReviewAssets) return null;
               const Icon = item.icon;
-              const selected = activeSection === item.id;
-              const showPendingBadge = item.id === "configuracoes" && pendingApprovalsCount > 0;
+              const selected = activeSection === item.sectionId;
+              const showPendingBadge = item.moduleId === "configuracoes" && pendingApprovalsCount > 0;
               return (
                 <button
-                  key={item.id}
-                  onClick={() => openSection(item.id)}
+                  key={item.sectionId}
+                  onClick={() => openSection(item.sectionId)}
                   className={`flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-left text-sm font-black transition ${
                     selected ? "bg-blue-700 text-white shadow-lg shadow-blue-700/20" : "text-slate-600 hover:bg-blue-50 hover:text-blue-800"
                   }`}
@@ -1901,12 +2055,13 @@ export default function Home() {
         <section className="min-w-0 px-4 py-5 md:px-8">
           <Header
             activeSection={activeSection}
+            activeArea={activeArea}
             currentUser={currentUser}
             profileOpen={profileOpen}
             setProfileOpen={setProfileOpen}
             uploadProfilePhoto={uploadProfilePhoto}
             setModal={setModal}
-            setActiveSection={setActiveSection}
+            openSection={openSection}
             notifications={currentNotifications}
             notificationsOpen={notificationsOpen}
             setNotificationsOpen={setNotificationsOpen}
@@ -1920,10 +2075,10 @@ export default function Home() {
             realtimeSyncing={realtimeSyncing}
           />
 
-          {activeSection === "painel" && (
+          {activeSection === "marketing-painel" && (
             <Dashboard posts={visiblePosts} tasks={visibleTasks} campaigns={visibleCampaigns} metrics={metrics} funnelStages={funnelStages} channelById={channelById} />
           )}
-          {activeSection === "calendario" && (
+          {activeSection === "marketing-calendario" && (
             <EditorialCalendar
               posts={visiblePosts}
               setPosts={syncPosts}
@@ -1944,10 +2099,10 @@ export default function Home() {
               setModal={setModal}
             />
           )}
-          {activeSection === "ideias" && (
+          {activeSection === "marketing-ideias" && (
             <Ideas ideas={visibleIdeas} posts={posts} setIdeas={syncIdeas} view={ideasView} setView={setIdeasView} activeTab={ideasTab} setActiveTab={setIdeasTab} channelById={channelById} lineById={lineById} vehicleTypeById={vehicleTypeById} contentTypeById={contentTypeById} funnelById={funnelById} profileById={profileById} setModal={setModal} />
           )}
-          {activeSection === "tarefas" && (
+          {activeSection === "marketing-tarefas" && (
             <Tasks
               tasks={visibleTasks}
               allTasks={tasks}
@@ -1972,7 +2127,7 @@ export default function Home() {
               addQuickTask={addQuickTask}
             />
           )}
-          {activeSection === "revisoes" && canReviewAssets && (
+          {activeSection === "marketing-revisoes" && canReviewAssets && (
             <ReviewsPage
               assets={postReviewAssets}
               posts={posts}
@@ -1986,10 +2141,10 @@ export default function Home() {
               deletePostReviewAsset={deletePostReviewAsset}
             />
           )}
-          {activeSection === "campanhas" && (
+          {activeSection === "marketing-campanhas" && (
             <Campaigns campaigns={visibleCampaigns} lineById={lineById} vehicleTypeById={vehicleTypeById} funnelById={funnelById} profileById={profileById} setModal={setModal} />
           )}
-          {activeSection === "metricas" && (
+          {activeSection === "marketing-metricas" && (
             <Metrics
               metrics={metrics}
               setMetrics={syncMetrics}
@@ -2013,7 +2168,26 @@ export default function Home() {
               reloadData={reloadFromSupabase}
             />
           )}
-          {activeSection === "banco-duvidas" && currentUser.role === "admin" && (
+          {activeSection === "marketing-comentarios" && hasModulePermission(currentUser, "marketing", "comentarios", "view", profileAreas, profileModulePermissions) && (
+            <ComentariosSection
+              comments={ytComments}
+              setComments={(next) => {
+                setYtComments(next);
+              }}
+              autoFilters={autoFilters}
+              setAutoFilters={(next) => {
+                setAutoFilters(next);
+              }}
+              questions={customerQuestions}
+              setQuestions={(next) => {
+                const prev = customerQuestions;
+                setCustomerQuestions(next);
+                replaceCustomerQuestions(supabase!, next, prev).catch(() => setCustomerQuestions(prev));
+              }}
+              currentUser={currentUser}
+            />
+          )}
+          {activeSection === "marketing-banco-duvidas" && hasModulePermission(currentUser, "marketing", "banco-duvidas", "view", profileAreas, profileModulePermissions) && (
             <BancoDeDuvidas
               questions={customerQuestions}
               setQuestions={(next) => {
@@ -2021,18 +2195,19 @@ export default function Home() {
                 setCustomerQuestions(next);
                 replaceCustomerQuestions(supabase!, next, prev).catch(() => setCustomerQuestions(prev));
               }}
-              onYoutubeImport={async (newOnes) => {
-                setCustomerQuestions((prev) => [...newOnes, ...prev]);
-                await insertCustomerQuestions(supabase!, newOnes);
-              }}
               currentUser={currentUser}
-              profiles={profiles}
             />
           )}
-          {activeSection === "configuracoes" && (
+          {activeSection.startsWith("vendas-") && activeSection !== "vendas-configuracoes" && (
+            <SalesPlaceholder section={menu.find((item) => item.sectionId === activeSection)?.label ?? "Vendas"} />
+          )}
+          {(activeSection === "marketing-configuracoes" || activeSection === "vendas-configuracoes") && (
             <SettingsPanel
+              activeArea={activeArea}
               currentUser={currentUser}
               profiles={profiles}
+              profileAreas={profileAreas}
+              profileModulePermissions={profileModulePermissions}
               channels={channels}
               campaignAudiences={campaignAudiences}
               postTemplates={postTemplates}
@@ -2040,9 +2215,11 @@ export default function Home() {
               vehicleTypes={vehicleTypes}
               contentTypes={contentTypes}
               funnelStages={funnelStages}
-              configTab={configTab}
-              setConfigTab={setConfigTab}
+              configTab={activeConfigTab}
+              setConfigTab={setActiveConfigTab}
               setProfiles={syncProfiles}
+              setProfileAreas={syncProfileAreas}
+              setProfileModulePermissions={syncProfileModulePermissions}
               setChannels={syncChannels}
               setCampaignAudiences={syncCampaignAudiences}
               setPostTemplates={syncPostTemplates}
@@ -2065,6 +2242,8 @@ export default function Home() {
         setModal={setModal}
         currentUser={currentUser}
         profiles={profiles}
+        profileAreas={profileAreas}
+        profileModulePermissions={profileModulePermissions}
         profileById={profileById}
         channels={channels}
         productLines={productLines}
@@ -2093,6 +2272,8 @@ export default function Home() {
         metrics={metrics}
         setMetrics={syncMetrics}
         setProfiles={syncProfiles}
+        setProfileAreas={syncProfileAreas}
+        setProfileModulePermissions={syncProfileModulePermissions}
         uploadProfilePhoto={uploadProfilePhoto}
         tasks={tasks}
         setTasks={syncTasks}
@@ -2197,7 +2378,7 @@ function LoginScreen({
     <main className="grid min-h-screen place-items-center bg-slate-100 px-4">
       <section className="w-full max-w-md rounded-[34px] bg-white p-8 shadow-2xl shadow-blue-950/10">
         <Image src="/embrepoli-logo.png" alt="Logo Embrepoli" width={110} height={110} className="mx-auto h-28 w-28 object-contain" priority />
-        <h1 className="mt-5 text-center text-3xl font-black">Embrepoli Marketing</h1>
+        <h1 className="mt-5 text-center text-3xl font-black">Gestão Embrepoli</h1>
         <div className="mt-5 grid grid-cols-2 gap-2 rounded-2xl bg-slate-100 p-1">
           <button type="button" onClick={() => setMode("login")} className={`rounded-xl px-3 py-2 text-sm font-black ${mode === "login" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Entrar</button>
           <button type="button" onClick={() => setMode("signup")} className={`rounded-xl px-3 py-2 text-sm font-black ${mode === "signup" ? "bg-white text-blue-700 shadow-sm" : "text-slate-500"}`}>Criar conta</button>
@@ -2305,6 +2486,40 @@ function PasswordInput({ name, label, required, defaultValue, autoComplete, valu
         </button>
       </span>
     </label>
+  );
+}
+
+function NoTeamScreen({ onRetry, onLogout }: { onRetry: () => void; onLogout: () => void }) {
+  return (
+    <main className="grid min-h-screen place-items-center bg-white px-4">
+      <section className="w-full max-w-xl rounded-[36px] border border-slate-100 bg-white p-8 text-center shadow-2xl shadow-blue-950/10">
+        <Image src="/embrepoli-logo.png" alt="Logo Embrepoli" width={130} height={130} className="mx-auto h-32 w-32 object-contain" priority />
+        <h1 className="mt-5 text-3xl font-black">Gestão Embrepoli</h1>
+        <p className="mt-4 text-base font-bold text-slate-600">
+          Seu cadastro ainda não pertence a nenhuma equipe. Aguarde um Gestor ou Administrador selecionar sua equipe.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <button type="button" onClick={onRetry} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Tentar novamente</button>
+          <button type="button" onClick={onLogout} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Sair da conta</button>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function SalesPlaceholder({ section }: { section: string }) {
+  return (
+    <Panel title={section}>
+      <div className="grid min-h-80 place-items-center rounded-[30px] border border-dashed border-blue-200 bg-blue-50/60 p-8 text-center">
+        <div>
+          <p className="text-sm font-black uppercase tracking-[0.18em] text-blue-700">Área de Vendas</p>
+          <h3 className="mt-2 text-2xl font-black">Estrutura preparada</h3>
+          <p className="mx-auto mt-3 max-w-xl text-sm font-bold text-slate-600">
+            Esta tela já está isolada da área de Marketing e pronta para receber os fluxos de vendas nas próximas fases.
+          </p>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -2707,12 +2922,13 @@ function ReviewsPage({
 }
 function Header({
   activeSection,
+  activeArea,
   currentUser,
   profileOpen,
   setProfileOpen,
   uploadProfilePhoto,
   setModal,
-  setActiveSection,
+  openSection,
   notifications,
   notificationsOpen,
   setNotificationsOpen,
@@ -2726,12 +2942,13 @@ function Header({
   realtimeSyncing
 }: {
   activeSection: string;
+  activeArea: AppArea;
   currentUser: Profile;
   profileOpen: boolean;
   setProfileOpen: Dispatch<SetStateAction<boolean>>;
   uploadProfilePhoto: (profileId: string, file: File) => void;
   setModal: Dispatch<SetStateAction<ModalState>>;
-  setActiveSection: Dispatch<SetStateAction<string>>;
+  openSection: (sectionId: string) => void;
   notifications: Notification[];
   notificationsOpen: boolean;
   setNotificationsOpen: Dispatch<SetStateAction<boolean>>;
@@ -2744,7 +2961,8 @@ function Header({
   logout: () => void;
   realtimeSyncing?: boolean;
 }) {
-  const title = menu.find((item) => item.id === activeSection)?.label ?? "Painel";
+  const title = menu.find((item) => item.sectionId === activeSection)?.label ?? "Painel";
+  const areaLabel = appAreas.find((area) => area.id === activeArea)?.label ?? "Marketing";
   const unreadCount = notifications.filter((item) => !item.read).length;
   // Notificações visíveis no painel: não lidas (sempre) + lidas há menos de 1 hora
   const ONE_HOUR = 60 * 60 * 1000;
@@ -2778,7 +2996,7 @@ function Header({
     if (notification.targetKind === "review") {
       const asset = postReviewAssets.find((item) => item.id === notification.targetId);
       if (asset && canReviewAssets) {
-        setActiveSection("revisoes");
+        openSection("marketing-revisoes");
         return;
       }
       if (asset) setModal({ kind: "post", id: asset.postId });
@@ -2806,14 +3024,14 @@ function Header({
   return (
     <header className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
       <div>
-        <p className="text-sm font-bold text-blue-700">Embrepoli Kits Turbo e Intercooler</p>
+        <p className="text-sm font-bold text-blue-700">Gestão Embrepoli · {areaLabel}</p>
         <h2 className="mt-1 text-3xl font-black">{title}</h2>
       </div>
       <div className="flex items-start gap-3">
         {canReviewAssets && pendingReviewCount > 0 && (
           <button
             type="button"
-            onClick={() => setActiveSection("revisoes")}
+            onClick={() => openSection("marketing-revisoes")}
             className="hidden rounded-3xl border border-amber-200 bg-amber-100 px-4 py-3 text-sm font-black text-amber-800 shadow-sm transition hover:border-amber-300 hover:bg-amber-200 md:block"
             title="Abrir revisões pendentes"
           >
@@ -4794,8 +5012,11 @@ function ActionList({ title, empty, items, actionLabel, onAction, description }:
 }
 
 function SettingsPanel(props: {
+  activeArea: AppArea;
   currentUser: Profile;
   profiles: Profile[];
+  profileAreas: ProfileArea[];
+  profileModulePermissions: ProfileModulePermission[];
   channels: Channel[];
   campaignAudiences: CampaignAudience[];
   postTemplates: PostTemplate[];
@@ -4804,9 +5025,11 @@ function SettingsPanel(props: {
   contentTypes: ContentType[];
   funnelStages: FunnelStage[];
   calendarDates: CalendarDate[];
-  configTab: (typeof configTabs)[number];
-  setConfigTab: Dispatch<SetStateAction<(typeof configTabs)[number]>>;
+  configTab: ConfigTab;
+  setConfigTab: Dispatch<SetStateAction<ConfigTab>>;
   setProfiles: Dispatch<SetStateAction<Profile[]>>;
+  setProfileAreas: Dispatch<SetStateAction<ProfileArea[]>>;
+  setProfileModulePermissions: Dispatch<SetStateAction<ProfileModulePermission[]>>;
   setChannels: Dispatch<SetStateAction<Channel[]>>;
   setCampaignAudiences: Dispatch<SetStateAction<CampaignAudience[]>>;
   setPostTemplates: Dispatch<SetStateAction<PostTemplate[]>>;
@@ -4819,11 +5042,15 @@ function SettingsPanel(props: {
   sendPasswordResetForProfile: (profile: Profile) => Promise<void>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
+  const tabs = props.activeArea === "marketing" ? marketingConfigTabs : salesConfigTabs;
+  const canManageSharedSettings =
+    hasModulePermission(props.currentUser, "marketing", "configuracoes", "manage", props.profileAreas, props.profileModulePermissions) ||
+    hasModulePermission(props.currentUser, "vendas", "configuracoes", "manage", props.profileAreas, props.profileModulePermissions);
   return (
     <div className="space-y-5">
       <Panel title="Configurações">
         <div className="flex flex-wrap gap-2">
-          {configTabs.map((tab) => (
+          {tabs.map((tab) => (
             <button key={tab} onClick={() => props.setConfigTab(tab)} className={`rounded-2xl px-4 py-2 text-sm font-black ${props.configTab === tab ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
               {tab}
             </button>
@@ -4831,25 +5058,42 @@ function SettingsPanel(props: {
         </div>
       </Panel>
       {props.configTab === "Equipe" && <TeamSettings {...props} />}
-      {props.configTab === "Funil" && <FunnelSettings funnelStages={props.funnelStages} setFunnelStages={props.setFunnelStages} />}
-      {props.configTab === "Filtros" && <ChannelsLinesSettings channels={props.channels} campaignAudiences={props.campaignAudiences} productLines={props.productLines} vehicleTypes={props.vehicleTypes} contentTypes={props.contentTypes} setChannels={props.setChannels} setCampaignAudiences={props.setCampaignAudiences} setProductLines={props.setProductLines} setVehicleTypes={props.setVehicleTypes} setContentTypes={props.setContentTypes} />}
-      {props.configTab === "Modelos" && <PostTemplateSettings templates={props.postTemplates} setTemplates={props.setPostTemplates} channels={props.channels} contentTypes={props.contentTypes} funnelStages={props.funnelStages} />}
-      {props.configTab === "Datas" && <CalendarDateSettings calendarDates={props.calendarDates} setCalendarDates={props.setCalendarDates} />}
-      {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} />}
+      {props.activeArea === "marketing" && props.configTab === "Funil" && <FunnelSettings funnelStages={props.funnelStages} setFunnelStages={props.setFunnelStages} />}
+      {props.activeArea === "marketing" && props.configTab === "Filtros" && <ChannelsLinesSettings channels={props.channels} campaignAudiences={props.campaignAudiences} productLines={props.productLines} vehicleTypes={props.vehicleTypes} contentTypes={props.contentTypes} setChannels={props.setChannels} setCampaignAudiences={props.setCampaignAudiences} setProductLines={props.setProductLines} setVehicleTypes={props.setVehicleTypes} setContentTypes={props.setContentTypes} />}
+      {props.activeArea === "marketing" && props.configTab === "Modelos" && <PostTemplateSettings templates={props.postTemplates} setTemplates={props.setPostTemplates} channels={props.channels} contentTypes={props.contentTypes} funnelStages={props.funnelStages} />}
+      {props.activeArea === "marketing" && props.configTab === "Datas" && <CalendarDateSettings calendarDates={props.calendarDates} setCalendarDates={props.setCalendarDates} />}
+      {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} canManageIntegrations={canManageSharedSettings} />}
     </div>
   );
 }
 
-function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, setModal, sendPasswordResetForProfile }: Parameters<typeof SettingsPanel>[0]) {
-  const canManageTeam = currentUser.role === "admin" || currentUser.role === "gestor";
+function TeamSettings({ profiles, profileAreas, profileModulePermissions, setProfiles, uploadProfilePhoto, currentUser, setModal, sendPasswordResetForProfile }: Parameters<typeof SettingsPanel>[0]) {
+  const canManageTeam =
+    hasModulePermission(currentUser, "marketing", "configuracoes", "manage", profileAreas, profileModulePermissions) ||
+    hasModulePermission(currentUser, "vendas", "configuracoes", "manage", profileAreas, profileModulePermissions);
+  const [teamFilter, setTeamFilter] = useState<"Todos" | "Marketing" | "Vendas" | "Sem equipe">("Todos");
   const [resettingProfileId, setResettingProfileId] = useState("");
   const [resetMessage, setResetMessage] = useState("");
   const [resetError, setResetError] = useState("");
   const pendingCount = profiles.filter((p) => !p.active).length;
-  const sortedProfiles = [...profiles].sort((a, b) => {
+  const areaSetForProfile = (profileId: string) => new Set(profileAreas.filter((area) => area.profileId === profileId && area.active).map((area) => area.area));
+  const filteredProfiles = profiles.filter((profile) => {
+    const areas = areaSetForProfile(profile.id);
+    if (teamFilter === "Marketing") return areas.has("marketing");
+    if (teamFilter === "Vendas") return areas.has("vendas");
+    if (teamFilter === "Sem equipe") return areas.size === 0;
+    return true;
+  });
+  const sortedProfiles = [...filteredProfiles].sort((a, b) => {
     if (a.active === b.active) return a.name.localeCompare(b.name);
     return a.active ? 1 : -1;
   });
+  const filterCounts = {
+    Todos: profiles.length,
+    Marketing: profiles.filter((profile) => areaSetForProfile(profile.id).has("marketing")).length,
+    Vendas: profiles.filter((profile) => areaSetForProfile(profile.id).has("vendas")).length,
+    "Sem equipe": profiles.filter((profile) => areaSetForProfile(profile.id).size === 0).length
+  };
   async function sendReset(profile: Profile) {
     if (!canManageTeam || resettingProfileId) return;
     setResettingProfileId(profile.id);
@@ -4878,6 +5122,18 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
       )}
       {resetMessage && <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">{resetMessage}</div>}
       {resetError && <div className="mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{resetError}</div>}
+      <div className="mb-5 flex flex-wrap gap-2">
+        {(["Todos", "Marketing", "Vendas", "Sem equipe"] as const).map((filter) => (
+          <button
+            key={filter}
+            type="button"
+            onClick={() => setTeamFilter(filter)}
+            className={`rounded-2xl px-4 py-2 text-sm font-black transition ${teamFilter === filter ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"}`}
+          >
+            {filter} <span className="opacity-70">{filterCounts[filter]}</span>
+          </button>
+        ))}
+      </div>
       <div className="grid gap-3">
         {sortedProfiles.map((profile) => (
           <div
@@ -4897,6 +5153,11 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
               </div>
               <p className="text-sm text-slate-500">{profile.email}</p>
               <p className="mt-1 text-xs font-bold text-slate-400">{profile.phone || "Sem telefone"} · {profile.active ? "Ativo" : "Aguardando aprovação"}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {areaSetForProfile(profile.id).has("marketing") && <Badge tone="blue">Marketing</Badge>}
+                {areaSetForProfile(profile.id).has("vendas") && <Badge tone="purple">Vendas</Badge>}
+                {areaSetForProfile(profile.id).size === 0 && <Badge tone="slate">Sem equipe</Badge>}
+              </div>
             </div>
             <Badge tone="blue">{roleLabel[profile.role]}</Badge>
             {canManageTeam && (
@@ -4915,6 +5176,7 @@ function TeamSettings({ profiles, setProfiles, uploadProfilePhoto, currentUser, 
             )}
           </div>
         ))}
+        {!sortedProfiles.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-400">Nenhum membro encontrado neste filtro.</p>}
       </div>
     </Panel>
   );
@@ -5218,12 +5480,11 @@ function CalendarDateModal({ date, setCalendarDates, close }: { date?: CalendarD
   );
 }
 
-function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>> }) {
+function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>>; canManageIntegrations: boolean }) {
   const [googleStatus, setGoogleStatus] = useState<GoogleConnectionStatus | null>(null);
   const [googleLoading, setGoogleLoading] = useState(true);
   const [googleBusy, setGoogleBusy] = useState<GoogleService | null>(null);
   const [googleError, setGoogleError] = useState("");
-  const canManageGoogle = currentUser.role === "admin" || currentUser.role === "gestor";
 
   async function loadGoogleStatus() {
     setGoogleLoading(true);
@@ -5302,7 +5563,7 @@ function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profil
             <p className="mt-1 text-sm font-bold text-slate-500">
               Conecte Drive e YouTube separadamente. Cada integracao fica salva para toda a equipe.
             </p>
-            {!canManageGoogle && (
+            {!canManageIntegrations && (
               <p className="mt-2 text-xs font-bold text-slate-400">
                 Apenas Administrador ou Gestor pode conectar ou desconectar integrações Google.
               </p>
@@ -5345,7 +5606,7 @@ function PermissionsSettings({ currentUser, setProfiles }: { currentUser: Profil
                       Conectado em {new Date(serviceStatus.connectedAt).toLocaleString("pt-BR")}
                     </p>
                   )}
-                  {canManageGoogle && (
+                  {canManageIntegrations && (
                     <div className="mt-4 flex flex-wrap gap-2">
                       <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
                         {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
@@ -5372,6 +5633,8 @@ function EntityModal(props: {
   setModal: Dispatch<SetStateAction<ModalState>>;
   currentUser: Profile;
   profiles: Profile[];
+  profileAreas: ProfileArea[];
+  profileModulePermissions: ProfileModulePermission[];
   profileById: Map<string, Profile>;
   channels: Channel[];
   productLines: ProductLine[];
@@ -5400,6 +5663,8 @@ function EntityModal(props: {
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
   setProfiles: Dispatch<SetStateAction<Profile[]>>;
+  setProfileAreas: Dispatch<SetStateAction<ProfileArea[]>>;
+  setProfileModulePermissions: Dispatch<SetStateAction<ProfileModulePermission[]>>;
   uploadProfilePhoto: (profileId: string, file: File) => void;
   tasks: Task[];
   setTasks: Dispatch<SetStateAction<Task[]>>;
@@ -5426,7 +5691,7 @@ function EntityModal(props: {
       <section ref={modalContentRef} className={`max-h-[92vh] w-full overflow-y-auto rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl shadow-slate-950/20 animate-soft-pop ${modal.kind === "task" || modal.kind === "post" ? "max-w-6xl" : "max-w-3xl"}`}>
         <div className="mb-5 flex items-start justify-between gap-4 rounded-[26px] bg-gradient-to-r from-blue-50 to-slate-50 px-4 py-3">
           <div>
-            <p className="text-sm font-black text-blue-700">Embrepoli Marketing</p>
+            <p className="text-sm font-black text-blue-700">Gestão Embrepoli</p>
             <h2 className="text-2xl font-black">{modalTitle(modal)}</h2>
           </div>
           <button onClick={close} className="rounded-2xl bg-white p-2 text-slate-500 shadow-sm transition hover:text-slate-950"><X size={20} /></button>
@@ -6617,7 +6882,7 @@ function applyTimeToDateTimeLocal(currentValue: string, time: string) {
   return `${datePart}T${time}`;
 }
 
-function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
   const initialIdea = editing?.ideaId ?? (modal?.kind === "post" ? modal.ideaId ?? "" : "");
   const ideaPrefill = ideas.find((idea) => idea.id === initialIdea);
@@ -6653,7 +6918,7 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0];
-  const canReview = currentUser.role === "admin" || currentUser.role === "gestor";
+  const canReview = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
   const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão").length;
   const approvedCount = assets.filter((asset) => asset.status === "Aprovado").length;
   const reviewSummary = !assets.length ? "Nenhuma arte enviada" : `${assets.length} arquivo(s) · ${approvedCount} aprovado(s) · ${pendingCount} pendente(s)`;
@@ -7363,13 +7628,22 @@ function ProfileModal({ currentUser, setProfiles, uploadProfilePhoto, close }: P
   );
 }
 
-function TeamMemberModal({ modal, currentUser, profiles, setProfiles, uploadProfilePhoto, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function TeamMemberModal({ modal, currentUser, profiles, profileAreas, profileModulePermissions, setProfiles, setProfileAreas, setProfileModulePermissions, uploadProfilePhoto, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const [saving, setSaving] = useState(false);
   const [saveErr, setSaveErr] = useState("");
 
   const member = modal?.kind === "teamMember" ? profiles.find((profile) => profile.id === modal.id) : undefined;
-  const canManageTeam = currentUser.role === "admin" || currentUser.role === "gestor";
+  const canManageTeam =
+    hasModulePermission(currentUser, "marketing", "configuracoes", "manage", profileAreas, profileModulePermissions) ||
+    hasModulePermission(currentUser, "vendas", "configuracoes", "manage", profileAreas, profileModulePermissions);
   if (!member || !canManageTeam) return <p className="text-sm font-bold text-slate-500">Você não tem permissão para editar este membro.</p>;
+
+  function setAreaPermissionsInForm(area: AppArea, checked: boolean) {
+    const selector = `[data-area-permission="${area}"]`;
+    document.querySelectorAll<HTMLInputElement>(selector).forEach((input) => {
+      input.checked = checked;
+    });
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -7401,9 +7675,38 @@ function TeamMemberModal({ modal, currentUser, profiles, setProfiles, uploadProf
       return;
     }
 
+    const selectedAreas: AppArea[] = appAreas
+      .filter((area) => form.get(`area-${area.id}`) === "on")
+      .map((area) => area.id);
+    const nextAreas: ProfileArea[] = selectedAreas.map((area) => ({
+      id: profileAreaId(member.id, area),
+      profileId: member.id,
+      area,
+      active: true
+    }));
+    const nextPermissions: ProfileModulePermission[] = selectedAreas.flatMap((area) =>
+      menusForArea(area).map((item) => ({
+        id: profilePermissionId(member.id, area, item.moduleId),
+        profileId: member.id,
+        area,
+        moduleId: item.moduleId,
+        canView: form.get(`permission-${area}-${item.moduleId}-view`) === "on",
+        canCreate: form.get(`permission-${area}-${item.moduleId}-create`) === "on",
+        canEdit: form.get(`permission-${area}-${item.moduleId}-edit`) === "on",
+        canDelete: form.get(`permission-${area}-${item.moduleId}-delete`) === "on",
+        canApprove: form.get(`permission-${area}-${item.moduleId}-approve`) === "on",
+        canManage: form.get(`permission-${area}-${item.moduleId}-manage`) === "on"
+      }))
+    );
+
     setProfiles((current) => current.map((profile) => (profile.id === member.id ? updated : profile)));
+    setProfileAreas((current) => [...current.filter((area) => area.profileId !== member.id), ...nextAreas]);
+    setProfileModulePermissions((current) => [...current.filter((permission) => permission.profileId !== member.id), ...nextPermissions]);
     close();
   }
+
+  const memberAreaSet = new Set(profileAreas.filter((area) => area.profileId === member.id && area.active).map((area) => area.area));
+  const permissionByKey = new Map(profileModulePermissions.filter((permission) => permission.profileId === member.id).map((permission) => [`${permission.area}:${permission.moduleId}`, permission]));
 
   return (
     <EntityForm onSubmit={submit}>
@@ -7420,6 +7723,61 @@ function TeamMemberModal({ modal, currentUser, profiles, setProfiles, uploadProf
         Membro ativo
       </label>
       <TextArea name="bio" label="Bio curta" defaultValue={member.bio} />
+      <div className="md:col-span-2 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+        <p className="font-black">Equipes</p>
+        <p className="mt-1 text-sm font-bold text-slate-500">Marcar uma equipe libera todas as telas daquela área. Depois você pode ajustar permissões específicas abaixo.</p>
+        <div className="mt-3 flex flex-wrap gap-3">
+          {appAreas.map((area) => (
+            <label key={area.id} className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-sm font-black text-slate-700">
+              <input
+                name={`area-${area.id}`}
+                type="checkbox"
+                defaultChecked={memberAreaSet.has(area.id)}
+                onChange={(event) => setAreaPermissionsInForm(area.id, event.currentTarget.checked)}
+              />
+              {area.label}
+            </label>
+          ))}
+        </div>
+      </div>
+      <div className="md:col-span-2 space-y-4">
+        {appAreas.map((area) => (
+          <div key={area.id} className="rounded-3xl border border-slate-100 bg-white p-4">
+            <h3 className="font-black">{area.label}</h3>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full min-w-[720px] text-left text-sm">
+                <thead>
+                  <tr className="text-xs font-black uppercase text-slate-400">
+                    <th className="py-2">Tela</th>
+                    {moduleActions.map((action) => <th key={action.key} className="px-2 py-2 text-center">{action.label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {menusForArea(area.id).map((item) => {
+                    const permission = permissionByKey.get(`${area.id}:${item.moduleId}`);
+                    return (
+                      <tr key={item.sectionId} className="border-t border-slate-100">
+                        <td className="py-2 font-bold text-slate-700">{item.label}</td>
+                        {moduleActions.map((action) => (
+                          <td key={action.key} className="px-2 py-2 text-center">
+                            <input
+                              data-area-permission={area.id}
+                              name={`permission-${area.id}-${item.moduleId}-${action.key}`}
+                              type="checkbox"
+                              defaultChecked={permission ? Boolean(permission[permissionFlag(action.key)]) : memberAreaSet.has(area.id)}
+                              className="h-4 w-4"
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
       {saveErr && (
         <p className="md:col-span-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">
           ⚠️ {saveErr}
@@ -7823,6 +8181,7 @@ function YoutubeImportModal({
           status: "pendente" as const,
           category: "",
           learning: "",
+          needsReview: false,
           publishedAt: c.publishedAt,
           createdAt: c.publishedAt
         });
@@ -7997,16 +8356,15 @@ function YoutubeImportModal({
 function BancoDeDuvidas({
   questions,
   setQuestions,
-  onYoutubeImport,
   currentUser,
-  profiles
 }: {
   questions: CustomerQuestion[];
   setQuestions: (next: CustomerQuestion[]) => void;
-  onYoutubeImport: (newOnes: CustomerQuestion[]) => Promise<void>;
   currentUser: Profile;
-  profiles: Profile[];
 }) {
+  const [tab, setTab] = useState<"chat" | "base">("chat");
+
+  // ── Base state ──
   const [filterStatus, setFilterStatus] = useState<CustomerQuestionStatus | "todas">("todas");
   const [filterSource, setFilterSource] = useState<CustomerQuestionSource | "todas">("todas");
   const [search, setSearch] = useState("");
@@ -8015,9 +8373,16 @@ function BancoDeDuvidas({
   const [learningDraft, setLearningDraft] = useState("");
   const [showNewForm, setShowNewForm] = useState(false);
   const [newText, setNewText] = useState("");
-  const [ytModal, setYtModal] = useState(false);
 
-  const filtered = questions.filter((q) => {
+  // ── Chat state ──
+  type ChatMsg = { role: "user" | "ai"; text: string; unknown?: boolean };
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [unknownInput, setUnknownInput] = useState("");
+  const [savingUnknown, setSavingUnknown] = useState(false);
+
+  const filteredBase = questions.filter((q) => {
     if (filterStatus !== "todas" && q.status !== filterStatus) return false;
     if (filterSource !== "todas" && q.source !== filterSource) return false;
     if (search && !q.questionText.toLowerCase().includes(search.toLowerCase()) && !q.authorName.toLowerCase().includes(search.toLowerCase())) return false;
@@ -8028,8 +8393,10 @@ function BancoDeDuvidas({
     pendente: questions.filter((q) => q.status === "pendente").length,
     respondido: questions.filter((q) => q.status === "respondido").length,
     aprovado: questions.filter((q) => q.status === "aprovado").length,
-    descartado: questions.filter((q) => q.status === "descartado").length
+    descartado: questions.filter((q) => q.status === "descartado").length,
   };
+
+  const needsReviewCount = questions.filter((q) => q.needsReview && !q.reviewedAt).length;
 
   function openQuestion(q: CustomerQuestion) {
     setSelected(q);
@@ -8046,7 +8413,20 @@ function BancoDeDuvidas({
       learning: learningDraft,
       status,
       reviewerId: currentUser.id,
-      answeredAt: status === "pendente" ? undefined : (selected.answeredAt ?? now)
+      answeredAt: status === "pendente" ? undefined : (selected.answeredAt ?? now),
+    };
+    setQuestions(questions.map((q) => q.id === updated.id ? updated : q));
+    setSelected(updated);
+  }
+
+  function markReviewed() {
+    if (!selected) return;
+    const now = new Date().toISOString();
+    const updated: CustomerQuestion = {
+      ...selected,
+      needsReview: false,
+      reviewedAt: now,
+      reviewedBy: currentUser.id,
     };
     setQuestions(questions.map((q) => q.id === updated.id ? updated : q));
     setSelected(updated);
@@ -8058,6 +8438,71 @@ function BancoDeDuvidas({
     setQuestions(questions.map((q) => q.id === updated.id ? updated : q));
     setSelected(updated);
   }
+
+  async function handleChatSend() {
+    const q = chatInput.trim();
+    if (!q || chatLoading) return;
+    setChatInput("");
+    setChatMessages((prev) => [...prev, { role: "user", text: q }]);
+    setChatLoading(true);
+    setUnknownInput("");
+    try {
+      const bank = questions
+        .filter((item) => item.status === "aprovado" && item.answerText?.trim())
+        .map((item) => ({ id: item.id, questionText: item.questionText, answerText: item.answerText }));
+      const res = await fetch("/api/gemini-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: q, bank }),
+      });
+      const data = await res.json() as { answer: string | null; unknown: boolean; error?: string };
+      if (data.error) throw new Error(data.error);
+      if (!data.unknown && data.answer) {
+        setChatMessages((prev) => [...prev, { role: "ai", text: data.answer! }]);
+      } else {
+        setChatMessages((prev) => [
+          ...prev,
+          { role: "ai", text: "Nao encontrei essa resposta no banco ainda.", unknown: true },
+        ]);
+      }
+    } catch {
+      setChatMessages((prev) => [...prev, { role: "ai", text: "Erro ao consultar a IA. Tente novamente." }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function handleSaveUnknown() {
+    const lastUserMsg = [...chatMessages].reverse().find((m) => m.role === "user");
+    if (!lastUserMsg || !unknownInput.trim()) return;
+    setSavingUnknown(true);
+    const newQ: CustomerQuestion = {
+      id: crypto.randomUUID(),
+      organizationId: currentUser.organizationId,
+      source: "manual",
+      questionText: lastUserMsg.text,
+      answerText: unknownInput.trim(),
+      authorName: currentUser.name,
+      likes: 0,
+      status: "aprovado",
+      category: "",
+      learning: "",
+      needsReview: true,
+      createdAt: new Date().toISOString(),
+    };
+    setQuestions([newQ, ...questions]);
+    if (supabase) {
+      await saveCustomerQuestion(supabase, newQ).catch(() => {});
+    }
+    setChatMessages((prev) => [
+      ...prev,
+      { role: "ai", text: "Resposta salva no banco! Ela sera usada nas proximas consultas." },
+    ]);
+    setUnknownInput("");
+    setSavingUnknown(false);
+  }
+
+  const lastMsgUnknown = chatMessages.length > 0 && chatMessages[chatMessages.length - 1].unknown === true;
 
   function addManual(e: FormEvent) {
     e.preventDefault();
@@ -8073,7 +8518,8 @@ function BancoDeDuvidas({
       status: "pendente",
       category: "",
       learning: "",
-      createdAt: new Date().toISOString()
+      needsReview: false,
+      createdAt: new Date().toISOString(),
     };
     setQuestions([newQ, ...questions]);
     setNewText("");
@@ -8081,211 +8527,860 @@ function BancoDeDuvidas({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-6 overflow-auto p-6">
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-6">
       {/* Cabeçalho */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <HelpCircle size={28} className="text-blue-700" />
           <div>
-            <h1 className="text-2xl font-black">Banco de Dúvidas</h1>
-            <p className="text-sm text-slate-500">Perguntas e comentários dos clientes</p>
+            <h1 className="text-2xl font-black">Banco de Duvidas</h1>
+            <p className="text-sm text-slate-500">Base de conhecimento dos clientes</p>
           </div>
           <Badge tone="slate">{questions.length}</Badge>
+          {needsReviewCount > 0 && (
+            <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-black text-orange-700">
+              {needsReviewCount} para revisar
+            </span>
+          )}
         </div>
-        <div className="flex gap-2">
+        {tab === "base" && (
           <button
             onClick={() => setShowNewForm((v) => !v)}
             className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white hover:bg-slate-950"
           >
             <Plus size={16} /> Nova pergunta
           </button>
+        )}
+      </div>
+
+      {/* Abas */}
+      <div className="flex gap-1 rounded-2xl border border-slate-200 bg-white p-1 self-start">
+        <button
+          onClick={() => setTab("chat")}
+          className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-black transition ${tab === "chat" ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+        >
+          <MessageSquare size={14} /> Chat
+        </button>
+        <button
+          onClick={() => setTab("base")}
+          className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-black transition ${tab === "base" ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+        >
+          <HelpCircle size={14} /> Base
+          {needsReviewCount > 0 && (
+            <span className="ml-1 rounded-full bg-orange-500 px-1.5 py-0.5 text-xs text-white">{needsReviewCount}</span>
+          )}
+        </button>
+      </div>
+
+      {/* ── ABA CHAT ── */}
+      {tab === "chat" && (
+        <div className="flex flex-1 flex-col gap-3">
+          <div className="flex flex-1 flex-col gap-3 overflow-auto rounded-3xl border border-slate-200 bg-white p-4 min-h-[300px]">
+            {chatMessages.length === 0 && (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 text-slate-400">
+                <MessageSquare size={36} />
+                <p className="text-sm font-bold">Pergunte algo sobre produtos da Embrepoli</p>
+                <p className="text-xs">A IA vai buscar a resposta no banco de duvidas aprovadas</p>
+              </div>
+            )}
+            {chatMessages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${msg.role === "user" ? "bg-blue-700 text-white" : msg.unknown ? "border border-orange-200 bg-orange-50 text-orange-800" : "bg-slate-100 text-slate-800"}`}>
+                  {msg.text}
+                </div>
+              </div>
+            ))}
+            {chatLoading && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl bg-slate-100 px-4 py-2.5 text-sm text-slate-500">Consultando banco...</div>
+              </div>
+            )}
+          </div>
+
+          {lastMsgUnknown && !chatLoading && (
+            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-3">
+              <p className="mb-2 text-xs font-black text-orange-700">Voce sabe a resposta? Salve para o banco:</p>
+              <textarea
+                value={unknownInput}
+                onChange={(e) => setUnknownInput(e.target.value)}
+                placeholder="Digite a resposta correta..."
+                lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                rows={2}
+                className="w-full resize-none rounded-xl border border-orange-200 bg-white px-3 py-2 text-sm outline-none focus:border-orange-400"
+              />
+              <div className="mt-2 flex gap-2">
+                <button
+                  onClick={handleSaveUnknown}
+                  disabled={!unknownInput.trim() || savingUnknown}
+                  className="rounded-xl bg-orange-600 px-4 py-1.5 text-xs font-black text-white hover:bg-orange-700 disabled:opacity-50"
+                >
+                  {savingUnknown ? "Salvando..." : "Salvar no banco"}
+                </button>
+                <button
+                  onClick={() => setChatMessages((prev) => { const copy = [...prev]; copy[copy.length - 1] = { ...copy[copy.length - 1], unknown: false }; return copy; })}
+                  className="rounded-xl bg-slate-100 px-4 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-200"
+                >
+                  Ignorar
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <input
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleChatSend()}
+              placeholder="Digite sua duvida..."
+              lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+              disabled={chatLoading}
+              className="flex-1 rounded-2xl border border-slate-200 bg-white px-4 py-2.5 text-sm outline-none focus:border-blue-500 disabled:bg-slate-50"
+            />
+            <button
+              onClick={handleChatSend}
+              disabled={!chatInput.trim() || chatLoading}
+              className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2.5 text-sm font-black text-white hover:bg-blue-800 disabled:opacity-50"
+            >
+              <Send size={14} /> Enviar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── ABA BASE ── */}
+      {tab === "base" && (
+        <div className="flex flex-1 flex-col gap-4">
+          {/* Cards de stats */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {(["pendente", "respondido", "aprovado", "descartado"] as CustomerQuestionStatus[]).map((s) => (
+              <button
+                key={s}
+                onClick={() => setFilterStatus(filterStatus === s ? "todas" : s)}
+                className={`rounded-2xl border p-4 text-left transition hover:border-blue-300 ${filterStatus === s ? "border-blue-500 bg-blue-50" : "border-slate-100 bg-white"}`}
+              >
+                <p className={`text-2xl font-black ${filterStatus === s ? "text-blue-700" : "text-slate-900"}`}>{counts[s]}</p>
+                <p className="text-sm font-bold text-slate-500">{STATUS_LABELS[s]}</p>
+              </button>
+            ))}
+          </div>
+
+          {showNewForm && (
+            <form onSubmit={addManual} className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+              <p className="mb-2 text-sm font-black text-blue-700">Nova pergunta manual</p>
+              <textarea
+                value={newText}
+                onChange={(e) => setNewText(e.target.value)}
+                placeholder="Digite a pergunta ou comentario do cliente..."
+                lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                rows={3}
+                className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
+              />
+              <div className="mt-2 flex gap-2">
+                <button type="submit" disabled={!newText.trim()} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Adicionar</button>
+                <button type="button" onClick={() => setShowNewForm(false)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600">Cancelar</button>
+              </div>
+            </form>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar pergunta ou autor..."
+              lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+              className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
+            />
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as CustomerQuestionStatus | "todas")}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+            >
+              <option value="todas">Todos os status</option>
+              {(["pendente", "respondido", "aprovado", "descartado"] as CustomerQuestionStatus[]).map((s) => (
+                <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+              ))}
+            </select>
+            <select
+              value={filterSource}
+              onChange={(e) => setFilterSource(e.target.value as CustomerQuestionSource | "todas")}
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+            >
+              <option value="todas">Todas as fontes</option>
+              <option value="youtube">YouTube</option>
+              <option value="manual">Manual</option>
+            </select>
+          </div>
+
+          <div className="flex min-h-0 flex-1 gap-4">
+            <div className={`flex flex-col gap-2 overflow-auto ${selected ? "w-1/2" : "w-full"}`}>
+              {filteredBase.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-slate-200 py-16 text-slate-400">
+                  <HelpCircle size={40} />
+                  <p className="font-bold">Nenhuma pergunta encontrada</p>
+                  <p className="text-sm">Importe comentarios em Comentarios ou adicione manualmente</p>
+                </div>
+              ) : (
+                filteredBase.map((q) => (
+                  <button
+                    key={q.id}
+                    onClick={() => openQuestion(q)}
+                    className={`flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition hover:border-blue-300 ${selected?.id === q.id ? "border-blue-500 bg-blue-50" : "border-slate-100 bg-white"}`}
+                  >
+                    <div className="mt-0.5 shrink-0">
+                      {q.source === "youtube" ? (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-100"><Youtube size={14} className="text-red-600" /></div>
+                      ) : (
+                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100"><MessageSquare size={14} className="text-slate-500" /></div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-2 text-sm font-bold text-slate-800">{q.questionText}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        {q.authorName && <span>{q.authorName}</span>}
+                        {q.videoTitle && <span className="truncate max-w-[160px]">📹 {q.videoTitle}</span>}
+                        <span>{q.createdAt.slice(0, 10)}</span>
+                        {q.likes > 0 && <span>👍 {q.likes}</span>}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      <span className={`rounded-xl px-2 py-1 text-xs font-black ${STATUS_COLORS[q.status]}`}>{STATUS_LABELS[q.status]}</span>
+                      {q.needsReview && !q.reviewedAt && (
+                        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-black text-orange-700">Revisar IA</span>
+                      )}
+                    </div>
+                  </button>
+                ))
+              )}
+            </div>
+
+            {selected && (
+              <div className="flex w-1/2 shrink-0 flex-col gap-4 overflow-auto rounded-3xl border border-slate-200 bg-white p-5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {selected.source === "youtube" ? (
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-100"><Youtube size={16} className="text-red-600" /></div>
+                    ) : (
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100"><MessageSquare size={16} className="text-slate-500" /></div>
+                    )}
+                    <span className={`rounded-xl px-2 py-1 text-xs font-black ${STATUS_COLORS[selected.status]}`}>{STATUS_LABELS[selected.status]}</span>
+                    {selected.needsReview && !selected.reviewedAt && (
+                      <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-black text-orange-700">Revisar IA</span>
+                    )}
+                  </div>
+                  <button onClick={() => setSelected(null)} className="rounded-xl bg-slate-100 p-1 hover:bg-slate-200"><X size={16} /></button>
+                </div>
+
+                <div className="space-y-1 rounded-2xl bg-slate-50 p-3 text-sm">
+                  {selected.authorName && <p><span className="font-black text-slate-500">Autor:</span> {selected.authorName}</p>}
+                  {selected.videoTitle && <p><span className="font-black text-slate-500">Video:</span> {selected.videoTitle}</p>}
+                  <p><span className="font-black text-slate-500">Data:</span> {selected.createdAt.slice(0, 10)}</p>
+                  {selected.likes > 0 && <p><span className="font-black text-slate-500">Curtidas:</span> {selected.likes}</p>}
+                  {selected.aiConfidence !== undefined && (
+                    <p><span className="font-black text-slate-500">Confianca IA:</span> {Math.round(selected.aiConfidence * 100)}%{selected.aiReason ? ` — ${selected.aiReason}` : ""}</p>
+                  )}
+                  {selected.reviewedAt && (
+                    <p className="text-emerald-600"><span className="font-black">Revisado em:</span> {selected.reviewedAt.slice(0, 10)}</p>
+                  )}
+                </div>
+
+                <div>
+                  <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Pergunta</p>
+                  <p className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-800">{selected.questionText}</p>
+                </div>
+
+                <div>
+                  <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Resposta</p>
+                  <textarea
+                    value={answerDraft}
+                    onChange={(e) => setAnswerDraft(e.target.value)}
+                    placeholder="Digite a resposta para esta pergunta..."
+                    lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                    rows={4}
+                    className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div>
+                  <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Aprendizado interno</p>
+                  <textarea
+                    value={learningDraft}
+                    onChange={(e) => setLearningDraft(e.target.value)}
+                    placeholder="Algum insight ou aprendizado para a equipe?"
+                    lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                    rows={2}
+                    className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <button onClick={() => saveAnswer("respondido")} className="flex-1 rounded-2xl bg-blue-700 px-3 py-2 text-sm font-black text-white hover:bg-blue-800">Salvar resposta</button>
+                  <button onClick={() => saveAnswer("aprovado")} className="flex-1 rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white hover:bg-emerald-700">Aprovar</button>
+                  {selected.needsReview && !selected.reviewedAt && (
+                    <button onClick={markReviewed} className="rounded-2xl bg-orange-100 px-3 py-2 text-sm font-black text-orange-700 hover:bg-orange-200">Marcar revisado</button>
+                  )}
+                  <button onClick={discardQuestion} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">Descartar</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ComentariosSection ───────────────────────────────────────────────────────
+
+function ComentariosSection({
+  comments,
+  setComments,
+  autoFilters,
+  setAutoFilters,
+  questions,
+  setQuestions,
+  currentUser,
+}: {
+  comments: Comment[];
+  setComments: (next: Comment[]) => void;
+  autoFilters: AutoFilter[];
+  setAutoFilters: (next: AutoFilter[]) => void;
+  questions: CustomerQuestion[];
+  setQuestions: (next: CustomerQuestion[]) => void;
+  currentUser: Profile;
+}) {
+  const [statusFilter, setStatusFilter] = useState<CommentStatus | "todos">("todos");
+  const [search, setSearch] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [newKeyword, setNewKeyword] = useState("");
+  const [newMatchType, setNewMatchType] = useState<"contains" | "startsWith" | "exact">("contains");
+  const [importModal, setImportModal] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [responses, setResponses] = useState<Record<string, string>>({});
+
+  const filtered = comments.filter((c) => {
+    if (statusFilter !== "todos" && c.status !== statusFilter) return false;
+    if (search && !c.text.toLowerCase().includes(search.toLowerCase()) && !c.authorName.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  function matchesFilter(text: string, filter: AutoFilter): boolean {
+    const t = text.toLowerCase();
+    const k = filter.keyword.toLowerCase();
+    if (filter.matchType === "startsWith") return t.startsWith(k);
+    if (filter.matchType === "exact") return t === k;
+    return t.includes(k);
+  }
+
+  async function handleImport(items: YouTubeCommentItem[]) {
+    const activeFilters = autoFilters.filter((f) => f.active);
+
+    // Ids já existentes no banco (para idempotência)
+    const existingExternalIds = new Set(questions.map((q) => q.externalId).filter(Boolean));
+
+    const newComments: Comment[] = items.map((item) => {
+      const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
+      return {
+        id: crypto.randomUUID(),
+        source: "youtube" as const,
+        externalId: item.commentId,
+        videoId: item.videoId,
+        videoTitle: item.videoTitle,
+        authorName: item.authorName,
+        text: item.text,
+        likes: item.likes,
+        status: "novo" as CommentStatus,
+        addedToBank: autoAdded,
+        publishedAt: item.publishedAt,
+        createdAt: new Date().toISOString(),
+      };
+    });
+
+    // Classificar com IA — guarda confiança e motivo por comentário
+    const classifyMap = new Map<string, { confidence: number; reason: string }>();
+    try {
+      const res = await fetch("/api/gemini-classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comments: newComments.map((c) => ({ id: c.id, text: c.text })) }),
+      });
+      if (res.ok) {
+        const { results } = await res.json() as {
+          results: Array<{ id: string; tipo: "duvida_relevante" | "normal"; confidence: number; reason: string }>;
+        };
+        for (const r of results) {
+          if (r.tipo === "duvida_relevante") {
+            const c = newComments.find((nc) => nc.id === r.id);
+            if (c) c.addedToBank = true;
+            classifyMap.set(r.id, { confidence: r.confidence, reason: r.reason });
+          }
+        }
+      }
+    } catch {
+      // Classificação falhou — continua sem ela
+    }
+
+    // Pré-gerar IDs das perguntas para linkar de volta nos comentários
+    const bankItems = newComments.filter(
+      (c) => c.addedToBank && !existingExternalIds.has(c.externalId)
+    );
+    const questionIdByCommentId = new Map<string, string>(
+      bankItems.map((c) => [c.id, crypto.randomUUID()])
+    );
+
+    // Atribuir bankQuestionId nos comentários antes de salvar
+    for (const c of newComments) {
+      const qId = questionIdByCommentId.get(c.id);
+      if (qId) c.bankQuestionId = qId;
+    }
+
+    const merged = [...newComments, ...comments];
+    setComments(merged);
+    if (supabase) {
+      await insertComments(supabase, newComments).catch(() => {});
+    }
+
+    // Criar e persistir CustomerQuestions para os itens relevantes (sem duplicatas)
+    if (bankItems.length > 0) {
+      const newQuestions: CustomerQuestion[] = bankItems.map((c) => {
+        const ai = classifyMap.get(c.id);
+        return {
+          id: questionIdByCommentId.get(c.id)!,
+          organizationId: currentUser.organizationId ?? "",
+          source: "youtube" as const,
+          externalId: c.externalId,
+          videoId: c.videoId,
+          videoTitle: c.videoTitle,
+          questionText: c.text,
+          answerText: "",
+          authorName: c.authorName,
+          likes: c.likes,
+          status: "aprovado" as CustomerQuestionStatus,
+          category: "",
+          learning: "",
+          needsReview: true,
+          sourceCommentId: c.id,
+          fromCommentId: c.id,
+          aiConfidence: ai?.confidence,
+          aiReason: ai?.reason,
+          publishedAt: c.publishedAt,
+          createdAt: new Date().toISOString(),
+        };
+      });
+      setQuestions([...newQuestions, ...questions]);
+      if (supabase) {
+        await insertCustomerQuestions(supabase, newQuestions).catch(() => {});
+      }
+    }
+
+    setImportModal(false);
+  }
+
+  async function handleStatusChange(comment: Comment, status: CommentStatus) {
+    const updated = comments.map((c) => c.id === comment.id ? { ...c, status } : c);
+    setComments(updated);
+    if (supabase) {
+      await saveComment(supabase, { ...comment, status }).catch(() => {});
+    }
+  }
+
+  async function handleAddToBank(comment: Comment) {
+    // Idempotência: não criar duplicata se já existe no banco
+    const alreadyInBank = questions.some(
+      (q) => q.externalId === comment.externalId || q.sourceCommentId === comment.id || q.fromCommentId === comment.id
+    );
+    if (alreadyInBank) return;
+
+    const questionId = crypto.randomUUID();
+    const updatedComment = { ...comment, addedToBank: true, bankQuestionId: questionId };
+    setComments(comments.map((c) => c.id === comment.id ? updatedComment : c));
+    if (supabase) {
+      await saveComment(supabase, updatedComment).catch(() => {});
+    }
+
+    const newQ: CustomerQuestion = {
+      id: questionId,
+      organizationId: currentUser.organizationId ?? "",
+      source: "youtube" as const,
+      externalId: comment.externalId,
+      videoId: comment.videoId,
+      videoTitle: comment.videoTitle,
+      questionText: comment.text,
+      answerText: "",
+      authorName: comment.authorName,
+      likes: comment.likes,
+      status: "aprovado" as CustomerQuestionStatus,
+      category: "",
+      learning: "",
+      needsReview: true,
+      sourceCommentId: comment.id,
+      fromCommentId: comment.id,
+      publishedAt: comment.publishedAt,
+      createdAt: new Date().toISOString(),
+    };
+    setQuestions([newQ, ...questions]);
+    if (supabase) {
+      await saveCustomerQuestion(supabase, newQ).catch(() => {});
+    }
+  }
+
+  async function handleSaveResponse(comment: Comment) {
+    const response = responses[comment.id] ?? "";
+    const updated = comments.map((c) => c.id === comment.id ? { ...c, response, status: "respondido" as CommentStatus } : c);
+    setComments(updated);
+    setSaving(comment.id);
+    if (supabase) {
+      await saveComment(supabase, { ...comment, response, status: "respondido" }).catch(() => {});
+    }
+    setSaving(null);
+  }
+
+  async function handleAddFilter() {
+    if (!newKeyword.trim()) return;
+    const filter: AutoFilter = {
+      id: crypto.randomUUID(),
+      keyword: newKeyword.trim(),
+      matchType: newMatchType,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+    const next = [...autoFilters, filter];
+    setAutoFilters(next);
+    setNewKeyword("");
+    if (supabase) {
+      await saveAutoFilter(supabase, filter).catch(() => {});
+    }
+  }
+
+  async function handleToggleFilter(filter: AutoFilter) {
+    const next = autoFilters.map((f) => f.id === filter.id ? { ...f, active: !f.active } : f);
+    setAutoFilters(next);
+    if (supabase) {
+      await saveAutoFilter(supabase, { ...filter, active: !filter.active }).catch(() => {});
+    }
+  }
+
+  async function handleDeleteFilter(filter: AutoFilter) {
+    const next = autoFilters.filter((f) => f.id !== filter.id);
+    setAutoFilters(next);
+    if (supabase) {
+      await deleteAutoFilter(supabase, filter.id).catch(() => {});
+    }
+  }
+
+  const statusLabels: Record<CommentStatus | "todos", string> = {
+    todos: "Todos",
+    novo: "Novos",
+    respondido: "Respondidos",
+    ignorado: "Ignorados",
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-2xl font-black text-slate-900">Comentários</h2>
+        <div className="flex gap-2">
           <button
-            onClick={() => setYtModal(true)}
-            className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50 px-4 py-2 text-sm font-black text-red-700 hover:bg-red-100"
+            onClick={() => setShowFilters(!showFilters)}
+            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
           >
-            <Youtube size={16} /> Importar do YouTube
+            <Settings size={14} /> Filtros automáticos
+          </button>
+          <button
+            onClick={() => setImportModal(true)}
+            className="flex items-center gap-2 rounded-2xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700"
+          >
+            <Youtube size={14} /> Importar YouTube
           </button>
         </div>
       </div>
 
-      {/* Cards de stats */}
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {(["pendente", "respondido", "aprovado", "descartado"] as CustomerQuestionStatus[]).map((s) => (
-          <button
-            key={s}
-            onClick={() => setFilterStatus(filterStatus === s ? "todas" : s)}
-            className={`rounded-2xl border p-4 text-left transition hover:border-blue-300 ${filterStatus === s ? "border-blue-500 bg-blue-50" : "border-slate-100 bg-white"}`}
-          >
-            <p className={`text-2xl font-black ${filterStatus === s ? "text-blue-700" : "text-slate-900"}`}>{counts[s]}</p>
-            <p className="text-sm font-bold text-slate-500">{STATUS_LABELS[s]}</p>
-          </button>
+      {/* Auto-filter panel */}
+      {showFilters && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4">
+          <h3 className="mb-3 text-sm font-black text-slate-700">Filtros automáticos por palavra-chave</h3>
+          <div className="mb-3 flex gap-2">
+            <input
+              value={newKeyword}
+              onChange={(e) => setNewKeyword(e.target.value)}
+              placeholder="Palavra-chave..."
+              className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+              onKeyDown={(e) => e.key === "Enter" && handleAddFilter()}
+            />
+            <select
+              value={newMatchType}
+              onChange={(e) => setNewMatchType(e.target.value as "contains" | "startsWith" | "exact")}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="contains">Contém</option>
+              <option value="startsWith">Começa com</option>
+              <option value="exact">Exato</option>
+            </select>
+            <button
+              onClick={handleAddFilter}
+              className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-bold text-white hover:bg-slate-700"
+            >
+              Adicionar
+            </button>
+          </div>
+          {autoFilters.length === 0 && (
+            <p className="text-sm text-slate-400">Nenhum filtro cadastrado.</p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {autoFilters.map((f) => (
+              <div key={f.id} className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-bold ${f.active ? "border-blue-200 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-50 text-slate-400"}`}>
+                <span>{f.keyword}</span>
+                <span className="opacity-60">({f.matchType === "contains" ? "contém" : f.matchType === "startsWith" ? "começa" : "exato"})</span>
+                <button onClick={() => handleToggleFilter(f)} className="hover:opacity-70">{f.active ? "●" : "○"}</button>
+                <button onClick={() => handleDeleteFilter(f)} className="hover:opacity-70"><X size={10} /></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Status filter + search */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex gap-1 rounded-2xl border border-slate-200 bg-white p-1">
+          {(["todos", "novo", "respondido", "ignorado"] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`rounded-xl px-3 py-1 text-xs font-bold ${statusFilter === s ? "bg-slate-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+            >
+              {statusLabels[s]}
+            </button>
+          ))}
+        </div>
+        <div className="relative flex-1">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar comentários..."
+            className="w-full rounded-2xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm"
+          />
+        </div>
+        <span className="text-xs text-slate-400">{filtered.length} comentário{filtered.length !== 1 ? "s" : ""}</span>
+      </div>
+
+      {/* Comment list */}
+      {filtered.length === 0 && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center">
+          <MessageSquare size={32} className="mx-auto mb-3 text-slate-300" />
+          <p className="text-sm text-slate-400">Nenhum comentário encontrado.</p>
+          <p className="mt-1 text-xs text-slate-300">Importe comentários do YouTube para começar.</p>
+        </div>
+      )}
+      <div className="flex flex-col gap-3">
+        {filtered.map((comment) => (
+          <div key={comment.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="mb-2 flex items-start justify-between gap-2">
+              <div>
+                <span className="text-sm font-black text-slate-800">{comment.authorName}</span>
+                {comment.videoTitle && <span className="ml-2 text-xs text-slate-400">· {comment.videoTitle}</span>}
+                {comment.likes > 0 && <span className="ml-2 text-xs text-slate-400">· {comment.likes} ❤</span>}
+              </div>
+              <div className="flex items-center gap-2">
+                {comment.addedToBank && (
+                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">No banco</span>
+                )}
+                <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${
+                  comment.status === "novo" ? "bg-blue-100 text-blue-700" :
+                  comment.status === "respondido" ? "bg-emerald-100 text-emerald-700" :
+                  "bg-slate-100 text-slate-500"
+                }`}>
+                  {comment.status === "novo" ? "Novo" : comment.status === "respondido" ? "Respondido" : "Ignorado"}
+                </span>
+              </div>
+            </div>
+            <p className="mb-3 text-sm text-slate-700">{comment.text}</p>
+            {comment.response && (
+              <div className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                <span className="font-bold">Resposta: </span>{comment.response}
+              </div>
+            )}
+            <textarea
+              value={responses[comment.id] ?? comment.response ?? ""}
+              onChange={(e) => setResponses((prev) => ({ ...prev, [comment.id]: e.target.value }))}
+              placeholder="Escrever resposta..."
+              rows={2}
+              className="mb-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-none"
+            />
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => handleSaveResponse(comment)}
+                disabled={saving === comment.id}
+                className="rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800 disabled:opacity-50"
+              >
+                {saving === comment.id ? "Salvando..." : "Salvar resposta"}
+              </button>
+              <button
+                onClick={() => handleStatusChange(comment, "ignorado")}
+                className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200"
+              >
+                Ignorar
+              </button>
+              {!comment.addedToBank && (
+                <button
+                  onClick={() => handleAddToBank(comment)}
+                  className="rounded-xl bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-200"
+                >
+                  + Adicionar ao Banco
+                </button>
+              )}
+            </div>
+          </div>
         ))}
       </div>
 
-      {/* Formulário nova pergunta */}
-      {showNewForm && (
-        <form onSubmit={addManual} className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-          <p className="mb-2 text-sm font-black text-blue-700">Nova pergunta manual</p>
-          <textarea
-            value={newText}
-            onChange={(e) => setNewText(e.target.value)}
-            placeholder="Digite a pergunta ou comentário do cliente..."
-            lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
-            rows={3}
-            className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
-          />
-          <div className="mt-2 flex gap-2">
-            <button type="submit" disabled={!newText.trim()} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Adicionar</button>
-            <button type="button" onClick={() => setShowNewForm(false)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600">Cancelar</button>
-          </div>
-        </form>
-      )}
-
-      {/* Filtros */}
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar pergunta ou autor..."
-          lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
-          className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
+      {importModal && (
+        <CommentImportModal
+          existingComments={comments}
+          autoFilters={autoFilters}
+          onImport={handleImport}
+          onClose={() => setImportModal(false)}
         />
-        <select
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value as CustomerQuestionStatus | "todas")}
-          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
-        >
-          <option value="todas">Todos os status</option>
-          {(["pendente", "respondido", "aprovado", "descartado"] as CustomerQuestionStatus[]).map((s) => (
-            <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-          ))}
-        </select>
-        <select
-          value={filterSource}
-          onChange={(e) => setFilterSource(e.target.value as CustomerQuestionSource | "todas")}
-          className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
-        >
-          <option value="todas">Todas as fontes</option>
-          <option value="youtube">YouTube</option>
-          <option value="manual">Manual</option>
-        </select>
-      </div>
+      )}
+    </div>
+  );
+}
 
-      {/* Layout lista + detalhe */}
-      <div className="flex min-h-0 flex-1 gap-4">
-        {/* Lista */}
-        <div className={`flex flex-col gap-2 overflow-auto ${selected ? "w-1/2" : "w-full"}`}>
-          {filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-slate-200 py-16 text-slate-400">
-              <HelpCircle size={40} />
-              <p className="font-bold">Nenhuma pergunta encontrada</p>
-              <p className="text-sm">Adicione manualmente ou importe do YouTube</p>
-            </div>
-          ) : (
-            filtered.map((q) => (
-              <button
-                key={q.id}
-                onClick={() => openQuestion(q)}
-                className={`flex w-full items-start gap-3 rounded-2xl border p-4 text-left transition hover:border-blue-300 ${selected?.id === q.id ? "border-blue-500 bg-blue-50" : "border-slate-100 bg-white"}`}
-              >
-                <div className="mt-0.5 shrink-0">
-                  {q.source === "youtube" ? (
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-red-100"><Youtube size={14} className="text-red-600" /></div>
-                  ) : (
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-100"><MessageSquare size={14} className="text-slate-500" /></div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="line-clamp-2 text-sm font-bold text-slate-800">{q.questionText}</p>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    {q.authorName && <span>{q.authorName}</span>}
-                    {q.videoTitle && <span className="truncate max-w-[160px]">📹 {q.videoTitle}</span>}
-                    <span>{q.createdAt.slice(0, 10)}</span>
-                    {q.likes > 0 && <span>👍 {q.likes}</span>}
-                  </div>
-                </div>
-                <span className={`shrink-0 rounded-xl px-2 py-1 text-xs font-black ${STATUS_COLORS[q.status]}`}>
-                  {STATUS_LABELS[q.status]}
-                </span>
-              </button>
-            ))
-          )}
+// ─── CommentImportModal ───────────────────────────────────────────────────────
+
+function CommentImportModal({
+  existingComments,
+  autoFilters,
+  onImport,
+  onClose,
+}: {
+  existingComments: Comment[];
+  autoFilters: AutoFilter[];
+  onImport: (items: YouTubeCommentItem[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [step, setStep] = useState<"pick" | "loading" | "confirm">("pick");
+  const [videos, setVideos] = useState<YouTubeChannelVideo[]>([]);
+  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
+  const [loadingVideos, setLoadingVideos] = useState(false);
+  const [fetchedComments, setFetchedComments] = useState<YouTubeCommentItem[]>([]);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    setLoadingVideos(true);
+    listMyYouTubeChannelVideos((p) => {
+      if (p.phase === "fetching-channel") setProgress("Buscando canal...");
+      else if (p.phase === "listing") setProgress(`Listando vídeos... (${p.collected})`);
+      else setProgress(`Carregando estatísticas... (${p.done}/${p.total})`);
+    })
+      .then((list) => {
+        setVideos(list);
+        setProgress("");
+        setStep("pick");
+      })
+      .catch((e) => setError(String(e?.message ?? e)))
+      .finally(() => setLoadingVideos(false));
+  }, []);
+
+  async function fetchComments(videoId: string, videoTitle: string) {
+    setLoadingComments(true);
+    setError(null);
+    try {
+      const items = await listVideoComments(videoId, videoTitle, 200);
+      const existingIds = new Set(existingComments.map((c) => c.externalId).filter(Boolean));
+      const newItems = items.filter((i) => !existingIds.has(i.commentId));
+      setFetchedComments(newItems);
+      setStep("confirm");
+    } catch (e: any) {
+      setError(String(e?.message ?? e));
+    } finally {
+      setLoadingComments(false);
+    }
+  }
+
+  async function handleImport() {
+    setImporting(true);
+    await onImport(fetchedComments);
+    setImporting(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-lg font-black text-slate-900">Importar comentários do YouTube</h3>
+          <button onClick={onClose} className="rounded-full p-1 hover:bg-slate-100"><X size={18} /></button>
         </div>
 
-        {/* Painel de detalhe */}
-        {selected && (
-          <div className="flex w-1/2 shrink-0 flex-col gap-4 overflow-auto rounded-3xl border border-slate-200 bg-white p-5">
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex items-center gap-2">
-                {selected.source === "youtube" ? (
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-red-100"><Youtube size={16} className="text-red-600" /></div>
-                ) : (
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100"><MessageSquare size={16} className="text-slate-500" /></div>
-                )}
-                <span className={`rounded-xl px-2 py-1 text-xs font-black ${STATUS_COLORS[selected.status]}`}>{STATUS_LABELS[selected.status]}</span>
-              </div>
-              <button onClick={() => setSelected(null)} className="rounded-xl bg-slate-100 p-1 hover:bg-slate-200"><X size={16} /></button>
-            </div>
+        {error && (
+          <div className="mb-4 rounded-2xl bg-rose-50 p-3 text-sm text-rose-700">{error}</div>
+        )}
 
-            {/* Metadados */}
-            <div className="space-y-1 rounded-2xl bg-slate-50 p-3 text-sm">
-              {selected.authorName && <p><span className="font-black text-slate-500">Autor:</span> {selected.authorName}</p>}
-              {selected.videoTitle && <p><span className="font-black text-slate-500">Vídeo:</span> {selected.videoTitle}</p>}
-              <p><span className="font-black text-slate-500">Data:</span> {selected.createdAt.slice(0, 10)}</p>
-              {selected.likes > 0 && <p><span className="font-black text-slate-500">Curtidas:</span> {selected.likes}</p>}
-            </div>
+        {(loadingVideos || loadingComments) && (
+          <div className="py-8 text-center text-sm text-slate-500">{progress || "Carregando..."}</div>
+        )}
 
-            {/* Pergunta */}
-            <div>
-              <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Pergunta</p>
-              <p className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-800">{selected.questionText}</p>
-            </div>
+        {step === "pick" && !loadingVideos && (
+          <div className="flex flex-col gap-2 max-h-80 overflow-y-auto">
+            {videos.length === 0 && !loadingVideos && (
+              <p className="text-sm text-slate-400">Nenhum vídeo encontrado.</p>
+            )}
+            {videos.map((v) => (
+              <button
+                key={v.videoId}
+                onClick={() => {
+                  setSelectedVideoId(v.videoId);
+                  fetchComments(v.videoId, v.title);
+                }}
+                className={`flex items-center gap-3 rounded-2xl border p-3 text-left hover:border-blue-300 hover:bg-blue-50 ${selectedVideoId === v.videoId ? "border-blue-400 bg-blue-50" : "border-slate-200"}`}
+              >
+                {v.thumbnail && <img src={v.thumbnail} className="h-12 w-20 rounded-lg object-cover" alt="" />}
+                <div className="flex-1 min-w-0">
+                  <p className="truncate text-sm font-bold text-slate-800">{v.title}</p>
+                  <p className="text-xs text-slate-400">{v.commentCount} comentários · {v.publishedAt}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
 
-            {/* Resposta */}
-            <div>
-              <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Resposta</p>
-              <textarea
-                value={answerDraft}
-                onChange={(e) => setAnswerDraft(e.target.value)}
-                placeholder="Digite a resposta para esta pergunta..."
-                lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
-                rows={4}
-                className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-              />
+        {step === "confirm" && !loadingComments && (
+          <div>
+            <p className="mb-4 text-sm text-slate-600">
+              {fetchedComments.length} novo{fetchedComments.length !== 1 ? "s" : ""} comentário{fetchedComments.length !== 1 ? "s" : ""} encontrado{fetchedComments.length !== 1 ? "s" : ""}.
+            </p>
+            <div className="mb-4 flex flex-col gap-2 max-h-52 overflow-y-auto">
+              {fetchedComments.slice(0, 5).map((c) => (
+                <div key={c.commentId} className="rounded-xl border border-slate-100 bg-slate-50 p-2 text-xs text-slate-700">
+                  <span className="font-bold">{c.authorName}: </span>{c.text}
+                </div>
+              ))}
+              {fetchedComments.length > 5 && (
+                <p className="text-xs text-slate-400">... e mais {fetchedComments.length - 5} comentários.</p>
+              )}
             </div>
-
-            {/* Aprendizado */}
-            <div>
-              <p className="mb-1 text-xs font-black uppercase tracking-wider text-slate-400">Aprendizado interno</p>
-              <textarea
-                value={learningDraft}
-                onChange={(e) => setLearningDraft(e.target.value)}
-                placeholder="Algum insight ou aprendizado para a equipe?"
-                lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
-                rows={2}
-                className="w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-              />
-            </div>
-
-            {/* Ações */}
-            <div className="flex flex-wrap gap-2">
-              <button onClick={() => saveAnswer("respondido")} className="flex-1 rounded-2xl bg-blue-700 px-3 py-2 text-sm font-black text-white hover:bg-blue-800">Salvar resposta</button>
-              <button onClick={() => saveAnswer("aprovado")} className="flex-1 rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white hover:bg-emerald-700">Aprovar</button>
-              <button onClick={discardQuestion} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">Descartar</button>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setStep("pick")}
+                className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+              >
+                Voltar
+              </button>
+              <button
+                onClick={handleImport}
+                disabled={importing || fetchedComments.length === 0}
+                className="flex-1 rounded-2xl bg-blue-700 py-2 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50"
+              >
+                {importing ? "Importando..." : "Importar"}
+              </button>
             </div>
           </div>
         )}
       </div>
-
-      {ytModal && (
-        <YoutubeImportModal
-          existingQuestions={questions}
-          onImport={onYoutubeImport}
-          onClose={() => setYtModal(false)}
-          currentUser={currentUser}
-        />
-      )}
     </div>
   );
 }

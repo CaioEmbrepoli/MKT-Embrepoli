@@ -1,12 +1,12 @@
-# Embrepoli Marketing App — Documentação do Sistema
+# Gestão Embrepoli — Documentação do Sistema
 
-> Documento gerado em 2026-05-20. Alimenta a memória persistente do assistente de IA para este projeto.
+> Documento gerado em 2026-05-20. Última atualização: 2026-05-21. Alimenta a memória persistente do assistente de IA para este projeto.
 
 ---
 
 ## 1. Visão Geral
 
-O **Embrepoli Marketing App** é uma ferramenta interna de gestão de marketing desenvolvida para a equipe da Embrepoli. Centraliza o planejamento, produção, revisão e análise de conteúdo de marketing em um único sistema.
+O **Gestão Embrepoli** (anteriormente "Embrepoli Marketing App") é uma ferramenta interna de gestão de marketing desenvolvida para a equipe da Embrepoli. Centraliza o planejamento, produção, revisão, análise de conteúdo e CRM de comentários do YouTube em um único sistema.
 
 **URL de produção:** `mkt-embrepoli.vercel.app`  
 **Repositório:** `github.com/CaioEmbrepoli/MKT-Embrepoli`
@@ -17,7 +17,7 @@ O **Embrepoli Marketing App** é uma ferramenta interna de gestão de marketing 
 - **Storage:** Supabase Storage (imagens, vídeos, documentos)
 - **Autenticação:** Supabase Auth (email/senha)
 - **Deploy:** Vercel (CI/CD automático via push para `main`)
-- **Integrações:** Google Drive API, YouTube Data API v3
+- **Integrações:** Google Drive API, YouTube Data API v3, Ollama (IA local), Gemini AI (fallback)
 
 ---
 
@@ -26,7 +26,7 @@ O **Embrepoli Marketing App** é uma ferramenta interna de gestão de marketing 
 ```
 C:\Caio\app\
 ├── app/
-│   ├── page.tsx          # UI principal (~7500 linhas) — TUDO está aqui
+│   ├── page.tsx          # UI principal (~8800 linhas) — TUDO está aqui
 │   ├── layout.tsx        # Layout raiz (lang="pt-BR", metadata)
 │   ├── globals.css       # Estilos globais
 │   └── api/
@@ -36,17 +36,19 @@ C:\Caio\app\
 │       │   ├── oauth/         # Fluxo OAuth Google
 │       │   ├── disconnect/    # Desconectar serviço Google
 │       │   ├── drive/         # Listagem e thumbnails do Drive
-│       │   └── youtube/       # Uploads e stats do YouTube
+│       │   └── youtube/       # Uploads, stats e comentários do YouTube
 │       ├── drive-thumb/       # Thumbnail do Drive (backup)
 │       ├── drive-thumb-by-id/ # Thumbnail por ID
 │       ├── dev-login/         # Login automático em desenvolvimento
 │       ├── task-resets/       # Endpoint para reset de metas
+│       ├── gemini-chat/       # Chat de IA para Banco de Dúvidas (Ollama/Gemini)
+│       ├── gemini-classify/   # Classificação em batch de comentários (Ollama/Gemini)
 │       └── cron/
 │           └── metrics-update/ # Cron de atualização de métricas
 ├── lib/
 │   ├── types.ts          # Todos os tipos TypeScript do sistema
 │   ├── supabase-data.ts  # Camada de dados (leitura/escrita no Supabase)
-│   └── google-api.ts     # Integração com APIs do Google
+│   └── google-api.ts     # Integração com APIs do Google e YouTube
 └── supabase/             # Migrations SQL do banco de dados
 ```
 
@@ -87,6 +89,43 @@ Todas as tabelas têm isolamento por `organization_id` via Row-Level Security (R
 | `post_metric_snapshots` | Histórico de métricas |
 | `notifications` | Notificações dos usuários |
 | `calendar_dates` | Datas especiais no calendário |
+| `comments` | Comentários do YouTube importados (CRM) ⚠️ migration pendente |
+| `auto_filters` | Filtros automáticos de palavras-chave para comentários ⚠️ migration pendente |
+
+> **Migrations pendentes para novas tabelas:**
+> ```sql
+> -- Tabela de comentários
+> CREATE TABLE IF NOT EXISTS comments (
+>   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+>   organization_id uuid NOT NULL,
+>   source text NOT NULL DEFAULT 'youtube',
+>   external_id text,
+>   video_id text,
+>   video_title text,
+>   author_name text NOT NULL DEFAULT '',
+>   text text NOT NULL DEFAULT '',
+>   likes integer NOT NULL DEFAULT 0,
+>   response text,
+>   status text NOT NULL DEFAULT 'novo',
+>   added_to_bank boolean NOT NULL DEFAULT false,
+>   published_at timestamptz,
+>   created_at timestamptz NOT NULL DEFAULT now(),
+>   UNIQUE (organization_id, external_id)
+> );
+> 
+> -- Tabela de filtros automáticos
+> CREATE TABLE IF NOT EXISTS auto_filters (
+>   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+>   organization_id uuid NOT NULL,
+>   keyword text NOT NULL,
+>   match_type text NOT NULL DEFAULT 'contains',
+>   active boolean NOT NULL DEFAULT true,
+>   created_at timestamptz NOT NULL DEFAULT now()
+> );
+> 
+> -- Coluna em customer_questions
+> ALTER TABLE customer_questions ADD COLUMN IF NOT EXISTS from_comment_id uuid;
+> ```
 
 ---
 
@@ -117,7 +156,33 @@ Registro e análise de performance. Métricas podem ser vinculadas a posts espec
 
 Gráficos de pizza e barras mostram breakdowns por canal, tipo de conteúdo, linha de produto, tipo de veículo e etapa do funil. Suporta filtros múltiplos simultâneos.
 
-### 4.8 Configurações
+### 4.8 Banco de Dúvidas
+Base de conhecimento interna com chat de IA. Visível apenas para **admin**.
+
+**Dois painéis:**
+- **Chat de IA (esquerda):** Usuário faz uma pergunta → IA busca no banco de Q&A aprovadas → responde. Se não encontrar, envia para fila pendente.
+- **Base de Conhecimento (direita):** Lista de perguntas/respostas com filtro de status (pendente/aprovado/respondido). Admin pode responder perguntas pendentes inline.
+
+**Integração IA:** `POST /api/gemini-chat` — usa Ollama (se configurado) ou Gemini como fallback.
+
+**Fluxo de pendência:** Se IA não sabe responder → insere `CustomerQuestion` com status `pendente` → admin responde pelo painel direito → entra no banco e IA passa a responder.
+
+### 4.9 Comentários
+CRM de comentários importados do YouTube. Visível apenas para **admin**.
+
+**Funcionalidades:**
+- Importação de comentários de vídeos do YouTube via OAuth backend-mediated
+- Classificação automática via IA (Ollama/Gemini): `duvida_relevante` ou `normal` — 1 chamada em batch por importação
+- Filtros automáticos por palavras-chave (override manual, antes da IA)
+- Ações por comentário: Responder, Ignorar, Adicionar ao Banco de Dúvidas
+
+**Status de comentário:** `novo` → `respondido` / `ignorado`
+
+**Integração IA:** `POST /api/gemini-classify` — classifica todos os comentários em lote.
+
+**Adicionando ao banco:** Ao clicar "+ Adicionar ao Banco", comentário vira `CustomerQuestion` pendente no Banco de Dúvidas, com rastreabilidade via `fromCommentId`.
+
+### 4.11 Configurações
 Painel administrativo dividido em abas:
 - **Equipe:** Gerenciamento de usuários, aprovação de cadastros, roles
 - **Funil:** Criação/edição de etapas do funil com cores e ordenação
@@ -215,6 +280,41 @@ vehicleTypeId, contentTypeId, funnelStageId, date, reach, likes, comments,
 shares, clicks, leads, notes, learning, videoType, privacyStatus, externalId
 ```
 
+### CustomerQuestion
+```typescript
+id, organizationId, questionText, answerText, category, status,
+authorName, likes, learning, reviewerId, publishedAt, answeredAt,
+createdAt, needsReview (boolean), fromCommentId? (rastreabilidade)
+```
+
+### Comment
+```typescript
+id, organizationId, source ("youtube"), externalId?, videoId?, videoTitle?,
+authorName, text, likes, response?, status (CommentStatus),
+addedToBank (boolean), publishedAt?, createdAt
+```
+
+### CommentStatus
+```typescript
+"novo" | "respondido" | "ignorado"
+```
+
+### AutoFilter
+```typescript
+id, organizationId, keyword, matchType (AutoFilterMatchType), active, createdAt
+```
+
+### AutoFilterMatchType
+```typescript
+"contains" | "startsWith" | "exact"
+```
+
+### YouTubeCommentItem
+```typescript
+commentId, videoId, videoTitle, authorName, text, likes, publishedAt
+```
+*(Tipo de transporte — usado na busca de comentários do YouTube, não persistido diretamente)*
+
 ### PostReviewAsset
 ```typescript
 id, postId, name, type (arquivo|foto|video), status, uploadedBy, reviewedBy,
@@ -284,11 +384,36 @@ Em `localhost`, existe bypass automático de login via `/api/dev-login`.
 - **Vinculação:** Vídeos YouTube podem ser linkados a posts via `publishedVideoId` (formato `yt:VIDEO_ID`)
 - **Import:** Processo multi-fase com indicador de progresso
 
+### Ollama (IA Local — Primário)
+- **O que é:** LLM server local, exposto via Cloudflare Tunnel (URL permanente gratuita)
+- **Endpoint:** Configurado via variável `OLLAMA_HOST` (ex: `https://xyz.trycloudflare.com`)
+- **Modelo padrão:** `llama3.2` (configurável via `OLLAMA_MODEL`)
+- **Ativação:** Se `OLLAMA_HOST` estiver definido, todas as chamadas de IA usam Ollama
+- **APIs:** `/api/chat` (gemini-chat) e `/api/generate` com `format: "json"` (gemini-classify)
+- **Status:** Variável comentada no `.env.local` — ainda não configurado
+
+> **Setup para ativar (salvo para fazer depois):**
+> 1. Baixar Ollama: `https://ollama.com/download` → instalar no Windows
+> 2. No terminal: `ollama pull llama3.2`
+> 3. Instalar cloudflared: `winget install Cloudflare.cloudflared`
+> 4. Criar tunnel permanente: `cloudflared tunnel --url http://localhost:11434`
+> 5. Copiar a URL gerada (ex: `https://xyz.trycloudflare.com`)
+> 6. No `.env.local`: descomentar e preencher `OLLAMA_HOST=https://xyz.trycloudflare.com`
+> 7. Na Vercel: adicionar `OLLAMA_HOST` e `OLLAMA_MODEL=llama3.2` nas env vars
+> 8. Alternativa gratuita com domínio fixo: ngrok com 1 static domain (`ngrok http 11434`)
+
+### Gemini AI (Fallback — quando Ollama não configurado)
+- **Modelo:** `gemini-2.0-flash`
+- **Biblioteca:** `@google/generative-ai` (instalada no projeto)
+- **Variável:** `GEMINI_API_KEY` (não configurada no `.env.local` ainda)
+- **Uso:** Classificação de comentários (`/api/gemini-classify`) e chat de dúvidas (`/api/gemini-chat`)
+- **Ativação automática:** Se `OLLAMA_HOST` não estiver definido, usa Gemini
+
 ### Supabase
 - **Banco de dados:** PostgreSQL com RLS por `organization_id`
 - **Storage:** Arquivos de usuário (avatares, anexos, artes)
 - **Auth:** Email/senha com confirmação e recuperação
-- **Realtime:** Subscriptions WebSocket para sincronização automática
+- **Realtime:** Subscriptions WebSocket para sincronização automática — inclui tabelas `comments` e `auto_filters`
 
 ---
 
@@ -306,7 +431,10 @@ Em `localhost`, existe bypass automático de login via `/api/dev-login`.
 | `/api/drive-thumb` | GET | Thumbnail Drive (endpoint backup) |
 | `/api/drive-thumb-by-id` | GET | Thumbnail por ID do arquivo |
 | `/api/dev-login` | POST | Login automático (apenas desenvolvimento) |
+| `/api/google/youtube/comments` | GET | Comentários de um vídeo YouTube (backend-mediated) |
 | `/api/task-resets` | POST | Reset de metas por frequência |
+| `/api/gemini-chat` | POST | Chat de IA para Banco de Dúvidas (Ollama ou Gemini) |
+| `/api/gemini-classify` | POST | Classificação em batch de comentários (Ollama ou Gemini) |
 | `/api/cron/metrics-update` | GET | Atualização automática de métricas (cron) |
 
 ---

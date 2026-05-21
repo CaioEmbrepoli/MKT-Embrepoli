@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Embrepoli Marketing",
-  description: "Organização interna de marketing da Embrepoli",
+  title: "Gestão Embrepoli",
+  description: "Gestão interna de marketing e vendas da Embrepoli",
   icons: {
     icon: "/favicon.png",
     shortcut: "/favicon.png",
