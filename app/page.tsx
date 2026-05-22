@@ -57,6 +57,7 @@ import {
   Users,
   X,
   Youtube,
+  Wand2,
   type LucideIcon
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
@@ -5074,6 +5075,7 @@ function TeamSettings({ profiles, profileAreas, profileModulePermissions, setPro
     hasModulePermission(currentUser, "vendas", "configuracoes", "manage", profileAreas, profileModulePermissions);
   const [teamFilter, setTeamFilter] = useState<"Todos" | "Marketing" | "Vendas" | "Sem equipe">("Todos");
   const [resettingProfileId, setResettingProfileId] = useState("");
+  const [sendingMagicLinkId, setSendingMagicLinkId] = useState("");
   const [resetMessage, setResetMessage] = useState("");
   const [resetError, setResetError] = useState("");
   const pendingCount = profiles.filter((p) => !p.active).length;
@@ -5095,6 +5097,22 @@ function TeamSettings({ profiles, profileAreas, profileModulePermissions, setPro
     Vendas: profiles.filter((profile) => areaSetForProfile(profile.id).has("vendas")).length,
     "Sem equipe": profiles.filter((profile) => areaSetForProfile(profile.id).size === 0).length
   };
+  async function sendMagicLink(profile: Profile) {
+    if (!canManageTeam || sendingMagicLinkId || !supabase) return;
+    setSendingMagicLinkId(profile.id);
+    setResetMessage("");
+    setResetError("");
+    try {
+      const { error } = await supabase.auth.signInWithOtp({ email: profile.email });
+      if (error) throw error;
+      setResetMessage(`Link de acesso enviado para ${profile.email}.`);
+    } catch (error) {
+      setResetError(error instanceof Error ? error.message : "Não foi possível enviar o link de acesso.");
+    } finally {
+      setSendingMagicLinkId("");
+    }
+  }
+
   async function sendReset(profile: Profile) {
     if (!canManageTeam || resettingProfileId) return;
     setResettingProfileId(profile.id);
@@ -5163,6 +5181,20 @@ function TeamSettings({ profiles, profileAreas, profileModulePermissions, setPro
             <Badge tone="blue">{roleLabel[profile.role]}</Badge>
             {canManageTeam && (
               <div className="flex flex-wrap gap-2">
+                <div className="relative group">
+                  <button
+                    type="button"
+                    disabled={sendingMagicLinkId === profile.id}
+                    onClick={() => sendMagicLink(profile)}
+                    className="rounded-2xl bg-violet-100 p-2 text-violet-700 transition hover:bg-violet-200 disabled:cursor-wait disabled:opacity-50"
+                    aria-label="Enviar magic link"
+                  >
+                    {sendingMagicLinkId === profile.id ? <span className="block h-4 w-4 animate-spin rounded-full border-2 border-violet-400 border-t-transparent" /> : <Wand2 size={16} />}
+                  </button>
+                  <div className="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 w-48 -translate-x-1/2 rounded-2xl bg-slate-900 px-3 py-2 text-center text-xs font-bold text-white opacity-0 transition-opacity group-hover:opacity-100">
+                    Magic link — envia um link por email para a pessoa entrar sem precisar de senha
+                  </div>
+                </div>
                 <button
                   type="button"
                   disabled={resettingProfileId === profile.id}
@@ -6221,7 +6253,10 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
 
       let created = 0;
       let updated = 0;
-      const importedRows: PostMetric[] = videos.map((v) => {
+      // Deduplica vídeos por videoId — a API do YouTube pode retornar duplicatas
+      const uniqueVideos = Array.from(new Map(videos.map((v) => [v.videoId, v])).values());
+
+      const importedRows: PostMetric[] = uniqueVideos.map((v) => {
         const externalId = `yt:${v.videoId}`;
         const linkedPost = posts.find((p) => p.publishedVideoId === v.videoId);
         const existing = byExt.get(externalId) ?? (linkedPost ? byPostId.get(linkedPost.id) : undefined);
@@ -6255,7 +6290,7 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
       });
 
       // Coleta snapshots dos vídeos existentes cujos valores mudaram (guarda os valores ANTIGOS)
-      const snapshots: PostMetricSnapshot[] = videos
+      const snapshots: PostMetricSnapshot[] = uniqueVideos
         .map((v) => {
           const externalId = `yt:${v.videoId}`;
           const linkedPost = posts.find((p) => p.publishedVideoId === v.videoId);
@@ -7685,24 +7720,27 @@ function TeamMemberModal({ modal, currentUser, profiles, profileAreas, profileMo
       area,
       active: true
     }));
-    const nextPermissions: ProfileModulePermission[] = selectedAreas.flatMap((area) =>
-      menusForArea(area).map((item) => ({
-        id: profilePermissionId(member.id, area, item.moduleId),
-        profileId: member.id,
-        area,
-        moduleId: item.moduleId,
-        canView: form.get(`permission-${area}-${item.moduleId}-view`) === "on",
-        canCreate: form.get(`permission-${area}-${item.moduleId}-create`) === "on",
-        canEdit: form.get(`permission-${area}-${item.moduleId}-edit`) === "on",
-        canDelete: form.get(`permission-${area}-${item.moduleId}-delete`) === "on",
-        canApprove: form.get(`permission-${area}-${item.moduleId}-approve`) === "on",
-        canManage: form.get(`permission-${area}-${item.moduleId}-manage`) === "on"
-      }))
-    );
-
     setProfiles((current) => current.map((profile) => (profile.id === member.id ? updated : profile)));
     setProfileAreas((current) => [...current.filter((area) => area.profileId !== member.id), ...nextAreas]);
-    setProfileModulePermissions((current) => [...current.filter((permission) => permission.profileId !== member.id), ...nextPermissions]);
+
+    if (currentUser?.role === "admin") {
+      const nextPermissions: ProfileModulePermission[] = selectedAreas.flatMap((area) =>
+        menusForArea(area).map((item) => ({
+          id: profilePermissionId(member.id, area, item.moduleId),
+          profileId: member.id,
+          area,
+          moduleId: item.moduleId,
+          canView: form.get(`permission-${area}-${item.moduleId}-view`) === "on",
+          canCreate: form.get(`permission-${area}-${item.moduleId}-create`) === "on",
+          canEdit: form.get(`permission-${area}-${item.moduleId}-edit`) === "on",
+          canDelete: form.get(`permission-${area}-${item.moduleId}-delete`) === "on",
+          canApprove: form.get(`permission-${area}-${item.moduleId}-approve`) === "on",
+          canManage: form.get(`permission-${area}-${item.moduleId}-manage`) === "on"
+        }))
+      );
+      setProfileModulePermissions((current) => [...current.filter((permission) => permission.profileId !== member.id), ...nextPermissions]);
+    }
+
     close();
   }
 
@@ -7726,7 +7764,11 @@ function TeamMemberModal({ modal, currentUser, profiles, profileAreas, profileMo
       <TextArea name="bio" label="Bio curta" defaultValue={member.bio} />
       <div className="md:col-span-2 rounded-3xl border border-slate-100 bg-slate-50 p-4">
         <p className="font-black">Equipes</p>
-        <p className="mt-1 text-sm font-bold text-slate-500">Marcar uma equipe libera todas as telas daquela área. Depois você pode ajustar permissões específicas abaixo.</p>
+        <p className="mt-1 text-sm font-bold text-slate-500">
+          {currentUser?.role === "admin"
+            ? "Marcar uma equipe libera todas as telas daquela área. Depois você pode ajustar permissões específicas abaixo."
+            : "Selecione a qual equipe este membro pertence."}
+        </p>
         <div className="mt-3 flex flex-wrap gap-3">
           {appAreas.map((area) => (
             <label key={area.id} className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 text-sm font-black text-slate-700">
@@ -7734,14 +7776,14 @@ function TeamMemberModal({ modal, currentUser, profiles, profileAreas, profileMo
                 name={`area-${area.id}`}
                 type="checkbox"
                 defaultChecked={memberAreaSet.has(area.id)}
-                onChange={(event) => setAreaPermissionsInForm(area.id, event.currentTarget.checked)}
+                onChange={(event) => currentUser?.role === "admin" && setAreaPermissionsInForm(area.id, event.currentTarget.checked)}
               />
               {area.label}
             </label>
           ))}
         </div>
       </div>
-      <div className="md:col-span-2 space-y-4">
+      {currentUser?.role === "admin" && <div className="md:col-span-2 space-y-4">
         {appAreas.map((area) => (
           <div key={area.id} className="rounded-3xl border border-slate-100 bg-white p-4">
             <h3 className="font-black">{area.label}</h3>
@@ -7778,7 +7820,7 @@ function TeamMemberModal({ modal, currentUser, profiles, profileAreas, profileMo
             </div>
           </div>
         ))}
-      </div>
+      </div>}
       {saveErr && (
         <p className="md:col-span-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">
           ⚠️ {saveErr}
