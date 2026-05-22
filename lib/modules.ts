@@ -30,7 +30,7 @@ export const marketingModules = [
   { sectionId: "marketing-campanhas", moduleId: "campanhas", area: "marketing", label: "Campanhas" },
   { sectionId: "marketing-metricas", moduleId: "metricas", area: "marketing", label: "Métricas" },
   { sectionId: "marketing-comentarios", moduleId: "comentarios", area: "marketing", label: "Comentários" },
-  { sectionId: "marketing-banco-duvidas", moduleId: "banco-duvidas", area: "marketing", label: "Banco de Dúvidas" },
+  { sectionId: "marketing-banco-duvidas", moduleId: "banco-duvidas", area: "marketing", label: "Dúvidas" },
   { sectionId: "marketing-configuracoes", moduleId: "configuracoes", area: "marketing", label: "Configurações" }
 ] as const satisfies ReadonlyArray<ModuleDefinition>;
 

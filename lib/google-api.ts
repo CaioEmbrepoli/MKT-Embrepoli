@@ -234,6 +234,7 @@ export type YouTubeCommentItem = {
   text: string;
   likes: number;
   publishedAt: string;
+  channelReply?: string;
 };
 
 export async function listVideoComments(
@@ -253,6 +254,7 @@ export async function listVideoComments(
     text: c.text,
     likes: c.likes,
     publishedAt: c.publishedAt,
+    channelReply: c.channelReply,
   }));
 }
 

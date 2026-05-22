@@ -1041,6 +1041,10 @@ export async function saveCustomerQuestion(client: SupabaseClient, q: CustomerQu
   if (error) throw new Error(`customer_questions upsert: ${error.message}`);
 }
 
+export async function deleteCustomerQuestion(client: SupabaseClient, id: string) {
+  await deleteById(client, "customer_questions", id);
+}
+
 // Insere apenas perguntas NOVAS (importação YouTube) — não faz delete/replace
 export async function insertCustomerQuestions(
   client: SupabaseClient,

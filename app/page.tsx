@@ -111,6 +111,7 @@ import {
   replaceCustomerQuestions,
   insertCustomerQuestions,
   saveCustomerQuestion,
+  deleteCustomerQuestion,
   saveComment,
   deleteComment,
   insertComments,
@@ -8363,6 +8364,7 @@ function BancoDeDuvidas({
   currentUser: Profile;
 }) {
   const [tab, setTab] = useState<"chat" | "base">("chat");
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
 
   // ── Base state ──
   const [filterStatus, setFilterStatus] = useState<CustomerQuestionStatus | "todas">("todas");
@@ -8400,6 +8402,7 @@ function BancoDeDuvidas({
 
   function openQuestion(q: CustomerQuestion) {
     setSelected(q);
+    setDeleteConfirm(false);
     setAnswerDraft(q.answerText);
     setLearningDraft(q.learning);
   }
@@ -8432,11 +8435,12 @@ function BancoDeDuvidas({
     setSelected(updated);
   }
 
-  function discardQuestion() {
+  async function deleteQuestion() {
     if (!selected) return;
-    const updated: CustomerQuestion = { ...selected, status: "descartado", reviewerId: currentUser.id };
-    setQuestions(questions.map((q) => q.id === updated.id ? updated : q));
-    setSelected(updated);
+    setQuestions(questions.filter((q) => q.id !== selected.id));
+    setSelected(null);
+    setDeleteConfirm(false);
+    if (supabase) await deleteCustomerQuestion(supabase, selected.id).catch(() => {});
   }
 
   async function handleChatSend() {
@@ -8565,7 +8569,7 @@ function BancoDeDuvidas({
           onClick={() => setTab("base")}
           className={`flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-black transition ${tab === "base" ? "bg-blue-700 text-white" : "text-slate-600 hover:bg-slate-100"}`}
         >
-          <HelpCircle size={14} /> Base
+          <HelpCircle size={14} /> Banco
           {needsReviewCount > 0 && (
             <span className="ml-1 rounded-full bg-orange-500 px-1.5 py-0.5 text-xs text-white">{needsReviewCount}</span>
           )}
@@ -8819,7 +8823,15 @@ function BancoDeDuvidas({
                   {selected.needsReview && !selected.reviewedAt && (
                     <button onClick={markReviewed} className="rounded-2xl bg-orange-100 px-3 py-2 text-sm font-black text-orange-700 hover:bg-orange-200">Marcar revisado</button>
                   )}
-                  <button onClick={discardQuestion} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">Descartar</button>
+                  {deleteConfirm ? (
+                    <div className="flex items-center gap-2 rounded-2xl bg-rose-50 border border-rose-200 px-3 py-2 text-sm w-full">
+                      <span className="flex-1 font-semibold text-rose-700 text-xs">Excluir permanentemente?</span>
+                      <button onClick={() => setDeleteConfirm(false)} className="rounded-xl bg-white border border-slate-200 px-2 py-1 text-xs font-black text-slate-600 hover:bg-slate-50">Cancelar</button>
+                      <button onClick={deleteQuestion} className="rounded-xl bg-rose-600 px-2 py-1 text-xs font-black text-white hover:bg-rose-700">Confirmar</button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setDeleteConfirm(true)} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">Excluir</button>
+                  )}
                 </div>
               </div>
             )}
@@ -8878,6 +8890,11 @@ function ComentariosSection({
     // Ids já existentes no banco (para idempotência)
     const existingExternalIds = new Set(questions.map((q) => q.externalId).filter(Boolean));
 
+    // Map de channelReply por commentId (para uso nos CustomerQuestions)
+    const channelReplyByCommentId = new Map<string, string>(
+      items.filter((i) => i.channelReply).map((i) => [i.commentId, i.channelReply!])
+    );
+
     const newComments: Comment[] = items.map((item) => {
       const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
       return {
@@ -8889,7 +8906,8 @@ function ComentariosSection({
         authorName: item.authorName,
         text: item.text,
         likes: item.likes,
-        status: "novo" as CommentStatus,
+        status: (item.channelReply ? "respondido" : "novo") as CommentStatus,
+        response: item.channelReply,
         addedToBank: autoAdded,
         publishedAt: item.publishedAt,
         createdAt: new Date().toISOString(),
@@ -8952,7 +8970,7 @@ function ComentariosSection({
           videoId: c.videoId,
           videoTitle: c.videoTitle,
           questionText: c.text,
-          answerText: "",
+          answerText: channelReplyByCommentId.get(c.externalId ?? "") ?? "",
           authorName: c.authorName,
           likes: c.likes,
           status: "aprovado" as CustomerQuestionStatus,
