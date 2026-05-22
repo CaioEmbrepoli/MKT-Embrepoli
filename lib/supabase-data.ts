@@ -27,7 +27,12 @@ import type {
   TaskBoard,
   TaskColumn,
   TaskComment,
-  VehicleType
+  VehicleType,
+  SalesClient,
+  SalesProposal,
+  CallSchedule,
+  CallLog,
+  CallFrequency
 } from "./types";
 
 export type AppData = {
@@ -54,6 +59,8 @@ export type AppData = {
   customerQuestions: CustomerQuestion[];
   ytComments: Comment[];
   autoFilters: AutoFilter[];
+  salesClients: SalesClient[];
+  callSchedules: CallSchedule[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -117,7 +124,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     ideaAttachments,
     customerQuestions,
     ytCommentsData,
-    autoFiltersData
+    autoFiltersData,
+    salesClientsData,
+    callSchedulesData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("profile_areas").select("*").eq("organization_id", organizationId),
@@ -149,7 +158,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("idea_attachments").select("*").eq("organization_id", organizationId),
     client.from("customer_questions").select("*").eq("organization_id", organizationId),
     client.from("comments").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
-    client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true })
+    client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true })
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -184,7 +195,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     calendarDates: (calendarDates.data ?? []).map(mapCalendarDate),
     customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion),
     ytComments: (ytCommentsData.data ?? []).map(mapYtComment),
-    autoFilters: (autoFiltersData.data ?? []).map(mapAutoFilter)
+    autoFilters: (autoFiltersData.data ?? []).map(mapAutoFilter),
+    salesClients: (salesClientsData.data ?? []).map(mapSalesClient),
+    callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule)
   };
 }
 
@@ -1201,5 +1214,88 @@ export async function saveAutoFilter(client: SupabaseClient, filter: AutoFilter)
 export async function deleteAutoFilter(client: SupabaseClient, id: string) {
   const { error } = await client.from("auto_filters").delete().eq("id", id);
   if (error) throw new Error(`auto_filters delete: ${error.message}`);
+}
+
+// ─── Vendas — Clientes ────────────────────────────────────────────────────────
+
+function mapSalesClient(row: any): SalesClient {
+  return {
+    id: row.id,
+    name: row.name ?? "",
+    email: row.email ?? "",
+    phone: row.phone ?? "",
+    company: row.company ?? "",
+    segment: row.segment ?? "",
+    status: row.status ?? "lead",
+    source: row.source ?? "manual",
+    assignedTo: row.assigned_to ?? "",
+    notes: row.notes ?? "",
+    proposals: Array.isArray(row.proposals) ? (row.proposals as SalesProposal[]) : [],
+    createdAt: row.created_at ?? new Date().toISOString()
+  };
+}
+
+export async function saveSalesClient(client: SupabaseClient, item: SalesClient) {
+  const organizationId = await currentOrganizationId(client);
+  const { error } = await client.from("sales_clients").upsert({
+    id: item.id,
+    organization_id: organizationId,
+    name: item.name,
+    email: item.email,
+    phone: item.phone,
+    company: item.company,
+    segment: item.segment,
+    status: item.status,
+    source: item.source,
+    assigned_to: item.assignedTo || null,
+    notes: item.notes,
+    proposals: item.proposals
+  });
+  if (error) throw new Error(`sales_clients upsert: ${error.message}`);
+}
+
+export async function deleteSalesClient(client: SupabaseClient, id: string) {
+  await deleteById(client, "sales_clients", id);
+}
+
+// ─── Vendas — Ligações ────────────────────────────────────────────────────────
+
+function mapCallSchedule(row: any): CallSchedule {
+  return {
+    id: row.id,
+    clientId: row.client_id ?? "",
+    clientName: row.client_name ?? "",
+    phone: row.phone ?? "",
+    frequency: (row.frequency ?? "weekly") as CallFrequency,
+    nextCallAt: row.next_call_at ?? new Date().toISOString().slice(0, 10),
+    lastCallAt: row.last_call_at ?? undefined,
+    callHistory: Array.isArray(row.call_history) ? (row.call_history as CallLog[]) : [],
+    assignedTo: row.assigned_to ?? "",
+    active: row.active ?? true,
+    notes: row.notes ?? ""
+  };
+}
+
+export async function saveCallSchedule(client: SupabaseClient, item: CallSchedule) {
+  const organizationId = await currentOrganizationId(client);
+  const { error } = await client.from("call_schedules").upsert({
+    id: item.id,
+    organization_id: organizationId,
+    client_id: item.clientId,
+    client_name: item.clientName,
+    phone: item.phone,
+    frequency: item.frequency,
+    next_call_at: item.nextCallAt,
+    last_call_at: item.lastCallAt ?? null,
+    call_history: item.callHistory,
+    assigned_to: item.assignedTo || null,
+    active: item.active,
+    notes: item.notes
+  });
+  if (error) throw new Error(`call_schedules upsert: ${error.message}`);
+}
+
+export async function deleteCallSchedule(client: SupabaseClient, id: string) {
+  await deleteById(client, "call_schedules", id);
 }
 

@@ -372,4 +372,58 @@ export type AutoFilter = {
   createdAt: string;
 };
 
+// ── Vendas — Clientes ─────────────────────────────────────────────────────────
+
+export type SalesClientStatus = "lead" | "cliente" | "inativo";
+export type SalesClientSource = "instagram" | "youtube" | "indicacao" | "site" | "manual" | "outros";
+
+export type SalesProposal = {
+  id: string;
+  title: string;
+  value: number;
+  status: "rascunho" | "enviada" | "negociacao" | "ganha" | "perdida" | "expirada";
+  createdAt: string;
+  notes: string;
+};
+
+export type SalesClient = {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  company: string;
+  segment: string;
+  status: SalesClientStatus;
+  source: SalesClientSource;
+  assignedTo: string;
+  notes: string;
+  proposals: SalesProposal[];
+  createdAt: string;
+};
+
+// ── Vendas — Ligações ─────────────────────────────────────────────────────────
+
+export type CallFrequency = "daily" | "weekly" | "biweekly" | "monthly";
+
+export type CallLog = {
+  id: string;
+  date: string;
+  notes: string;
+  outcome: string;
+};
+
+export type CallSchedule = {
+  id: string;
+  clientId: string;
+  clientName: string;
+  phone: string;
+  frequency: CallFrequency;
+  nextCallAt: string;
+  lastCallAt?: string;
+  callHistory: CallLog[];
+  assignedTo: string;
+  active: boolean;
+  notes: string;
+};
+
 

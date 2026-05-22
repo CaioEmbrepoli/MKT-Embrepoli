@@ -151,14 +151,19 @@ export const funnelStages: FunnelStage[] = [
 
 export const taskBoards: TaskBoard[] = [
   { id: "tarefas", name: "Tarefas", order: 1, isFixed: true },
-  { id: "metas", name: "Metas", order: 2, isFixed: true }
+  { id: "metas", name: "Metas", order: 2, isFixed: true },
+  { id: "vendas-atividades", name: "Atividades de Vendas", order: 3, isFixed: true },
+  { id: "vendas-metas", name: "Metas de Vendas", order: 4, isFixed: true }
 ];
 
 export const taskColumns: TaskColumn[] = [
   { id: "todo", boardId: "tarefas", name: "A fazer", color: "#dbeafe", order: 1 },
   { id: "doing", boardId: "tarefas", name: "Em andamento", color: "#cffafe", order: 2 },
   { id: "review", boardId: "tarefas", name: "Em revisão", color: "#e0e7ff", order: 3 },
-  { id: "done", boardId: "tarefas", name: "Concluído", color: "#dcfce7", order: 4 }
+  { id: "done", boardId: "tarefas", name: "Concluído", color: "#dcfce7", order: 4 },
+  { id: "vendas-todo", boardId: "vendas-atividades", name: "A fazer", color: "#dbeafe", order: 1 },
+  { id: "vendas-doing", boardId: "vendas-atividades", name: "Em andamento", color: "#cffafe", order: 2 },
+  { id: "vendas-done", boardId: "vendas-atividades", name: "Concluído", color: "#dcfce7", order: 3 }
 ];
 
 export const campaigns: Campaign[] = [

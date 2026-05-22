@@ -58,6 +58,8 @@ import {
   X,
   Youtube,
   Wand2,
+  Phone,
+  Target,
   type LucideIcon
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
@@ -118,6 +120,10 @@ import {
   insertComments,
   saveAutoFilter,
   deleteAutoFilter,
+  saveSalesClient,
+  deleteSalesClient,
+  saveCallSchedule,
+  deleteCallSchedule,
   saveNotification,
   savePost,
   savePostReviewAsset,
@@ -170,7 +176,14 @@ import type {
   TaskPriority,
   TaskProgress,
   TaskResetFrequency,
-  VehicleType
+  VehicleType,
+  SalesClient,
+  SalesClientStatus,
+  SalesClientSource,
+  SalesProposal,
+  CallSchedule,
+  CallFrequency,
+  CallLog
 } from "@/lib/types";
 import {
   Area,
@@ -218,10 +231,10 @@ const moduleIcons: Record<string, LucideIcon> = {
   "banco-duvidas": HelpCircle,
   configuracoes: Settings,
   clientes: Users,
-  leads: UserRound,
+  ligacoes: Phone,
   "funil-comercial": KanbanSquare,
   atividades: ClipboardList,
-  propostas: FileText
+  metas: Target
 };
 
 const marketingMenu: MenuItem[] = marketingModules.map((item) => ({ ...item, icon: moduleIcons[item.moduleId] ?? Settings }));
@@ -256,7 +269,7 @@ function findMetasBoardId(taskBoards: TaskBoard[]): string {
 
 function isMetasBoardId(boardId: string | undefined, taskBoards: TaskBoard[]): boolean {
   if (!boardId) return false;
-  if (boardId === "metas") return true;
+  if (boardId === "metas" || boardId === "vendas-metas") return true;
   const board = taskBoards.find((b) => b.id === boardId);
   return Boolean(board && normalizeText(board.name) === "metas");
 }
@@ -827,6 +840,8 @@ export default function Home() {
   const [customerQuestions, setCustomerQuestions] = useState<CustomerQuestion[]>([]);
   const [ytComments, setYtComments] = useState<Comment[]>([]);
   const [autoFilters, setAutoFilters] = useState<AutoFilter[]>([]);
+  const [salesClients, setSalesClients] = useState<SalesClient[]>([]);
+  const [callSchedules, setCallSchedules] = useState<CallSchedule[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [modal, setModal] = useState<ModalState>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -1033,6 +1048,8 @@ export default function Home() {
     setActiveArea(item.area);
     setActiveSection(item.sectionId);
     if (item.moduleId === "tarefas") setActiveTaskBoardId(primaryTaskBoardId);
+    if (item.moduleId === "atividades" && item.area === "vendas") setActiveTaskBoardId("vendas-atividades");
+    if (item.moduleId === "metas" && item.area === "vendas") setActiveTaskBoardId("vendas-metas");
   }
 
   useEffect(() => {
@@ -1090,6 +1107,8 @@ export default function Home() {
     setCustomerQuestions(data.customerQuestions);
     setYtComments(data.ytComments);
     setAutoFilters(data.autoFilters);
+    setSalesClients(data.salesClients);
+    setCallSchedules(data.callSchedules);
     setNotifications(data.notifications);
     const { data: authData } = await supabase.auth.getUser();
     const authUserId = authData.user?.id ?? sessionUserId;
@@ -1246,6 +1265,8 @@ export default function Home() {
   const syncTasks = syncState("tasks", setTasks, (previous, next) => persistArrayChanges(previous, next, (item) => saveTask(supabase!, item), (id) => deleteTask(supabase!, id)));
   const syncMetrics = syncState("metrics", setMetrics, (previous, next) => persistArrayChanges(previous, next, (item) => saveMetric(supabase!, item), (id) => deleteMetric(supabase!, id)));
   const syncNotifications = syncState("notifications", setNotifications, (previous, next) => persistArrayChanges(previous, next, (item) => saveNotification(supabase!, item), (id) => deleteNotification(supabase!, id)));
+  const syncSalesClients = syncState("salesClients", setSalesClients, (previous, next) => persistArrayChanges(previous, next, (item) => saveSalesClient(supabase!, item), (id) => deleteSalesClient(supabase!, id)));
+  const syncCallSchedules = syncState("callSchedules", setCallSchedules, (previous, next) => persistArrayChanges(previous, next, (item) => saveCallSchedule(supabase!, item), (id) => deleteCallSchedule(supabase!, id)));
 
   async function loadCurrentSession() {
     console.log("[auth] loadCurrentSession: start");
@@ -2200,8 +2221,54 @@ export default function Home() {
               currentUser={currentUser}
             />
           )}
-          {activeSection.startsWith("vendas-") && activeSection !== "vendas-configuracoes" && (
-            <SalesPlaceholder section={menu.find((item) => item.sectionId === activeSection)?.label ?? "Vendas"} />
+          {activeSection === "vendas-painel" && (
+            <PainelVendas salesClients={salesClients} callSchedules={callSchedules} />
+          )}
+          {activeSection === "vendas-clientes" && (
+            <ClientesSection
+              salesClients={salesClients}
+              setSalesClients={syncSalesClients}
+              callSchedules={callSchedules}
+              setCallSchedules={syncCallSchedules}
+              profiles={profiles}
+              currentUser={currentUser}
+            />
+          )}
+          {activeSection === "vendas-ligacoes" && (
+            <LigacoesSection
+              callSchedules={callSchedules}
+              setCallSchedules={syncCallSchedules}
+              salesClients={salesClients}
+              currentUser={currentUser}
+            />
+          )}
+          {activeSection === "vendas-funil-comercial" && (
+            <FunilComercialPlaceholder />
+          )}
+          {(activeSection === "vendas-atividades" || activeSection === "vendas-metas") && (
+            <Tasks
+              tasks={tasks}
+              allTasks={tasks}
+              setTasks={syncTasks}
+              taskBoards={taskBoards}
+              setTaskBoards={syncTaskBoards}
+              posts={posts}
+              setPosts={syncPosts}
+              ideas={ideas}
+              currentUser={currentUser}
+              campaigns={campaigns}
+              channels={channels}
+              activeTaskBoardId={activeTaskBoardId}
+              setActiveTaskBoardId={setActiveTaskBoardId}
+              taskColumns={taskColumns}
+              setTaskColumns={syncTaskColumns}
+              profileById={profileById}
+              channelById={channelById}
+              funnelById={funnelById}
+              setModal={setModal}
+              createNotifications={createNotifications}
+              addQuickTask={addQuickTask}
+            />
           )}
           {(activeSection === "marketing-configuracoes" || activeSection === "vendas-configuracoes") && (
             <SettingsPanel
@@ -2520,6 +2587,676 @@ function SalesPlaceholder({ section }: { section: string }) {
             Esta tela já está isolada da área de Marketing e pronta para receber os fluxos de vendas nas próximas fases.
           </p>
         </div>
+      </div>
+    </Panel>
+  );
+}
+
+// ─── Vendas — helpers ─────────────────────────────────────────────────────────
+
+function nextCallDate(from: Date, freq: CallFrequency): string {
+  const d = new Date(from);
+  const days = freq === "daily" ? 1 : freq === "weekly" ? 7 : freq === "biweekly" ? 14 : 30;
+  d.setDate(d.getDate() + days);
+  // Ajusta para próximo dia útil (pula sáb/dom)
+  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+function callUrgency(nextCallAt: string): "overdue" | "today" | "upcoming" {
+  const today = new Date().toISOString().slice(0, 10);
+  if (nextCallAt < today) return "overdue";
+  if (nextCallAt === today) return "today";
+  return "upcoming";
+}
+
+function formatCallDate(dateStr: string): string {
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  if (dateStr === today) return "hoje";
+  if (dateStr === tomorrow) return "amanhã";
+  const d = new Date(dateStr + "T12:00:00");
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
+}
+
+const callFrequencyLabel: Record<CallFrequency, string> = {
+  daily: "Diário",
+  weekly: "Semanal",
+  biweekly: "Quinzenal",
+  monthly: "Mensal"
+};
+
+const salesClientStatusLabel: Record<SalesClientStatus, string> = {
+  lead: "Lead",
+  cliente: "Cliente",
+  inativo: "Inativo"
+};
+
+const salesSourceLabel: Record<SalesClientSource, string> = {
+  instagram: "Instagram",
+  youtube: "YouTube",
+  indicacao: "Indicação",
+  site: "Site",
+  manual: "Manual",
+  outros: "Outros"
+};
+
+const proposalStatusLabel: Record<SalesProposal["status"], string> = {
+  rascunho: "Rascunho",
+  enviada: "Enviada",
+  negociacao: "Negociação",
+  ganha: "Ganha",
+  perdida: "Perdida",
+  expirada: "Expirada"
+};
+
+// ─── Painel de Vendas ─────────────────────────────────────────────────────────
+
+function PainelVendas({ salesClients, callSchedules }: { salesClients: SalesClient[]; callSchedules: CallSchedule[] }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const clientesAtivos = salesClients.filter((c) => c.status === "cliente").length;
+  const leads = salesClients.filter((c) => c.status === "lead").length;
+  const ligacoesHoje = callSchedules.filter((c) => c.active && c.nextCallAt === today).length;
+  const ligacoesAtrasadas = callSchedules.filter((c) => c.active && c.nextCallAt < today).length;
+
+  return (
+    <Panel title="Painel de Vendas">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {([
+          { label: "Clientes ativos", value: clientesAtivos, color: "emerald" },
+          { label: "Leads em aberto", value: leads, color: "amber" },
+          { label: "Ligações para hoje", value: ligacoesHoje, color: "blue" },
+          { label: "Ligações atrasadas", value: ligacoesAtrasadas, color: "rose" }
+        ] as const).map((card) => (
+          <div key={card.label} className={`rounded-3xl border p-5 ${
+            card.color === "emerald" ? "border-emerald-100 bg-emerald-50" :
+            card.color === "amber" ? "border-amber-100 bg-amber-50" :
+            card.color === "blue" ? "border-blue-100 bg-blue-50" :
+            "border-rose-100 bg-rose-50"
+          }`}>
+            <p className="text-sm font-bold text-slate-500">{card.label}</p>
+            <p className={`mt-1 text-4xl font-black ${
+              card.color === "emerald" ? "text-emerald-700" :
+              card.color === "amber" ? "text-amber-700" :
+              card.color === "blue" ? "text-blue-700" :
+              "text-rose-700"
+            }`}>{card.value}</p>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+// ─── Clientes ─────────────────────────────────────────────────────────────────
+
+function ClientesSection({ salesClients, setSalesClients, callSchedules, setCallSchedules, profiles, currentUser }: {
+  salesClients: SalesClient[];
+  setSalesClients: Dispatch<SetStateAction<SalesClient[]>>;
+  callSchedules: CallSchedule[];
+  setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
+  profiles: Profile[];
+  currentUser: Profile | null;
+}) {
+  const [filter, setFilter] = useState<"todos" | SalesClientStatus>("todos");
+  const [search, setSearch] = useState("");
+  const [editing, setEditing] = useState<SalesClient | null>(null);
+  const [showModal, setShowModal] = useState(false);
+
+  const filtered = salesClients.filter((c) => {
+    if (filter !== "todos" && c.status !== filter) return false;
+    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.company.toLowerCase().includes(search.toLowerCase()) && !c.phone.includes(search)) return false;
+    return true;
+  });
+
+  function openNew() {
+    setEditing({
+      id: crypto.randomUUID(),
+      name: "", email: "", phone: "", company: "", segment: "",
+      status: "lead", source: "manual", assignedTo: currentUser?.id ?? "",
+      notes: "", proposals: [], createdAt: new Date().toISOString()
+    });
+    setShowModal(true);
+  }
+
+  function openEdit(client: SalesClient) {
+    setEditing({ ...client });
+    setShowModal(true);
+  }
+
+  function save(client: SalesClient) {
+    setSalesClients((prev) => {
+      const exists = prev.find((c) => c.id === client.id);
+      return exists ? prev.map((c) => c.id === client.id ? client : c) : [...prev, client];
+    });
+    setShowModal(false);
+    setEditing(null);
+  }
+
+  function remove(id: string) {
+    setSalesClients((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  function addToCallSchedule(client: SalesClient, freq: CallFrequency) {
+    const already = callSchedules.find((s) => s.clientId === client.id && s.active);
+    if (already) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const schedule: CallSchedule = {
+      id: crypto.randomUUID(),
+      clientId: client.id,
+      clientName: client.name,
+      phone: client.phone,
+      frequency: freq,
+      nextCallAt: today,
+      callHistory: [],
+      assignedTo: currentUser?.id ?? "",
+      active: true,
+      notes: ""
+    };
+    setCallSchedules((prev) => [...prev, schedule]);
+  }
+
+  const filterCounts = {
+    todos: salesClients.length,
+    lead: salesClients.filter((c) => c.status === "lead").length,
+    cliente: salesClients.filter((c) => c.status === "cliente").length,
+    inativo: salesClients.filter((c) => c.status === "inativo").length
+  };
+
+  return (
+    <Panel title="Clientes">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap gap-2">
+          {(["todos", "lead", "cliente", "inativo"] as const).map((f) => (
+            <button key={f} type="button" onClick={() => setFilter(f)}
+              className={`rounded-2xl px-4 py-2 text-sm font-black transition ${filter === f ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50 hover:text-blue-700"}`}>
+              {f === "todos" ? "Todos" : salesClientStatusLabel[f]} <span className="opacity-70">{filterCounts[f]}</span>
+            </button>
+          ))}
+        </div>
+        <input
+          type="search" placeholder="Buscar nome, empresa ou telefone..." value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="ml-auto rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+        />
+        <button type="button" onClick={openNew} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
+          <Plus size={16} /> Novo
+        </button>
+      </div>
+      <div className="grid gap-3">
+        {filtered.map((client) => {
+          const hasSchedule = callSchedules.some((s) => s.clientId === client.id && s.active);
+          return (
+            <div key={client.id} className="flex flex-wrap items-center gap-3 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-sm font-black text-blue-700">
+                {client.name.charAt(0).toUpperCase() || "?"}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-black">{client.name || <span className="italic text-slate-400">Sem nome</span>}</p>
+                  <Badge tone={client.status === "cliente" ? "green" : client.status === "lead" ? "amber" : "slate"}>
+                    {salesClientStatusLabel[client.status]}
+                  </Badge>
+                </div>
+                {client.company && <p className="text-sm font-bold text-slate-600">{client.company}</p>}
+                <p className="text-xs font-bold text-slate-400">
+                  {client.phone && <span className="mr-3">📞 {client.phone}</span>}
+                  {client.email && <span className="mr-3">✉️ {client.email}</span>}
+                  {client.segment && <span>{client.segment}</span>}
+                  {client.source !== "manual" && <span className="ml-3 opacity-70">via {salesSourceLabel[client.source]}</span>}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {!hasSchedule && client.phone && (
+                  <div className="relative group">
+                    <button type="button" onClick={() => addToCallSchedule(client, "weekly")}
+                      className="rounded-2xl bg-emerald-100 px-3 py-2 text-sm font-black text-emerald-700 transition hover:bg-emerald-200">
+                      <Phone size={14} className="inline mr-1" />Agendar ligação
+                    </button>
+                  </div>
+                )}
+                {hasSchedule && <span className="rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-600">✓ Na agenda</span>}
+                <button type="button" onClick={() => openEdit(client)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">editar</button>
+                <button type="button" onClick={() => remove(client.id)} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600">excluir</button>
+              </div>
+            </div>
+          );
+        })}
+        {filtered.length === 0 && (
+          <p className="rounded-3xl bg-slate-50 p-8 text-center text-sm font-bold text-slate-400">
+            {salesClients.length === 0 ? "Nenhum cliente cadastrado ainda. Clique em \"Novo\" para começar." : "Nenhum resultado para este filtro."}
+          </p>
+        )}
+      </div>
+      {showModal && editing && (
+        <ClienteModal
+          client={editing}
+          profiles={profiles}
+          callSchedules={callSchedules}
+          onSave={save}
+          onClose={() => { setShowModal(false); setEditing(null); }}
+          onAddSchedule={addToCallSchedule}
+        />
+      )}
+    </Panel>
+  );
+}
+
+function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddSchedule }: {
+  client: SalesClient;
+  profiles: Profile[];
+  callSchedules: CallSchedule[];
+  onSave: (c: SalesClient) => void;
+  onClose: () => void;
+  onAddSchedule: (c: SalesClient, freq: CallFrequency) => void;
+}) {
+  const [tab, setTab] = useState<"dados" | "propostas">("dados");
+  const [form, setForm] = useState(client);
+  const hasSchedule = callSchedules.some((s) => s.clientId === client.id && s.active);
+
+  function addProposal() {
+    const p: SalesProposal = { id: crypto.randomUUID(), title: "", value: 0, status: "rascunho", createdAt: new Date().toISOString(), notes: "" };
+    setForm((f) => ({ ...f, proposals: [...f.proposals, p] }));
+  }
+
+  function updateProposal(id: string, patch: Partial<SalesProposal>) {
+    setForm((f) => ({ ...f, proposals: f.proposals.map((p) => p.id === id ? { ...p, ...patch } : p) }));
+  }
+
+  function removeProposal(id: string) {
+    setForm((f) => ({ ...f, proposals: f.proposals.filter((p) => p.id !== id) }));
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[32px] bg-white p-6 shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-black">{form.name || "Novo cliente"}</h2>
+          <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
+        </div>
+        <div className="flex gap-2 mb-4">
+          {(["dados", "propostas"] as const).map((t) => (
+            <button key={t} type="button" onClick={() => setTab(t)}
+              className={`rounded-2xl px-4 py-2 text-sm font-black transition ${tab === t ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
+              {t === "dados" ? "Dados" : `Propostas (${form.proposals.length})`}
+            </button>
+          ))}
+        </div>
+        {tab === "dados" && (
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="md:col-span-2">
+              <label className="block text-sm font-bold text-slate-600 mb-1">Nome *</label>
+              <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="Nome do contato" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Empresa</label>
+              <input value={form.company} onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="Nome da empresa / oficina" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Telefone</label>
+              <input value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="(41) 9xxxx-xxxx" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">E-mail</label>
+              <input value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="email@exemplo.com" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Segmento</label>
+              <input value={form.segment} onChange={(e) => setForm((f) => ({ ...f, segment: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="ex: Diesel veicular, Agrícola..." />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Status</label>
+              <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as SalesClientStatus }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
+                {(["lead", "cliente", "inativo"] as SalesClientStatus[]).map((s) => (
+                  <option key={s} value={s}>{salesClientStatusLabel[s]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Origem</label>
+              <select value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value as SalesClientSource }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
+                {(["instagram", "youtube", "indicacao", "site", "manual", "outros"] as SalesClientSource[]).map((s) => (
+                  <option key={s} value={s}>{salesSourceLabel[s]}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Responsável</label>
+              <select value={form.assignedTo} onChange={(e) => setForm((f) => ({ ...f, assignedTo: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
+                <option value="">Sem responsável</option>
+                {profiles.filter((p) => p.active).map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-bold text-slate-600 mb-1">Observações</label>
+              <textarea value={form.notes} onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))} rows={3}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 resize-none" placeholder="Anotações sobre este cliente..." />
+            </div>
+            {!hasSchedule && form.phone && (
+              <div className="md:col-span-2 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
+                <p className="font-black text-emerald-800 text-sm">Adicionar à Agenda de Ligações</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {(["daily", "weekly", "biweekly", "monthly"] as CallFrequency[]).map((freq) => (
+                    <button key={freq} type="button"
+                      onClick={() => { onAddSchedule({ ...form }, freq); onSave({ ...form }); }}
+                      className="rounded-2xl bg-white border border-emerald-200 px-3 py-2 text-sm font-black text-emerald-700 hover:bg-emerald-100 transition">
+                      {callFrequencyLabel[freq]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        {tab === "propostas" && (
+          <div className="space-y-3">
+            {form.proposals.map((p) => (
+              <div key={p.id} className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+                <div className="grid gap-2 md:grid-cols-2">
+                  <input value={p.title} onChange={(e) => updateProposal(p.id, { title: e.target.value })}
+                    placeholder="Título da proposta" className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+                  <input type="number" value={p.value || ""} onChange={(e) => updateProposal(p.id, { value: Number(e.target.value) })}
+                    placeholder="Valor (R$)" className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+                  <select value={p.status} onChange={(e) => updateProposal(p.id, { status: e.target.value as SalesProposal["status"] })}
+                    className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
+                    {(Object.keys(proposalStatusLabel) as SalesProposal["status"][]).map((s) => (
+                      <option key={s} value={s}>{proposalStatusLabel[s]}</option>
+                    ))}
+                  </select>
+                  <button type="button" onClick={() => removeProposal(p.id)} className="rounded-2xl bg-rose-50 px-3 py-2 text-sm font-black text-rose-600 hover:bg-rose-100 transition">Remover</button>
+                  <div className="md:col-span-2">
+                    <textarea value={p.notes} onChange={(e) => updateProposal(p.id, { notes: e.target.value })} rows={2}
+                      placeholder="Observações da proposta..." className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 resize-none" />
+                  </div>
+                </div>
+              </div>
+            ))}
+            <button type="button" onClick={addProposal} className="flex items-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-black text-slate-500 hover:border-blue-400 hover:text-blue-600 transition w-full justify-center">
+              <Plus size={16} /> Adicionar proposta
+            </button>
+          </div>
+        )}
+        <div className="mt-5 flex gap-2 justify-end">
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
+          <button type="button" onClick={() => onSave(form)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Ligações ─────────────────────────────────────────────────────────────────
+
+const CALL_COLUMNS: { id: string; name: string; frequency: CallFrequency; color: string }[] = [
+  { id: "calls-daily",    name: "Diário",    frequency: "daily",    color: "#dbeafe" },
+  { id: "calls-weekly",   name: "Semanal",   frequency: "weekly",   color: "#dcfce7" },
+  { id: "calls-biweekly", name: "Quinzenal", frequency: "biweekly", color: "#fef3c7" },
+  { id: "calls-monthly",  name: "Mensal",    frequency: "monthly",  color: "#e9d5ff" }
+];
+
+function LigacoesSection({ callSchedules, setCallSchedules, salesClients, currentUser }: {
+  callSchedules: CallSchedule[];
+  setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
+  salesClients: SalesClient[];
+  currentUser: Profile | null;
+}) {
+  const [logModal, setLogModal] = useState<CallSchedule | null>(null);
+  const [newModal, setNewModal] = useState(false);
+
+  const activeSchedules = callSchedules.filter((s) => s.active);
+
+  function registerCall(schedule: CallSchedule, notes: string, outcome: string) {
+    const log: CallLog = {
+      id: crypto.randomUUID(),
+      date: new Date().toISOString().slice(0, 10),
+      notes,
+      outcome
+    };
+    const updated: CallSchedule = {
+      ...schedule,
+      lastCallAt: log.date,
+      nextCallAt: nextCallDate(new Date(), schedule.frequency),
+      callHistory: [log, ...schedule.callHistory]
+    };
+    setCallSchedules((prev) => prev.map((s) => s.id === schedule.id ? updated : s));
+    setLogModal(null);
+  }
+
+  function remove(id: string) {
+    setCallSchedules((prev) => prev.map((s) => s.id === id ? { ...s, active: false } : s));
+  }
+
+  function addNew(schedule: CallSchedule) {
+    setCallSchedules((prev) => [...prev, schedule]);
+    setNewModal(false);
+  }
+
+  return (
+    <Panel title="Ligações">
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-sm font-bold text-slate-500">{activeSchedules.length} contatos na agenda</p>
+        <button type="button" onClick={() => setNewModal(true)} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
+          <Plus size={16} /> Nova agenda
+        </button>
+      </div>
+      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+        {CALL_COLUMNS.map((col) => {
+          const cards = activeSchedules
+            .filter((s) => s.frequency === col.frequency)
+            .sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
+          return (
+            <div key={col.id} className="rounded-3xl p-4" style={{ backgroundColor: col.color }}>
+              <div className="mb-3 flex items-center justify-between">
+                <p className="font-black text-slate-700">{col.name}</p>
+                <Badge tone="slate">{cards.length}</Badge>
+              </div>
+              <div className="space-y-3">
+                {cards.map((schedule) => {
+                  const urgency = callUrgency(schedule.nextCallAt);
+                  const lastLog = schedule.callHistory[0];
+                  return (
+                    <div key={schedule.id} className="rounded-2xl border border-white/80 bg-white p-3 shadow-sm">
+                      <div className="flex items-start gap-2">
+                        <span className="mt-0.5 text-base leading-none">
+                          {urgency === "overdue" ? "🔴" : urgency === "today" ? "🟡" : "🟢"}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-black text-sm truncate">{schedule.clientName}</p>
+                          {schedule.phone && <p className="text-xs font-bold text-slate-500">📞 {schedule.phone}</p>}
+                          <p className={`text-xs font-black mt-1 ${urgency === "overdue" ? "text-rose-600" : urgency === "today" ? "text-amber-600" : "text-slate-500"}`}>
+                            Próxima: {formatCallDate(schedule.nextCallAt)}
+                          </p>
+                          {lastLog && (
+                            <p className="text-xs font-bold text-slate-400 mt-0.5 truncate">
+                              Última: {formatCallDate(lastLog.date)}{lastLog.notes ? ` — "${lastLog.notes.slice(0, 30)}"` : ""}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-2 flex gap-2">
+                        <button type="button" onClick={() => setLogModal(schedule)}
+                          className="flex-1 rounded-xl bg-blue-700 px-2 py-1.5 text-xs font-black text-white transition hover:bg-blue-800">
+                          Registrar ligação
+                        </button>
+                        <button type="button" onClick={() => remove(schedule.id)}
+                          className="rounded-xl bg-slate-100 px-2 py-1.5 text-xs font-black text-slate-500 transition hover:bg-slate-200">
+                          <X size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                {cards.length === 0 && (
+                  <p className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-4 text-center text-xs font-bold text-slate-400">Nenhum contato</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {logModal && (
+        <RegistrarLigacaoModal schedule={logModal} onConfirm={registerCall} onClose={() => setLogModal(null)} />
+      )}
+      {newModal && (
+        <NovaAgendaModal
+          salesClients={salesClients}
+          currentUser={currentUser}
+          callSchedules={callSchedules}
+          onSave={addNew}
+          onClose={() => setNewModal(false)}
+        />
+      )}
+    </Panel>
+  );
+}
+
+function RegistrarLigacaoModal({ schedule, onConfirm, onClose }: {
+  schedule: CallSchedule;
+  onConfirm: (schedule: CallSchedule, notes: string, outcome: string) => void;
+  onClose: () => void;
+}) {
+  const [notes, setNotes] = useState("");
+  const [outcome, setOutcome] = useState("Interessado");
+  const outcomes = ["Interessado", "Vai pensar", "Retornar", "Fechou pedido", "Não atendeu"];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="w-full max-w-md rounded-[32px] bg-white p-6 shadow-2xl">
+        <h2 className="text-lg font-black mb-1">Registrar ligação</h2>
+        <p className="text-sm font-bold text-slate-500 mb-4">{schedule.clientName} · {schedule.phone}</p>
+        <div className="mb-3">
+          <label className="block text-sm font-bold text-slate-600 mb-2">Observações da conversa</label>
+          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} autoFocus
+            placeholder="O que foi conversado..." className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 resize-none" />
+        </div>
+        <div className="mb-5">
+          <label className="block text-sm font-bold text-slate-600 mb-2">Desfecho</label>
+          <div className="flex flex-wrap gap-2">
+            {outcomes.map((o) => (
+              <button key={o} type="button" onClick={() => setOutcome(o)}
+                className={`rounded-2xl px-3 py-2 text-sm font-black transition ${outcome === o ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50"}`}>
+                {o}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2 justify-end">
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
+          <button type="button" onClick={() => onConfirm(schedule, notes, outcome)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Confirmar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NovaAgendaModal({ salesClients, currentUser, callSchedules, onSave, onClose }: {
+  salesClients: SalesClient[];
+  currentUser: Profile | null;
+  callSchedules: CallSchedule[];
+  onSave: (s: CallSchedule) => void;
+  onClose: () => void;
+}) {
+  const [clientId, setClientId] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [frequency, setFrequency] = useState<CallFrequency>("weekly");
+
+  const selectedClient = salesClients.find((c) => c.id === clientId);
+
+  function save() {
+    const today = new Date().toISOString().slice(0, 10);
+    const schedule: CallSchedule = {
+      id: crypto.randomUUID(),
+      clientId: clientId || "",
+      clientName: selectedClient?.name || customName,
+      phone: selectedClient?.phone || phone,
+      frequency,
+      nextCallAt: today,
+      callHistory: [],
+      assignedTo: currentUser?.id ?? "",
+      active: true,
+      notes: ""
+    };
+    onSave(schedule);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="w-full max-w-md rounded-[32px] bg-white p-6 shadow-2xl">
+        <h2 className="text-lg font-black mb-4">Nova agenda de ligações</h2>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm font-bold text-slate-600 mb-1">Cliente cadastrado (opcional)</label>
+            <select value={clientId} onChange={(e) => { setClientId(e.target.value); const c = salesClients.find((x) => x.id === e.target.value); if (c) { setCustomName(c.name); setPhone(c.phone); } }}
+              className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
+              <option value="">Selecionar cliente...</option>
+              {salesClients.filter((c) => c.status !== "inativo" && !callSchedules.some((s) => s.clientId === c.id && s.active)).map((c) => (
+                <option key={c.id} value={c.id}>{c.name} {c.company ? `— ${c.company}` : ""}</option>
+              ))}
+            </select>
+          </div>
+          {!clientId && (
+            <>
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">Nome</label>
+                <input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="Nome do contato"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">Telefone</label>
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(41) 9xxxx-xxxx"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+            </>
+          )}
+          <div>
+            <label className="block text-sm font-bold text-slate-600 mb-1">Frequência</label>
+            <div className="flex flex-wrap gap-2">
+              {(["daily", "weekly", "biweekly", "monthly"] as CallFrequency[]).map((f) => (
+                <button key={f} type="button" onClick={() => setFrequency(f)}
+                  className={`rounded-2xl px-3 py-2 text-sm font-black transition ${frequency === f ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50"}`}>
+                  {callFrequencyLabel[f]}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="mt-5 flex gap-2 justify-end">
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
+          <button type="button" disabled={!customName && !clientId} onClick={save} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Funil Comercial (placeholder visual) ────────────────────────────────────
+
+function FunilComercialPlaceholder() {
+  const stages = ["Prospecção", "Qualificação", "Proposta", "Negociação", "Fechado"];
+  return (
+    <Panel title="Funil Comercial">
+      <div className="mb-4 rounded-3xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-800">
+        O Funil Comercial estará disponível em breve. Abaixo você pode visualizar as etapas que serão implementadas.
+      </div>
+      <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))` }}>
+        {stages.map((stage, i) => (
+          <div key={stage} className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center">
+            <div className="mb-2 flex h-8 w-8 mx-auto items-center justify-center rounded-full bg-slate-200 text-xs font-black text-slate-500">{i + 1}</div>
+            <p className="font-black text-sm text-slate-600">{stage}</p>
+            <p className="mt-1 text-xs font-bold text-slate-400">0 oportunidades</p>
+          </div>
+        ))}
       </div>
     </Panel>
   );
