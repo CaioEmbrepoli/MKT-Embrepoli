@@ -8869,6 +8869,12 @@ function ComentariosSection({
   const [importModal, setImportModal] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
+  const [pressedBtn, setPressedBtn] = useState<Record<string, boolean>>({});
+
+  function pressButton(key: string) {
+    setPressedBtn((prev) => ({ ...prev, [key]: true }));
+    setTimeout(() => setPressedBtn((prev) => { const n = { ...prev }; delete n[key]; return n; }), 600);
+  }
 
   const filtered = comments.filter((c) => {
     if (statusFilter !== "todos" && c.status !== statusFilter) return false;
@@ -8884,7 +8890,28 @@ function ComentariosSection({
     return t.includes(k);
   }
 
-  async function handleImport(items: YouTubeCommentItem[]) {
+  async function handleImport(items: YouTubeCommentItem[], updatedItems: YouTubeCommentItem[] = []) {
+    // ── ATUALIZAÇÕES: comentários existentes com nova resposta ──
+    if (updatedItems.length > 0) {
+      const updatedComments = comments.map((c) => {
+        const upd = updatedItems.find(
+          (u) => u.commentId === c.externalId || u.commentId === c.externalId?.replace("yt_comment:", "")
+        );
+        if (!upd?.channelReply) return c;
+        return { ...c, response: upd.channelReply, status: "respondido" as CommentStatus };
+      });
+      setComments(updatedComments);
+      if (supabase) {
+        for (const c of updatedComments) {
+          const wasUpdated = updatedItems.some(
+            (u) => u.commentId === c.externalId || u.commentId === c.externalId?.replace("yt_comment:", "")
+          );
+          if (wasUpdated) await saveComment(supabase, c).catch(() => {});
+        }
+      }
+    }
+
+    // ── NOVOS: lógica completa (filtros, IA, CustomerQuestions) ──
     const activeFilters = autoFilters.filter((f) => f.active);
 
     // Ids já existentes no banco (para idempotência)
@@ -9024,7 +9051,7 @@ function ComentariosSection({
       videoId: comment.videoId,
       videoTitle: comment.videoTitle,
       questionText: comment.text,
-      answerText: "",
+      answerText: responses[comment.id] ?? comment.response ?? "",
       authorName: comment.authorName,
       likes: comment.likes,
       status: "aprovado" as CustomerQuestionStatus,
@@ -9228,22 +9255,22 @@ function ComentariosSection({
             />
             <div className="flex flex-wrap gap-2">
               <button
-                onClick={() => handleSaveResponse(comment)}
+                onClick={() => { pressButton(`${comment.id}-save`); handleSaveResponse(comment); }}
                 disabled={saving === comment.id}
-                className="rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800 disabled:opacity-50"
+                className={`rounded-xl px-3 py-1.5 text-xs font-bold text-white transition-all duration-150 disabled:opacity-50 ${pressedBtn[`${comment.id}-save`] ? "scale-95 bg-blue-900" : "bg-blue-700 hover:bg-blue-800"}`}
               >
                 {saving === comment.id ? "Salvando..." : "Salvar resposta"}
               </button>
               <button
-                onClick={() => handleStatusChange(comment, "ignorado")}
-                className="rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200"
+                onClick={() => { pressButton(`${comment.id}-ignore`); handleStatusChange(comment, "ignorado"); }}
+                className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all duration-150 ${pressedBtn[`${comment.id}-ignore`] ? "scale-95 bg-slate-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
               >
                 Ignorar
               </button>
               {!comment.addedToBank && (
                 <button
-                  onClick={() => handleAddToBank(comment)}
-                  className="rounded-xl bg-emerald-100 px-3 py-1.5 text-xs font-bold text-emerald-700 hover:bg-emerald-200"
+                  onClick={() => { pressButton(`${comment.id}-bank`); handleAddToBank(comment); }}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all duration-150 ${pressedBtn[`${comment.id}-bank`] ? "scale-95 bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"}`}
                 >
                   + Adicionar ao Banco
                 </button>
@@ -9275,127 +9302,173 @@ function CommentImportModal({
 }: {
   existingComments: Comment[];
   autoFilters: AutoFilter[];
-  onImport: (items: YouTubeCommentItem[]) => Promise<void>;
+  onImport: (newItems: YouTubeCommentItem[], updatedItems: YouTubeCommentItem[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const [step, setStep] = useState<"pick" | "loading" | "confirm">("pick");
-  const [videos, setVideos] = useState<YouTubeChannelVideo[]>([]);
-  const [selectedVideoId, setSelectedVideoId] = useState<string | null>(null);
-  const [loadingVideos, setLoadingVideos] = useState(false);
-  const [fetchedComments, setFetchedComments] = useState<YouTubeCommentItem[]>([]);
-  const [loadingComments, setLoadingComments] = useState(false);
-  const [progress, setProgress] = useState("");
+  const [step, setStep] = useState<"loading" | "confirm" | "error">("loading");
+  const [progressMsg, setProgressMsg] = useState("Buscando canal...");
+  const [progressPct, setProgressPct] = useState(0);
+  const [newItems, setNewItems] = useState<YouTubeCommentItem[]>([]);
+  const [updatedItems, setUpdatedItems] = useState<YouTubeCommentItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
-    setLoadingVideos(true);
-    listMyYouTubeChannelVideos((p) => {
-      if (p.phase === "fetching-channel") setProgress("Buscando canal...");
-      else if (p.phase === "listing") setProgress(`Listando vídeos... (${p.collected})`);
-      else setProgress(`Carregando estatísticas... (${p.done}/${p.total})`);
-    })
-      .then((list) => {
-        setVideos(list);
-        setProgress("");
-        setStep("pick");
-      })
-      .catch((e) => setError(String(e?.message ?? e)))
-      .finally(() => setLoadingVideos(false));
+    void runScan();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function fetchComments(videoId: string, videoTitle: string) {
-    setLoadingComments(true);
+  async function runScan() {
+    setStep("loading");
     setError(null);
     try {
-      const items = await listVideoComments(videoId, videoTitle, 200);
-      const existingIds = new Set(existingComments.map((c) => c.externalId).filter(Boolean));
-      const newItems = items.filter((i) => !existingIds.has(i.commentId));
-      setFetchedComments(newItems);
+      // 1. Listar vídeos do canal
+      const videos = await listMyYouTubeChannelVideos((p) => {
+        if (p.phase === "fetching-channel") setProgressMsg("Buscando canal...");
+        else if (p.phase === "listing") setProgressMsg(`Listando vídeos... (${p.collected})`);
+        else setProgressMsg(`Carregando estatísticas... (${p.done}/${p.total})`);
+      });
+
+      const targets = videos.filter((v) => v.commentCount > 0);
+      if (targets.length === 0) {
+        setNewItems([]);
+        setUpdatedItems([]);
+        setStep("confirm");
+        return;
+      }
+
+      // Mapas para deduplicação
+      const existingByExtId = new Map<string, Comment>();
+      for (const c of existingComments) {
+        if (c.externalId) existingByExtId.set(c.externalId, c);
+      }
+
+      const allNew: YouTubeCommentItem[] = [];
+      const allUpdated: YouTubeCommentItem[] = [];
+
+      // 2. Buscar comentários de cada vídeo
+      for (let i = 0; i < targets.length; i++) {
+        const v = targets[i];
+        setProgressMsg(`Vídeo ${i + 1} de ${targets.length}: ${v.title}`);
+        setProgressPct(Math.round(((i + 1) / targets.length) * 100));
+        try {
+          const items = await listVideoComments(v.videoId, v.title, 200);
+          for (const item of items) {
+            const extId = item.commentId;
+            const existing = existingByExtId.get(extId) ?? existingByExtId.get(`yt_comment:${extId}`);
+            if (!existing) {
+              allNew.push(item);
+            } else if (item.channelReply && item.channelReply !== existing.response) {
+              allUpdated.push(item);
+            }
+            // caso contrário: sem mudança → ignora
+          }
+        } catch {
+          // pula vídeo com erro
+        }
+      }
+
+      setNewItems(allNew);
+      setUpdatedItems(allUpdated);
       setStep("confirm");
     } catch (e: any) {
       setError(String(e?.message ?? e));
-    } finally {
-      setLoadingComments(false);
+      setStep("error");
     }
   }
 
   async function handleImport() {
     setImporting(true);
-    await onImport(fetchedComments);
+    await onImport(newItems, updatedItems);
     setImporting(false);
   }
+
+  const hasChanges = newItems.length > 0 || updatedItems.length > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-black text-slate-900">Importar comentários do YouTube</h3>
-          <button onClick={onClose} className="rounded-full p-1 hover:bg-slate-100"><X size={18} /></button>
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-100">
+              <Youtube size={18} className="text-red-600" />
+            </div>
+            <h3 className="text-lg font-black text-slate-900">Importar do YouTube</h3>
+          </div>
+          {step !== "loading" && (
+            <button onClick={onClose} className="rounded-full p-1 hover:bg-slate-100"><X size={18} /></button>
+          )}
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-2xl bg-rose-50 p-3 text-sm text-rose-700">{error}</div>
-        )}
-
-        {(loadingVideos || loadingComments) && (
-          <div className="py-8 text-center text-sm text-slate-500">{progress || "Carregando..."}</div>
-        )}
-
-        {step === "pick" && !loadingVideos && (
-          <div className="flex flex-col gap-2 max-h-80 overflow-y-auto">
-            {videos.length === 0 && !loadingVideos && (
-              <p className="text-sm text-slate-400">Nenhum vídeo encontrado.</p>
-            )}
-            {videos.map((v) => (
-              <button
-                key={v.videoId}
-                onClick={() => {
-                  setSelectedVideoId(v.videoId);
-                  fetchComments(v.videoId, v.title);
-                }}
-                className={`flex items-center gap-3 rounded-2xl border p-3 text-left hover:border-blue-300 hover:bg-blue-50 ${selectedVideoId === v.videoId ? "border-blue-400 bg-blue-50" : "border-slate-200"}`}
-              >
-                {v.thumbnail && <img src={v.thumbnail} className="h-12 w-20 rounded-lg object-cover" alt="" />}
-                <div className="flex-1 min-w-0">
-                  <p className="truncate text-sm font-bold text-slate-800">{v.title}</p>
-                  <p className="text-xs text-slate-400">{v.commentCount} comentários · {v.publishedAt}</p>
+        {/* Loading */}
+        {step === "loading" && (
+          <div className="flex flex-col items-center gap-4 py-8">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-red-600" />
+            <p className="text-sm font-bold text-slate-700">{progressMsg}</p>
+            {progressPct > 0 && (
+              <div className="w-full">
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                  <div className="h-full rounded-full bg-red-500 transition-all" style={{ width: `${progressPct}%` }} />
                 </div>
-              </button>
-            ))}
+                <p className="mt-1 text-center text-xs text-slate-400">{progressPct}%</p>
+              </div>
+            )}
           </div>
         )}
 
-        {step === "confirm" && !loadingComments && (
-          <div>
-            <p className="mb-4 text-sm text-slate-600">
-              {fetchedComments.length} novo{fetchedComments.length !== 1 ? "s" : ""} comentário{fetchedComments.length !== 1 ? "s" : ""} encontrado{fetchedComments.length !== 1 ? "s" : ""}.
-            </p>
-            <div className="mb-4 flex flex-col gap-2 max-h-52 overflow-y-auto">
-              {fetchedComments.slice(0, 5).map((c) => (
-                <div key={c.commentId} className="rounded-xl border border-slate-100 bg-slate-50 p-2 text-xs text-slate-700">
-                  <span className="font-bold">{c.authorName}: </span>{c.text}
-                </div>
-              ))}
-              {fetchedComments.length > 5 && (
-                <p className="text-xs text-slate-400">... e mais {fetchedComments.length - 5} comentários.</p>
-              )}
-            </div>
+        {/* Erro */}
+        {step === "error" && (
+          <div className="flex flex-col gap-4 py-4">
+            <div className="rounded-2xl bg-rose-50 p-3 text-sm text-rose-700">{error}</div>
             <div className="flex gap-2">
-              <button
-                onClick={() => setStep("pick")}
-                className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-              >
-                Voltar
-              </button>
-              <button
-                onClick={handleImport}
-                disabled={importing || fetchedComments.length === 0}
-                className="flex-1 rounded-2xl bg-blue-700 py-2 text-sm font-bold text-white hover:bg-blue-800 disabled:opacity-50"
-              >
-                {importing ? "Importando..." : "Importar"}
-              </button>
+              <button onClick={onClose} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancelar</button>
+              <button onClick={runScan} className="flex-1 rounded-2xl bg-red-600 py-2 text-sm font-bold text-white hover:bg-red-700">Tentar novamente</button>
             </div>
+          </div>
+        )}
+
+        {/* Confirm */}
+        {step === "confirm" && (
+          <div className="flex flex-col gap-4">
+            {hasChanges ? (
+              <>
+                <div className="flex flex-col gap-2 rounded-2xl bg-slate-50 p-4">
+                  {newItems.length > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-xs font-black text-blue-700">{newItems.length}</span>
+                      <span className="font-bold text-slate-700">novo{newItems.length !== 1 ? "s" : ""} comentário{newItems.length !== 1 ? "s" : ""}</span>
+                    </div>
+                  )}
+                  {updatedItems.length > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-black text-emerald-700">{updatedItems.length}</span>
+                      <span className="font-bold text-slate-700">resposta{updatedItems.length !== 1 ? "s" : ""} atualizada{updatedItems.length !== 1 ? "s" : ""}</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={onClose} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancelar</button>
+                  <button
+                    onClick={handleImport}
+                    disabled={importing}
+                    className="flex-1 rounded-2xl bg-red-600 py-2 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {importing ? "Importando..." : "Importar"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex flex-col items-center gap-2 py-4 text-center">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
+                    <CheckCircle2 size={24} className="text-emerald-600" />
+                  </div>
+                  <p className="font-bold text-slate-800">Tudo atualizado!</p>
+                  <p className="text-sm text-slate-500">Nenhum comentário novo ou atualizado encontrado.</p>
+                </div>
+                <button onClick={onClose} className="w-full rounded-2xl bg-slate-800 py-2 text-sm font-bold text-white hover:bg-slate-900">Fechar</button>
+              </>
+            )}
           </div>
         )}
       </div>
