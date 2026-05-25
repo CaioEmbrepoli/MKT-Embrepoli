@@ -60,10 +60,17 @@ import {
   Wand2,
   Phone,
   Target,
+  Pencil,
+  Clock,
+  Pause,
+  Play,
+  Columns2,
   type LucideIcon
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import * as XLSX from "xlsx";
 import {
   campaignAudiences as seedCampaignAudiences,
   profileAreas as seedProfileAreas,
@@ -122,6 +129,8 @@ import {
   deleteAutoFilter,
   saveSalesClient,
   deleteSalesClient,
+  saveSalesFunnelStage,
+  deleteSalesFunnelStage,
   saveCallSchedule,
   deleteCallSchedule,
   saveNotification,
@@ -156,6 +165,9 @@ import type {
   CustomerQuestion,
   CustomerQuestionStatus,
   CustomerQuestionSource,
+  KnowledgeChatMessage,
+  KnowledgeChatSession,
+  KnowledgeGap,
   PostReviewAsset,
   PostReviewComment,
   ReviewAssetStatus,
@@ -181,6 +193,7 @@ import type {
   SalesClientStatus,
   SalesClientSource,
   SalesProposal,
+  SalesFunnelStage,
   CallSchedule,
   CallFrequency,
   CallLog
@@ -284,8 +297,17 @@ const GOALS_VIRTUAL_COLUMNS: { id: string; boardId: string; name: string; color:
 const goalsColumnByFrequency = new Map(GOALS_VIRTUAL_COLUMNS.map((c) => [c.frequency, c]));
 const goalsColumnIds = new Set(GOALS_VIRTUAL_COLUMNS.map((c) => c.id));
 
+const VENDAS_GOALS_VIRTUAL_COLUMNS: { id: string; name: string; color: string; frequency: TaskResetFrequency; order: number }[] = [
+  { id: "vendas-goals-daily",     name: "Diárias",     color: "#dbeafe", frequency: "daily",     order: 1 },
+  { id: "vendas-goals-weekly",    name: "Semanais",    color: "#dcfce7", frequency: "weekly",    order: 2 },
+  { id: "vendas-goals-monthly",   name: "Mensais",     color: "#fef3c7", frequency: "monthly",   order: 3 },
+  { id: "vendas-goals-quarterly", name: "Trimestrais", color: "#e9d5ff", frequency: "quarterly", order: 4 },
+  { id: "vendas-goals-none",      name: "Únicas",      color: "#f1f5f9", frequency: "none",      order: 5 },
+];
+const vendasGoalsColumnIds = new Set(VENDAS_GOALS_VIRTUAL_COLUMNS.map((c) => c.id));
+
 function isGoalColumn(columnId: string | undefined) {
-  return columnId ? goalsColumnIds.has(columnId) : false;
+  return columnId ? (goalsColumnIds.has(columnId) || vendasGoalsColumnIds.has(columnId)) : false;
 }
 
 function computeGoalStatus(task: Task): { kind: "atingida" | "quase" | "atrasada" | "progresso"; pct: number } {
@@ -841,6 +863,7 @@ export default function Home() {
   const [ytComments, setYtComments] = useState<Comment[]>([]);
   const [autoFilters, setAutoFilters] = useState<AutoFilter[]>([]);
   const [salesClients, setSalesClients] = useState<SalesClient[]>([]);
+  const [salesFunnelStages, setSalesFunnelStages] = useState<SalesFunnelStage[]>([]);
   const [callSchedules, setCallSchedules] = useState<CallSchedule[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [modal, setModal] = useState<ModalState>(null);
@@ -891,9 +914,15 @@ export default function Home() {
     if (!taskBoards.length) return;
     const exists = taskBoards.some((b) => b.id === activeTaskBoardId);
     if (!exists && activeTaskBoardId !== calendarTaskBoardId) {
-      setActiveTaskBoardId(primaryTaskBoardId);
+      const isVendasSection = activeSection.startsWith("vendas-");
+      if (isVendasSection) {
+        const firstVendasBoard = taskBoards.find((b) => b.id.startsWith("vendas-"));
+        setActiveTaskBoardId(firstVendasBoard?.id ?? primaryTaskBoardId);
+      } else {
+        setActiveTaskBoardId(primaryTaskBoardId);
+      }
     }
-  }, [taskBoards, primaryTaskBoardId, activeTaskBoardId]);
+  }, [taskBoards, primaryTaskBoardId, activeTaskBoardId, activeSection]);
   const allowedAreas = useMemo(() => allowedAreasForProfile(currentUser, profileAreas, profileModulePermissions), [currentUser, profileAreas, profileModulePermissions]);
   const activeConfigTab = activeArea === "marketing" ? marketingConfigTab : salesConfigTab;
   const setActiveConfigTab = activeArea === "marketing" ? setMarketingConfigTab : setSalesConfigTab;
@@ -1108,6 +1137,7 @@ export default function Home() {
     setYtComments(data.ytComments);
     setAutoFilters(data.autoFilters);
     setSalesClients(data.salesClients);
+    setSalesFunnelStages(data.salesFunnelStages);
     setCallSchedules(data.callSchedules);
     setNotifications(data.notifications);
     const { data: authData } = await supabase.auth.getUser();
@@ -1118,6 +1148,10 @@ export default function Home() {
       setCurrentUserId(current?.id ?? authUserId);
     }
     remoteReady.current = true;
+    // Seed default sales funnel stages if none exist
+    if (data.salesFunnelStages.length === 0) {
+      syncSalesFunnelStages(DEFAULT_SALES_FUNNEL_STAGES);
+    }
     setRealtimeSyncing(false);
     window.setTimeout(() => {
       realtimeReloading.current = false;
@@ -1266,6 +1300,7 @@ export default function Home() {
   const syncMetrics = syncState("metrics", setMetrics, (previous, next) => persistArrayChanges(previous, next, (item) => saveMetric(supabase!, item), (id) => deleteMetric(supabase!, id)));
   const syncNotifications = syncState("notifications", setNotifications, (previous, next) => persistArrayChanges(previous, next, (item) => saveNotification(supabase!, item), (id) => deleteNotification(supabase!, id)));
   const syncSalesClients = syncState("salesClients", setSalesClients, (previous, next) => persistArrayChanges(previous, next, (item) => saveSalesClient(supabase!, item), (id) => deleteSalesClient(supabase!, id)));
+  const syncSalesFunnelStages = syncState("salesFunnelStages", setSalesFunnelStages, (previous, next) => persistArrayChanges(previous, next, (item) => saveSalesFunnelStage(supabase!, item), (id) => deleteSalesFunnelStage(supabase!, id)));
   const syncCallSchedules = syncState("callSchedules", setCallSchedules, (previous, next) => persistArrayChanges(previous, next, (item) => saveCallSchedule(supabase!, item), (id) => deleteCallSchedule(supabase!, id)));
 
   async function loadCurrentSession() {
@@ -2127,6 +2162,7 @@ export default function Home() {
           )}
           {activeSection === "marketing-tarefas" && (
             <Tasks
+              areaScope="marketing"
               tasks={visibleTasks}
               allTasks={tasks}
               setTasks={syncTasks}
@@ -2243,10 +2279,19 @@ export default function Home() {
             />
           )}
           {activeSection === "vendas-funil-comercial" && (
-            <FunilComercialPlaceholder />
+            <FunilComercialSection
+              salesClients={salesClients}
+              setSalesClients={syncSalesClients}
+              salesFunnelStages={salesFunnelStages}
+              setSalesFunnelStages={syncSalesFunnelStages}
+              callSchedules={callSchedules}
+              setCallSchedules={syncCallSchedules}
+              profiles={profiles}
+            />
           )}
-          {(activeSection === "vendas-atividades" || activeSection === "vendas-metas") && (
+          {activeSection === "vendas-atividades" && (
             <Tasks
+              areaScope="vendas"
               tasks={tasks}
               allTasks={tasks}
               setTasks={syncTasks}
@@ -2268,6 +2313,15 @@ export default function Home() {
               setModal={setModal}
               createNotifications={createNotifications}
               addQuickTask={addQuickTask}
+            />
+          )}
+          {activeSection === "vendas-metas" && (
+            <VendasMetasSection
+              tasks={tasks}
+              setTasks={syncTasks}
+              currentUser={currentUser}
+              profileById={profileById}
+              setModal={setModal}
             />
           )}
           {(activeSection === "marketing-configuracoes" || activeSection === "vendas-configuracoes") && (
@@ -2641,6 +2695,201 @@ const salesSourceLabel: Record<SalesClientSource, string> = {
   outros: "Outros"
 };
 
+const CLIENT_IMPORT_SHEET = "Page1";
+const CLIENT_IMPORT_HEADERS = ["Código", "Nome Cliente", "Tipo", "Telefone", "UF", "Municipio", "Ultima Compra"] as const;
+
+type ImportedSalesClientRow = {
+  rowNumber: number;
+  externalCode: string;
+  name: string;
+  clientType: string;
+  phone: string;
+  stateUf: string;
+  city: string;
+  lastPurchaseAt: string;
+};
+
+type SalesClientImportResult = {
+  rows: number;
+  created: number;
+  updated: number;
+  unchanged: number;
+  updatedFields: number;
+};
+
+function cleanImportCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/\u00a0/g, " ").trim().replace(/^'/, "");
+}
+
+function salesClientImportKey(client: Pick<SalesClient, "externalCode" | "name" | "phone">): string {
+  const code = cleanImportCell(client.externalCode);
+  if (code) return `code:${code}`;
+  const digits = cleanImportCell(client.phone).replace(/\D/g, "");
+  return `fallback:${cleanImportCell(client.name).toLocaleLowerCase("pt-BR")}:${digits}`;
+}
+
+function parseClientImportDate(value: unknown, rowNumber: number): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  if (typeof value === "number") {
+    const parsed = XLSX.SSF.parse_date_code(value);
+    if (!parsed) throw new Error(`Linha ${rowNumber}: data de última compra inválida.`);
+    const month = String(parsed.m).padStart(2, "0");
+    const day = String(parsed.d).padStart(2, "0");
+    return `${parsed.y}-${month}-${day}`;
+  }
+  const raw = cleanImportCell(value);
+  if (!raw || raw === "01/01/0001") return "";
+  const match = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) throw new Error(`Linha ${rowNumber}: data de última compra precisa estar em DD/MM/AAAA.`);
+  const [, dd, mm, yyyy] = match;
+  if (yyyy === "0001") return "";
+  return `${yyyy}-${mm.padStart(2, "0")}-${dd.padStart(2, "0")}`;
+}
+
+function formatSalesClientDate(date: string): string {
+  if (!date) return "Sem compra registrada";
+  const [year, month, day] = date.split("-");
+  if (!year || !month || !day) return date;
+  return `${day}/${month}/${year}`;
+}
+
+async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClientRow[]> {
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    throw new Error("Importe somente arquivo .xlsx no mesmo formato do arquivo de clientes enviado.");
+  }
+
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  if (workbook.SheetNames.length !== 1 || workbook.SheetNames[0] !== CLIENT_IMPORT_SHEET) {
+    throw new Error(`Arquivo inválido. A planilha precisa ter somente a aba "${CLIENT_IMPORT_SHEET}".`);
+  }
+
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[CLIENT_IMPORT_SHEET], {
+    header: 1,
+    defval: "",
+    blankrows: false,
+    raw: false
+  });
+  const header = rows[0]?.map(cleanImportCell) ?? [];
+  const hasExactHeaders = CLIENT_IMPORT_HEADERS.length === header.length && CLIENT_IMPORT_HEADERS.every((h, i) => header[i] === h);
+  if (!hasExactHeaders) {
+    throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")}.`);
+  }
+
+  const seenCodes = new Set<string>();
+  const imported: ImportedSalesClientRow[] = [];
+  rows.slice(1).forEach((row, index) => {
+    const rowNumber = index + 2;
+    const extraValues = row.slice(CLIENT_IMPORT_HEADERS.length).some((cell) => cleanImportCell(cell));
+    if (extraValues) throw new Error(`Linha ${rowNumber}: o arquivo tem colunas extras e foi recusado.`);
+    const values = row.slice(0, CLIENT_IMPORT_HEADERS.length).map(cleanImportCell);
+    if (values.every((value) => !value)) return;
+    const [externalCode, name, clientType, phone, stateUf, city] = values;
+    if (!externalCode) throw new Error(`Linha ${rowNumber}: Código é obrigatório.`);
+    if (!name) throw new Error(`Linha ${rowNumber}: Nome Cliente é obrigatório.`);
+    if (seenCodes.has(externalCode)) throw new Error(`Código duplicado no arquivo: ${externalCode}.`);
+    seenCodes.add(externalCode);
+    imported.push({
+      rowNumber,
+      externalCode,
+      name,
+      clientType,
+      phone,
+      stateUf: stateUf.toUpperCase(),
+      city,
+      lastPurchaseAt: parseClientImportDate(row[6], rowNumber)
+    });
+  });
+
+  if (!imported.length) throw new Error("Nenhum cliente encontrado no arquivo.");
+  return imported;
+}
+
+function importedRowToSalesClient(row: ImportedSalesClientRow): SalesClient {
+  return {
+    id: crypto.randomUUID(),
+    externalCode: row.externalCode,
+    name: row.name,
+    clientType: row.clientType,
+    email: "",
+    phone: row.phone,
+    company: "",
+    segment: "",
+    stateUf: row.stateUf,
+    city: row.city,
+    lastPurchaseAt: row.lastPurchaseAt,
+    status: "lead",
+    source: "manual",
+    assignedTo: "",
+    notes: "",
+    proposals: [],
+    salesFunnelStage: "lead",
+    createdAt: new Date().toISOString()
+  };
+}
+
+function normalizeSalesClient(client: SalesClient): SalesClient {
+  return {
+    ...client,
+    externalCode: client.externalCode ?? "",
+    clientType: client.clientType ?? "",
+    stateUf: client.stateUf ?? "",
+    city: client.city ?? "",
+    lastPurchaseAt: client.lastPurchaseAt ?? "",
+    salesFunnelStage: client.salesFunnelStage ?? "lead"
+  };
+}
+
+function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSalesClientRow[]): { next: SalesClient[]; result: SalesClientImportResult } {
+  const result: SalesClientImportResult = { rows: imported.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0 };
+  const next = current.map(normalizeSalesClient);
+  const indexByKey = new Map(next.map((client, index) => [salesClientImportKey(client), index]));
+  const importFields: (keyof Pick<SalesClient, "externalCode" | "name" | "clientType" | "phone" | "stateUf" | "city" | "lastPurchaseAt">)[] = [
+    "externalCode",
+    "name",
+    "clientType",
+    "phone",
+    "stateUf",
+    "city",
+    "lastPurchaseAt"
+  ];
+
+  imported.forEach((row) => {
+    const importedClient = importedRowToSalesClient(row);
+    const key = salesClientImportKey(importedClient);
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      next.push(importedClient);
+      indexByKey.set(key, next.length - 1);
+      result.created += 1;
+      return;
+    }
+
+    const existing = next[existingIndex];
+    const patch: Partial<SalesClient> = {};
+    importFields.forEach((field) => {
+      if (cleanImportCell(existing[field]) !== cleanImportCell(importedClient[field])) {
+        patch[field] = importedClient[field] as never;
+      }
+    });
+
+    const changedFields = Object.keys(patch).length;
+    if (!changedFields) {
+      result.unchanged += 1;
+      return;
+    }
+
+    next[existingIndex] = { ...existing, ...patch };
+    result.updated += 1;
+    result.updatedFields += changedFields;
+  });
+
+  return { next, result };
+}
+
 const proposalStatusLabel: Record<SalesProposal["status"], string> = {
   rascunho: "Rascunho",
   enviada: "Enviada",
@@ -2702,35 +2951,50 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<SalesClient | null>(null);
   const [showModal, setShowModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   const filtered = salesClients.filter((c) => {
     if (filter !== "todos" && c.status !== filter) return false;
-    if (search && !c.name.toLowerCase().includes(search.toLowerCase()) && !c.company.toLowerCase().includes(search.toLowerCase()) && !c.phone.includes(search)) return false;
+    const term = search.toLowerCase();
+    if (search && ![c.externalCode, c.name, c.company, c.phone, c.email, c.city, c.stateUf].some((value) => (value ?? "").toLowerCase().includes(term))) return false;
     return true;
   });
 
   function openNew() {
     setEditing({
       id: crypto.randomUUID(),
+      externalCode: "",
       name: "", email: "", phone: "", company: "", segment: "",
+      clientType: "", stateUf: "", city: "", lastPurchaseAt: "",
       status: "lead", source: "manual", assignedTo: currentUser?.id ?? "",
-      notes: "", proposals: [], createdAt: new Date().toISOString()
+      notes: "", proposals: [], salesFunnelStage: "lead", createdAt: new Date().toISOString()
     });
     setShowModal(true);
   }
 
   function openEdit(client: SalesClient) {
-    setEditing({ ...client });
+    setEditing(normalizeSalesClient(client));
     setShowModal(true);
   }
 
   function save(client: SalesClient) {
+    const normalized = normalizeSalesClient(client);
     setSalesClients((prev) => {
-      const exists = prev.find((c) => c.id === client.id);
-      return exists ? prev.map((c) => c.id === client.id ? client : c) : [...prev, client];
+      const exists = prev.find((c) => c.id === normalized.id);
+      return exists ? prev.map((c) => c.id === normalized.id ? normalized : c) : [...prev, normalized];
     });
     setShowModal(false);
     setEditing(null);
+  }
+
+  function importClients(rows: ImportedSalesClientRow[]): SalesClientImportResult {
+    let result: SalesClientImportResult = { rows: rows.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0 };
+    setSalesClients((prev) => {
+      const merged = mergeImportedSalesClients(prev, rows);
+      result = merged.result;
+      return merged.next;
+    });
+    return result;
   }
 
   function remove(id: string) {
@@ -2751,6 +3015,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
       callHistory: [],
       assignedTo: currentUser?.id ?? "",
       active: true,
+      paused: false,
       notes: ""
     };
     setCallSchedules((prev) => [...prev, schedule]);
@@ -2775,10 +3040,13 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
           ))}
         </div>
         <input
-          type="search" placeholder="Buscar nome, empresa ou telefone..." value={search}
+          type="search" placeholder="Buscar nome, código, cidade ou telefone..." value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="ml-auto rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
         />
+        <button type="button" onClick={() => setShowImportModal(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-blue-50 hover:text-blue-700">
+          <FileUp size={16} /> Importar XLSX
+        </button>
         <button type="button" onClick={openNew} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
           <Plus size={16} /> Novo
         </button>
@@ -2794,14 +3062,18 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <p className="font-black">{client.name || <span className="italic text-slate-400">Sem nome</span>}</p>
+                  {client.externalCode && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-black text-slate-500">Código {client.externalCode}</span>}
                   <Badge tone={client.status === "cliente" ? "green" : client.status === "lead" ? "amber" : "slate"}>
                     {salesClientStatusLabel[client.status]}
                   </Badge>
+                  {client.clientType && <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-black text-blue-700">{client.clientType}</span>}
                 </div>
                 {client.company && <p className="text-sm font-bold text-slate-600">{client.company}</p>}
                 <p className="text-xs font-bold text-slate-400">
                   {client.phone && <span className="mr-3">📞 {client.phone}</span>}
                   {client.email && <span className="mr-3">✉️ {client.email}</span>}
+                  {(client.city || client.stateUf) && <span className="mr-3">{[client.city, client.stateUf].filter(Boolean).join(" / ")}</span>}
+                  {client.lastPurchaseAt && <span className="mr-3">Última compra: {formatSalesClientDate(client.lastPurchaseAt)}</span>}
                   {client.segment && <span>{client.segment}</span>}
                   {client.source !== "manual" && <span className="ml-3 opacity-70">via {salesSourceLabel[client.source]}</span>}
                 </p>
@@ -2838,7 +3110,88 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
           onAddSchedule={addToCallSchedule}
         />
       )}
+      {showImportModal && (
+        <ClienteImportModal
+          onImport={importClients}
+          onClose={() => setShowImportModal(false)}
+        />
+      )}
     </Panel>
+  );
+}
+
+function ClienteImportModal({ onImport, onClose }: {
+  onImport: (rows: ImportedSalesClientRow[]) => SalesClientImportResult;
+  onClose: () => void;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState<SalesClientImportResult | null>(null);
+
+  async function runImport() {
+    if (!file) {
+      setError("Selecione um arquivo .xlsx para importar.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const rows = await parseSalesClientsWorkbook(file);
+      setResult(onImport(rows));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Não foi possível importar o arquivo.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <CenteredModal close={onClose} variant="compact" panelClassName="rounded-[32px] border-0">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-blue-700">Vendas · Clientes</p>
+          <h2 className="text-xl font-black">Importar clientes XLSX</h2>
+          <p className="mt-1 text-sm font-bold text-slate-500">
+            Aceita somente a planilha com aba Page1 e os cabeçalhos exatamente iguais ao arquivo enviado.
+          </p>
+        </div>
+        <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
+      </div>
+
+      <label className="mt-5 flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/60 px-6 py-8 text-center transition hover:border-blue-500 hover:bg-blue-50">
+        <FileUp className="mb-2 text-blue-700" size={28} />
+        <span className="text-sm font-black text-blue-800">{file ? file.name : "Selecionar arquivo .xlsx"}</span>
+        <span className="mt-1 text-xs font-bold text-slate-500">Page1 · Código, Nome Cliente, Tipo, Telefone, UF, Municipio, Ultima Compra</span>
+        <input
+          type="file"
+          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          className="hidden"
+          onChange={(e) => {
+            setFile(e.target.files?.[0] ?? null);
+            setError("");
+            setResult(null);
+          }}
+        />
+      </label>
+
+      {error && <p className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p>}
+      {result && (
+        <div className="mt-4 rounded-3xl bg-emerald-50 p-4 text-sm font-bold text-emerald-800">
+          <p className="font-black">Importação concluída</p>
+          <p>{result.rows} linhas processadas · {result.created} novos · {result.updated} atualizados · {result.unchanged} ignorados iguais.</p>
+          {result.updatedFields > 0 && <p>{result.updatedFields} campos diferentes foram atualizados.</p>}
+        </div>
+      )}
+
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
+        <button type="button" disabled={loading} onClick={runImport} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-60">
+          {loading ? "Importando..." : "Importar"}
+        </button>
+      </div>
+    </CenteredModal>
   );
 }
 
@@ -2851,7 +3204,7 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
   onAddSchedule: (c: SalesClient, freq: CallFrequency) => void;
 }) {
   const [tab, setTab] = useState<"dados" | "propostas">("dados");
-  const [form, setForm] = useState(client);
+  const [form, setForm] = useState(normalizeSalesClient(client));
   const hasSchedule = callSchedules.some((s) => s.clientId === client.id && s.active);
 
   function addProposal() {
@@ -2868,8 +3221,7 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[32px] bg-white p-6 shadow-2xl">
+    <CenteredModal close={onClose} panelClassName="rounded-[32px] border-0">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-black">{form.name || "Novo cliente"}</h2>
           <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
@@ -2884,8 +3236,18 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
         </div>
         {tab === "dados" && (
           <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Código</label>
+              <input value={form.externalCode} onChange={(e) => setForm((f) => ({ ...f, externalCode: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="000343" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Tipo</label>
+              <input value={form.clientType} onChange={(e) => setForm((f) => ({ ...f, clientType: e.target.value.toUpperCase() }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="PJ ou PF" />
+            </div>
             <div className="md:col-span-2">
-              <label className="block text-sm font-bold text-slate-600 mb-1">Nome *</label>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Nome Cliente *</label>
               <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="Nome do contato" />
             </div>
@@ -2908,6 +3270,21 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
               <label className="block text-sm font-bold text-slate-600 mb-1">Segmento</label>
               <input value={form.segment} onChange={(e) => setForm((f) => ({ ...f, segment: e.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="ex: Diesel veicular, Agrícola..." />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">UF</label>
+              <input value={form.stateUf} onChange={(e) => setForm((f) => ({ ...f, stateUf: e.target.value.toUpperCase() }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" maxLength={2} placeholder="RS" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Município</label>
+              <input value={form.city} onChange={(e) => setForm((f) => ({ ...f, city: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="Carazinho" />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Última Compra</label>
+              <input type="date" value={form.lastPurchaseAt} onChange={(e) => setForm((f) => ({ ...f, lastPurchaseAt: e.target.value }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-600 mb-1">Status</label>
@@ -2990,12 +3367,13 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
           <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
           <button type="button" onClick={() => onSave(form)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Salvar</button>
         </div>
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
 // ─── Ligações ─────────────────────────────────────────────────────────────────
+
+type CallViewMode = "frequency" | "urgency" | "outcome";
 
 const CALL_COLUMNS: { id: string; name: string; frequency: CallFrequency; color: string }[] = [
   { id: "calls-daily",    name: "Diário",    frequency: "daily",    color: "#dbeafe" },
@@ -3004,32 +3382,271 @@ const CALL_COLUMNS: { id: string; name: string; frequency: CallFrequency; color:
   { id: "calls-monthly",  name: "Mensal",    frequency: "monthly",  color: "#e9d5ff" }
 ];
 
+const URGENCY_COLUMNS: { id: string; name: string; color: string; emoji: string }[] = [
+  { id: "overdue", name: "Atrasado",       color: "#fee2e2", emoji: "🔴" },
+  { id: "today",   name: "Hoje",           color: "#fef3c7", emoji: "🟡" },
+  { id: "week",    name: "Próximos 7 dias",color: "#dcfce7", emoji: "🟢" },
+  { id: "future",  name: "Futuros",        color: "#dbeafe", emoji: "📅" },
+];
+
+const OUTCOME_COLUMNS: { id: string; name: string; color: string; outcomes: string[] }[] = [
+  { id: "none",    name: "Nunca ligado",  color: "#f1f5f9", outcomes: [] },
+  { id: "no-ans",  name: "Não atendeu",  color: "#fee2e2", outcomes: ["Não atendeu"] },
+  { id: "think",   name: "Vai pensar",   color: "#fef3c7", outcomes: ["Vai pensar"] },
+  { id: "return",  name: "Retornar",     color: "#e0f2fe", outcomes: ["Retornar"] },
+  { id: "inter",   name: "Interessado",  color: "#dcfce7", outcomes: ["Interessado"] },
+  { id: "closed",  name: "Fechou pedido",color: "#e9d5ff", outcomes: ["Fechou pedido"] },
+];
+
+function callDaysDiff(dateStr: string): number {
+  const today = new Date().toISOString().slice(0, 10);
+  const ms = new Date(dateStr + "T12:00:00").getTime() - new Date(today + "T12:00:00").getTime();
+  return Math.round(ms / 86400000);
+}
+
+function urgencyColumnId(nextCallAt: string): string {
+  const diff = callDaysDiff(nextCallAt);
+  if (diff < 0) return "overdue";
+  if (diff === 0) return "today";
+  if (diff <= 7) return "week";
+  return "future";
+}
+
+function outcomeColumnId(schedule: CallSchedule): string {
+  if (schedule.callHistory.length === 0) return "none";
+  const last = schedule.callHistory[0].outcome;
+  if (last === "Não atendeu") return "no-ans";
+  if (last === "Vai pensar") return "think";
+  if (last === "Retornar") return "return";
+  if (last === "Interessado") return "inter";
+  if (last === "Fechou pedido") return "closed";
+  return "none";
+}
+
+// ─── Funil Comercial — constantes e helpers ───────────────────────────────────
+
+const DEFAULT_SALES_FUNNEL_STAGES: SalesFunnelStage[] = [
+  { id: "lead",     name: "Lead",          color: "#64748b", emoji: "🎯", order: 1, halfWidth: false },
+  { id: "contato",  name: "Contato feito", color: "#3b82f6", emoji: "📞", order: 2, halfWidth: false },
+  { id: "proposta", name: "Proposta",      color: "#f59e0b", emoji: "📋", order: 3, halfWidth: false },
+  { id: "fechado",  name: "Fechado",       color: "#22c55e", emoji: "✅", order: 4, halfWidth: true  },
+  { id: "perdido",  name: "Perdido",       color: "#ef4444", emoji: "❌", order: 5, halfWidth: true  },
+];
+
+function clientFunnelStage(client: SalesClient): string {
+  return client.salesFunnelStage || "lead";
+}
+
+function clientBestProposalValue(client: SalesClient): number {
+  if (!client.proposals.length) return 0;
+  return Math.max(...client.proposals.map((p) => p.value ?? 0));
+}
+
+function CallCard({ schedule, onLog, onOpen, onDragStart }: {
+  schedule: CallSchedule;
+  onLog: () => void;
+  onOpen: () => void;
+  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
+}) {
+  const urgency = callUrgency(schedule.nextCallAt);
+  const lastLog = schedule.callHistory[0];
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      className="rounded-2xl border border-white/80 bg-white p-3 shadow-sm cursor-grab active:cursor-grabbing transition hover:shadow-md hover:border-blue-200"
+      onClick={onOpen}
+    >
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 text-base leading-none">
+          {urgency === "overdue" ? "🔴" : urgency === "today" ? "🟡" : "🟢"}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="font-black text-sm truncate">{schedule.clientName}</p>
+          {schedule.phone && <p className="text-xs font-bold text-slate-500">📞 {schedule.phone}</p>}
+          <p className={`text-xs font-black mt-1 ${urgency === "overdue" ? "text-rose-600" : urgency === "today" ? "text-amber-600" : "text-slate-500"}`}>
+            Próxima: {formatCallDate(schedule.nextCallAt)}
+          </p>
+          {lastLog ? (
+            <p className="text-xs font-bold text-slate-400 mt-0.5 truncate">
+              Última: {formatCallDate(lastLog.date)} · <span className="text-slate-500">{lastLog.outcome}</span>
+            </p>
+          ) : (
+            <p className="text-xs font-bold text-slate-300 mt-0.5">Nenhuma ligação ainda</p>
+          )}
+        </div>
+      </div>
+      <div className="mt-2">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onLog(); }}
+          className="w-full rounded-xl bg-blue-700 px-2 py-1.5 text-xs font-black text-white transition hover:bg-blue-800"
+        >
+          Registrar ligação
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AgendaModal({ schedule, onSave, onArchive, onRemove, onClose }: {
+  schedule: CallSchedule;
+  onSave: (s: CallSchedule) => void;
+  onArchive: () => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const [tab, setTab] = useState<"config" | "history">("config");
+  const [clientName, setClientName] = useState(schedule.clientName);
+  const [phone, setPhone] = useState(schedule.phone);
+  const [frequency, setFrequency] = useState<CallFrequency>(schedule.frequency);
+  const [nextDate, setNextDate] = useState(schedule.nextCallAt);
+  const [notes, setNotes] = useState(schedule.notes);
+
+  function save() {
+    onSave({ ...schedule, clientName, phone, frequency, nextCallAt: nextDate, notes });
+  }
+
+  return (
+    <CenteredModal close={onClose} panelClassName="rounded-[32px] border-0 p-0 overflow-hidden">
+        {/* Header */}
+        <div className="px-6 pt-6 pb-0">
+          <div className="flex items-start justify-between mb-1">
+            <div>
+              <h2 className="text-lg font-black">{schedule.clientName}</h2>
+              {schedule.phone && <p className="text-sm font-bold text-slate-500">📞 {schedule.phone}</p>}
+            </div>
+            <button type="button" onClick={onClose} className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 transition"><X size={18} /></button>
+          </div>
+          {/* Tabs */}
+          <div className="flex gap-1 mt-4 border-b border-slate-100">
+            <button type="button" onClick={() => setTab("config")}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-black transition border-b-2 -mb-px ${tab === "config" ? "border-blue-700 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
+              <Pencil size={14} /> Configurações
+            </button>
+            <button type="button" onClick={() => setTab("history")}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-black transition border-b-2 -mb-px ${tab === "history" ? "border-blue-700 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
+              <Clock size={14} /> Histórico <span className="ml-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-xs font-black text-slate-500">{schedule.callHistory.length}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-4 max-h-[60vh] overflow-y-auto">
+          {tab === "config" ? (
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">Nome</label>
+                <input value={clientName} onChange={(e) => setClientName(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">Telefone</label>
+                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(41) 9xxxx-xxxx"
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">Frequência</label>
+                <div className="flex flex-wrap gap-2">
+                  {(["daily", "weekly", "biweekly", "monthly"] as CallFrequency[]).map((f) => (
+                    <button key={f} type="button" onClick={() => setFrequency(f)}
+                      className={`rounded-2xl px-3 py-2 text-sm font-black transition ${frequency === f ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50"}`}>
+                      {callFrequencyLabel[f]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">Próxima ligação</label>
+                <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">Observações</label>
+                <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+                  placeholder="Notas gerais sobre este contato..."
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 resize-none" />
+              </div>
+            </div>
+          ) : (
+            <div>
+              {schedule.callHistory.length === 0 ? (
+                <p className="py-8 text-center text-sm font-bold text-slate-400">Nenhuma ligação registrada ainda.</p>
+              ) : (
+                <div className="space-y-3">
+                  {schedule.callHistory.map((log) => (
+                    <div key={log.id} className="rounded-2xl bg-slate-50 p-3">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-black text-slate-400">{new Date(log.date + "T12:00:00").toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })}</span>
+                        <span className={`rounded-xl px-2 py-0.5 text-xs font-black ${log.outcome === "Fechou pedido" ? "bg-purple-100 text-purple-700" : log.outcome === "Interessado" ? "bg-green-100 text-green-700" : log.outcome === "Não atendeu" ? "bg-rose-100 text-rose-700" : "bg-slate-100 text-slate-600"}`}>
+                          {log.outcome}
+                        </span>
+                      </div>
+                      {log.notes && <p className="text-sm font-bold text-slate-600">{log.notes}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center gap-2 px-6 pb-6 pt-2 border-t border-slate-100">
+          <button type="button"
+            onClick={() => { onArchive(); onClose(); }}
+            className="flex items-center gap-1.5 rounded-2xl bg-amber-50 px-3 py-2 text-sm font-black text-amber-700 transition hover:bg-amber-100">
+            <Pause size={14} /> Arquivar
+          </button>
+          <button type="button"
+            onClick={() => { if (window.confirm("Excluir esta agenda permanentemente?")) { onRemove(); onClose(); } }}
+            className="flex items-center gap-1.5 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-black text-rose-700 transition hover:bg-rose-100">
+            <Trash2 size={14} /> Excluir
+          </button>
+          {tab === "config" && (
+            <button type="button" disabled={!clientName.trim()} onClick={() => { save(); onClose(); }}
+              className="ml-auto rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:opacity-50">
+              Salvar
+            </button>
+          )}
+        </div>
+    </CenteredModal>
+  );
+}
+
 function LigacoesSection({ callSchedules, setCallSchedules, salesClients, currentUser }: {
   callSchedules: CallSchedule[];
   setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
   salesClients: SalesClient[];
   currentUser: Profile | null;
 }) {
+  const [viewMode, setViewMode] = useState<CallViewMode>("frequency");
   const [logModal, setLogModal] = useState<CallSchedule | null>(null);
+  const [agendaModal, setAgendaModal] = useState<CallSchedule | null>(null);
   const [newModal, setNewModal] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(false);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
-  const activeSchedules = callSchedules.filter((s) => s.active);
+  const visibleSchedules = callSchedules.filter((s) => s.active && !s.archived);
+  const archivedSchedules = callSchedules.filter((s) => s.active && s.archived);
 
-  function registerCall(schedule: CallSchedule, notes: string, outcome: string) {
-    const log: CallLog = {
-      id: crypto.randomUUID(),
-      date: new Date().toISOString().slice(0, 10),
-      notes,
-      outcome
-    };
-    const updated: CallSchedule = {
-      ...schedule,
-      lastCallAt: log.date,
-      nextCallAt: nextCallDate(new Date(), schedule.frequency),
-      callHistory: [log, ...schedule.callHistory]
-    };
+  function registerCall(schedule: CallSchedule, notes: string, outcome: string, nextDate: string) {
+    const log: CallLog = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0, 10), notes, outcome };
+    const updated: CallSchedule = { ...schedule, lastCallAt: log.date, nextCallAt: nextDate, callHistory: [log, ...schedule.callHistory] };
     setCallSchedules((prev) => prev.map((s) => s.id === schedule.id ? updated : s));
     setLogModal(null);
+  }
+
+  function saveAgenda(updated: CallSchedule) {
+    setCallSchedules((prev) => prev.map((s) => s.id === updated.id ? updated : s));
+  }
+
+  function archive(id: string) {
+    setCallSchedules((prev) => prev.map((s) => s.id === id ? { ...s, archived: true } : s));
+  }
+
+  function unarchive(id: string) {
+    setCallSchedules((prev) => prev.map((s) => s.id === id ? { ...s, archived: false } : s));
   }
 
   function remove(id: string) {
@@ -3041,80 +3658,216 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
     setNewModal(false);
   }
 
-  return (
-    <Panel title="Ligações">
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm font-bold text-slate-500">{activeSchedules.length} contatos na agenda</p>
-        <button type="button" onClick={() => setNewModal(true)} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
-          <Plus size={16} /> Nova agenda
-        </button>
-      </div>
-      <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-        {CALL_COLUMNS.map((col) => {
-          const cards = activeSchedules
-            .filter((s) => s.frequency === col.frequency)
-            .sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
+  function handleDrop(scheduleId: string, targetColId: string) {
+    const schedule = callSchedules.find((s) => s.id === scheduleId);
+    if (!schedule) return;
+
+    if (viewMode === "frequency") {
+      const col = CALL_COLUMNS.find((c) => c.id === targetColId);
+      if (!col) return;
+      setCallSchedules((prev) => prev.map((s) => s.id === scheduleId ? { ...s, frequency: col.frequency } : s));
+
+    } else if (viewMode === "urgency") {
+      const today = new Date();
+      let newDate: string;
+      if (targetColId === "overdue") {
+        const d = new Date(today); d.setDate(d.getDate() - 1);
+        newDate = d.toISOString().slice(0, 10);
+      } else if (targetColId === "today") {
+        newDate = today.toISOString().slice(0, 10);
+      } else if (targetColId === "week") {
+        const d = new Date(today); d.setDate(d.getDate() + 3);
+        newDate = d.toISOString().slice(0, 10);
+      } else {
+        const d = new Date(today); d.setDate(d.getDate() + 14);
+        newDate = d.toISOString().slice(0, 10);
+      }
+      setCallSchedules((prev) => prev.map((s) => s.id === scheduleId ? { ...s, nextCallAt: newDate } : s));
+
+    } else if (viewMode === "outcome") {
+      if (targetColId === "none") return;
+      const outcomeMap: Record<string, string> = {
+        "no-ans": "Não atendeu",
+        "think":  "Vai pensar",
+        "return": "Retornar",
+        "inter":  "Interessado",
+        "closed": "Fechou pedido",
+      };
+      const newOutcome = outcomeMap[targetColId];
+      if (!newOutcome) return;
+      setCallSchedules((prev) => prev.map((s) => {
+        if (s.id !== scheduleId) return s;
+        if (s.callHistory.length > 0) {
+          const [latest, ...rest] = s.callHistory;
+          return { ...s, callHistory: [{ ...latest, outcome: newOutcome }, ...rest] };
+        }
+        const log: CallLog = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0, 10), notes: "", outcome: newOutcome };
+        return { ...s, callHistory: [log], lastCallAt: log.date };
+      }));
+    }
+  }
+
+  const viewModes: { id: CallViewMode; label: string }[] = [
+    { id: "frequency", label: "Frequência" },
+    { id: "urgency",   label: "Urgência" },
+    { id: "outcome",   label: "Desfecho" },
+  ];
+
+  function renderCard(s: CallSchedule) {
+    return (
+      <CallCard
+        key={s.id}
+        schedule={s}
+        onLog={() => setLogModal(s)}
+        onOpen={() => setAgendaModal(s)}
+        onDragStart={(e) => { e.dataTransfer.setData("scheduleId", s.id); e.dataTransfer.effectAllowed = "move"; }}
+      />
+    );
+  }
+
+  const emptyState = <p className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-4 text-center text-xs font-bold text-slate-400">Nenhum contato</p>;
+
+  const dropProps = (colId: string) => ({
+    onDragOver:  (e: React.DragEvent) => { e.preventDefault(); setDragOverCol(colId); },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverCol(null); },
+    onDrop:      (e: React.DragEvent) => { e.preventDefault(); const id = e.dataTransfer.getData("scheduleId"); if (id) handleDrop(id, colId); setDragOverCol(null); },
+  });
+
+  function renderColumns() {
+    if (viewMode === "frequency") {
+      return (
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+          {CALL_COLUMNS.map((col) => {
+            const cards = visibleSchedules.filter((s) => s.frequency === col.frequency).sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
+            const isOver = dragOverCol === col.id;
+            return (
+              <div key={col.id} {...dropProps(col.id)}
+                className={`rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+                style={{ backgroundColor: col.color }}>
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="font-black text-slate-700">{col.name}</p>
+                  <Badge tone="slate">{cards.length}</Badge>
+                </div>
+                <div className="space-y-3">{cards.map(renderCard)}{cards.length === 0 && emptyState}</div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    if (viewMode === "urgency") {
+      return (
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+          {URGENCY_COLUMNS.map((col) => {
+            const cards = visibleSchedules.filter((s) => urgencyColumnId(s.nextCallAt) === col.id).sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
+            const isOver = dragOverCol === col.id;
+            return (
+              <div key={col.id} {...dropProps(col.id)}
+                className={`rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+                style={{ backgroundColor: col.color }}>
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="font-black text-slate-700">{col.emoji} {col.name}</p>
+                  <Badge tone="slate">{cards.length}</Badge>
+                </div>
+                <div className="space-y-3">{cards.map(renderCard)}{cards.length === 0 && emptyState}</div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // outcome — layout horizontal com scroll
+    return (
+      <div className="flex gap-4 overflow-x-auto pb-2">
+        {OUTCOME_COLUMNS.map((col) => {
+          const cards = visibleSchedules.filter((s) => outcomeColumnId(s) === col.id).sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
+          const isOver = dragOverCol === col.id;
           return (
-            <div key={col.id} className="rounded-3xl p-4" style={{ backgroundColor: col.color }}>
+            <div key={col.id} {...dropProps(col.id)}
+              className={`min-w-[260px] flex-shrink-0 rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+              style={{ backgroundColor: col.color }}>
               <div className="mb-3 flex items-center justify-between">
                 <p className="font-black text-slate-700">{col.name}</p>
                 <Badge tone="slate">{cards.length}</Badge>
               </div>
-              <div className="space-y-3">
-                {cards.map((schedule) => {
-                  const urgency = callUrgency(schedule.nextCallAt);
-                  const lastLog = schedule.callHistory[0];
-                  return (
-                    <div key={schedule.id} className="rounded-2xl border border-white/80 bg-white p-3 shadow-sm">
-                      <div className="flex items-start gap-2">
-                        <span className="mt-0.5 text-base leading-none">
-                          {urgency === "overdue" ? "🔴" : urgency === "today" ? "🟡" : "🟢"}
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="font-black text-sm truncate">{schedule.clientName}</p>
-                          {schedule.phone && <p className="text-xs font-bold text-slate-500">📞 {schedule.phone}</p>}
-                          <p className={`text-xs font-black mt-1 ${urgency === "overdue" ? "text-rose-600" : urgency === "today" ? "text-amber-600" : "text-slate-500"}`}>
-                            Próxima: {formatCallDate(schedule.nextCallAt)}
-                          </p>
-                          {lastLog && (
-                            <p className="text-xs font-bold text-slate-400 mt-0.5 truncate">
-                              Última: {formatCallDate(lastLog.date)}{lastLog.notes ? ` — "${lastLog.notes.slice(0, 30)}"` : ""}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="mt-2 flex gap-2">
-                        <button type="button" onClick={() => setLogModal(schedule)}
-                          className="flex-1 rounded-xl bg-blue-700 px-2 py-1.5 text-xs font-black text-white transition hover:bg-blue-800">
-                          Registrar ligação
-                        </button>
-                        <button type="button" onClick={() => remove(schedule.id)}
-                          className="rounded-xl bg-slate-100 px-2 py-1.5 text-xs font-black text-slate-500 transition hover:bg-slate-200">
-                          <X size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-                {cards.length === 0 && (
-                  <p className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-4 text-center text-xs font-bold text-slate-400">Nenhum contato</p>
-                )}
-              </div>
+              <div className="space-y-3">{cards.map(renderCard)}{cards.length === 0 && emptyState}</div>
             </div>
           );
         })}
       </div>
+    );
+  }
+
+  return (
+    <Panel title="Ligações">
+      {/* Topo */}
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <div className="flex rounded-2xl bg-slate-100 p-1 gap-1">
+          {viewModes.map((m) => (
+            <button key={m.id} type="button" onClick={() => setViewMode(m.id)}
+              className={`rounded-xl px-4 py-1.5 text-sm font-black transition ${viewMode === m.id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+              {m.label}
+            </button>
+          ))}
+        </div>
+        <span className="text-sm font-bold text-slate-400">{visibleSchedules.length} contatos ativos</span>
+        <div className="ml-auto">
+          <button type="button" onClick={() => setNewModal(true)}
+            className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
+            <Plus size={16} /> Nova agenda
+          </button>
+        </div>
+      </div>
+
+      {/* Colunas */}
+      {renderColumns()}
+
+      {/* Arquivados */}
+      {archivedSchedules.length > 0 && (
+        <div className="mt-6">
+          <button type="button" onClick={() => setArchivedOpen((v) => !v)}
+            className="flex items-center gap-2 text-sm font-black text-slate-500 hover:text-slate-700 transition mb-3">
+            <ChevronDown size={16} className={`transition-transform ${archivedOpen ? "rotate-180" : ""}`} />
+            Arquivados ({archivedSchedules.length})
+          </button>
+          {archivedOpen && (
+            <div className="flex flex-wrap gap-3">
+              {archivedSchedules.map((s) => (
+                <div key={s.id} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-3 py-2">
+                  <span className="text-sm font-black text-slate-500">{s.clientName}</span>
+                  {s.phone && <span className="text-xs font-bold text-slate-400">📞 {s.phone}</span>}
+                  <button type="button" onClick={() => unarchive(s.id)} title="Retomar"
+                    className="ml-1 rounded-xl bg-white p-1 text-green-600 shadow-sm transition hover:bg-green-50">
+                    <Play size={12} />
+                  </button>
+                  <button type="button" onClick={() => remove(s.id)} title="Excluir"
+                    className="rounded-xl bg-white p-1 text-slate-400 shadow-sm transition hover:bg-rose-50 hover:text-rose-500">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modais */}
       {logModal && (
         <RegistrarLigacaoModal schedule={logModal} onConfirm={registerCall} onClose={() => setLogModal(null)} />
       )}
-      {newModal && (
-        <NovaAgendaModal
-          salesClients={salesClients}
-          currentUser={currentUser}
-          callSchedules={callSchedules}
-          onSave={addNew}
-          onClose={() => setNewModal(false)}
+      {agendaModal && (
+        <AgendaModal
+          schedule={agendaModal}
+          onSave={saveAgenda}
+          onArchive={() => archive(agendaModal.id)}
+          onRemove={() => remove(agendaModal.id)}
+          onClose={() => setAgendaModal(null)}
         />
+      )}
+      {newModal && (
+        <NovaAgendaModal salesClients={salesClients} currentUser={currentUser} callSchedules={callSchedules} onSave={addNew} onClose={() => setNewModal(false)} />
       )}
     </Panel>
   );
@@ -3122,40 +3875,46 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
 
 function RegistrarLigacaoModal({ schedule, onConfirm, onClose }: {
   schedule: CallSchedule;
-  onConfirm: (schedule: CallSchedule, notes: string, outcome: string) => void;
+  onConfirm: (schedule: CallSchedule, notes: string, outcome: string, nextDate: string) => void;
   onClose: () => void;
 }) {
   const [notes, setNotes] = useState("");
   const [outcome, setOutcome] = useState("Interessado");
+  const [nextDate, setNextDate] = useState(() => nextCallDate(new Date(), schedule.frequency));
   const outcomes = ["Interessado", "Vai pensar", "Retornar", "Fechou pedido", "Não atendeu"];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-md rounded-[32px] bg-white p-6 shadow-2xl">
+    <CenteredModal close={onClose} variant="compact" panelClassName="rounded-[32px] border-0">
         <h2 className="text-lg font-black mb-1">Registrar ligação</h2>
-        <p className="text-sm font-bold text-slate-500 mb-4">{schedule.clientName} · {schedule.phone}</p>
-        <div className="mb-3">
-          <label className="block text-sm font-bold text-slate-600 mb-2">Observações da conversa</label>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={4} autoFocus
-            placeholder="O que foi conversado..." className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 resize-none" />
-        </div>
-        <div className="mb-5">
-          <label className="block text-sm font-bold text-slate-600 mb-2">Desfecho</label>
-          <div className="flex flex-wrap gap-2">
-            {outcomes.map((o) => (
-              <button key={o} type="button" onClick={() => setOutcome(o)}
-                className={`rounded-2xl px-3 py-2 text-sm font-black transition ${outcome === o ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50"}`}>
-                {o}
-              </button>
-            ))}
+        <p className="text-sm font-bold text-slate-500 mb-4">{schedule.clientName}{schedule.phone ? ` · ${schedule.phone}` : ""}</p>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-bold text-slate-600 mb-2">Observações da conversa</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} autoFocus
+              placeholder="O que foi conversado..." className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 resize-none" />
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-slate-600 mb-2">Desfecho</label>
+            <div className="flex flex-wrap gap-2">
+              {outcomes.map((o) => (
+                <button key={o} type="button" onClick={() => setOutcome(o)}
+                  className={`rounded-2xl px-3 py-2 text-sm font-black transition ${outcome === o ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50"}`}>
+                  {o}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-bold text-slate-600 mb-1">Próxima ligação</label>
+            <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)}
+              className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
           </div>
         </div>
-        <div className="flex gap-2 justify-end">
+        <div className="mt-5 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
-          <button type="button" onClick={() => onConfirm(schedule, notes, outcome)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Confirmar</button>
+          <button type="button" onClick={() => onConfirm(schedule, notes, outcome, nextDate)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Confirmar</button>
         </div>
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -3170,29 +3929,29 @@ function NovaAgendaModal({ salesClients, currentUser, callSchedules, onSave, onC
   const [customName, setCustomName] = useState("");
   const [phone, setPhone] = useState("");
   const [frequency, setFrequency] = useState<CallFrequency>("weekly");
+  const [firstDate, setFirstDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const selectedClient = salesClients.find((c) => c.id === clientId);
 
   function save() {
-    const today = new Date().toISOString().slice(0, 10);
     const schedule: CallSchedule = {
       id: crypto.randomUUID(),
       clientId: clientId || "",
       clientName: selectedClient?.name || customName,
       phone: selectedClient?.phone || phone,
       frequency,
-      nextCallAt: today,
+      nextCallAt: firstDate,
       callHistory: [],
       assignedTo: currentUser?.id ?? "",
       active: true,
+      archived: false,
       notes: ""
     };
     onSave(schedule);
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-md rounded-[32px] bg-white p-6 shadow-2xl">
+    <CenteredModal close={onClose} panelClassName="rounded-[32px] border-0">
         <h2 className="text-lg font-black mb-4">Nova agenda de ligações</h2>
         <div className="space-y-3">
           <div>
@@ -3230,35 +3989,559 @@ function NovaAgendaModal({ salesClients, currentUser, callSchedules, onSave, onC
               ))}
             </div>
           </div>
+          <div>
+            <label className="block text-sm font-bold text-slate-600 mb-1">Primeira ligação</label>
+            <input type="date" value={firstDate} onChange={(e) => setFirstDate(e.target.value)}
+              className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+          </div>
         </div>
         <div className="mt-5 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
           <button type="button" disabled={!customName && !clientId} onClick={save} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">Salvar</button>
         </div>
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
 // ─── Funil Comercial (placeholder visual) ────────────────────────────────────
 
-function FunilComercialPlaceholder() {
-  const stages = ["Prospecção", "Qualificação", "Proposta", "Negociação", "Fechado"];
+// ─── Emoji picker curado (sem biblioteca extra) ───────────────────────────────
+const SALES_EMOJIS = [
+  "🎯","📞","📋","✅","❌","💼","🤝","💰","📈","🏆",
+  "🌟","💡","🔥","⚡","🎉","📊","💎","🚀","📌","🔔",
+  "👋","📧","💬","🗓️","⏰","✉️","📱","🖥️","🏢","👔",
+  "💵","💳","🎁","🔑","🏅","⭐","✨","🤑","💫","🙌",
+  "💪","🎓","👍","🌿","🚗","🏠","😊","🤔","😤","🙏",
+];
+
+function SalesFunnelEmojiPicker({ value, onChange }: { value: string; onChange: (e: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative">
+      <button type="button" onClick={() => setOpen((v) => !v)}
+        className="w-12 h-10 rounded-2xl border border-slate-200 bg-white text-xl flex items-center justify-center hover:border-blue-400 transition select-none">
+        {value || "📌"}
+      </button>
+      {open && (
+        <div className="absolute z-50 top-12 left-0 bg-white border border-slate-200 rounded-3xl shadow-xl p-3 grid grid-cols-10 gap-0.5 w-[280px]">
+          {SALES_EMOJIS.map((e) => (
+            <button key={e} type="button" onClick={() => { onChange(e); setOpen(false); }}
+              className="text-lg hover:bg-slate-100 rounded-xl p-1 transition leading-none">
+              {e}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Linha do funil comercial (sortable) ─────────────────────────────────────
+function SalesFunnelStageRow({ stage, index, total, count, value, isHalf, onRemove, onEdit }: {
+  stage: SalesFunnelStage;
+  index: number;
+  total: number;
+  count: number;
+  value: number;
+  isHalf: boolean;
+  onRemove: (id: string) => void;
+  onEdit: (updated: SalesFunnelStage) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: stage.id });
+  const widthPct = 100 - index * (40 / Math.max(total - 1, 1));
+  const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+  // Estado de edição inline
+  const [editing, setEditing] = useState(false);
+  const [editName,  setEditName]  = useState(stage.name);
+  const [editColor, setEditColor] = useState(stage.color);
+  const [editEmoji, setEditEmoji] = useState(stage.emoji);
+  const [editHalf,  setEditHalf]  = useState(stage.halfWidth);
+
+  function openEdit() {
+    setEditName(stage.name); setEditColor(stage.color);
+    setEditEmoji(stage.emoji); setEditHalf(stage.halfWidth);
+    setEditing(true);
+  }
+  function saveEdit() {
+    if (!editName.trim()) return;
+    onEdit({ ...stage, name: editName.trim(), color: editColor, emoji: editEmoji || "📌", halfWidth: editHalf });
+    setEditing(false);
+  }
+
+  const baseStyle = { transform: CSS.Transform.toString(transform), transition };
+  const widthStyle = isHalf ? {} : { width: `${widthPct}%` };
+
+  if (editing) {
+    return (
+      <div ref={setNodeRef} style={{ ...baseStyle, ...widthStyle }}
+        className={`mx-auto rounded-3xl bg-slate-50 border border-slate-200 p-4 flex flex-wrap gap-2 items-end${isHalf ? " flex-1" : ""}`}>
+        <SalesFunnelEmojiPicker value={editEmoji} onChange={setEditEmoji} />
+        <div className="flex-1 min-w-[120px]">
+          <label className="block text-xs font-bold text-slate-500 mb-1">Nome</label>
+          <input value={editName} onChange={(e) => setEditName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && saveEdit()}
+            className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+        </div>
+        <div>
+          <label className="block text-xs font-bold text-slate-500 mb-1">Cor</label>
+          <input type="color" value={editColor} onChange={(e) => setEditColor(e.target.value)}
+            className="h-10 w-12 rounded-2xl border border-slate-200 bg-white p-1 cursor-pointer" />
+        </div>
+        <button type="button" onClick={() => setEditHalf((v) => !v)}
+          title="Colocar lado a lado com a próxima etapa"
+          className={`h-10 px-3 rounded-2xl border text-sm font-bold transition flex items-center gap-1.5 ${editHalf ? "bg-blue-100 border-blue-400 text-blue-700" : "bg-white border-slate-200 text-slate-500 hover:border-slate-400"}`}>
+          <Columns2 size={15} /> Lado a lado
+        </button>
+        <button type="button" onClick={saveEdit} disabled={!editName.trim()}
+          className="h-10 rounded-2xl bg-blue-700 px-4 text-sm font-black text-white hover:bg-blue-800 disabled:opacity-50 transition">
+          Salvar
+        </button>
+        <button type="button" onClick={() => setEditing(false)}
+          className="h-10 rounded-2xl bg-slate-100 px-4 text-sm font-black text-slate-600 hover:bg-slate-200 transition">
+          Cancelar
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={setNodeRef}
+      style={{ ...baseStyle, ...widthStyle, backgroundColor: stage.color }}
+      className={`flex items-center gap-3 rounded-3xl px-4 py-3 text-white shadow group${isHalf ? " flex-1 min-w-0" : " mx-auto"}`}>
+      <button {...attributes} {...listeners} className="rounded-xl bg-white/20 p-1 cursor-grab shrink-0" title="Reordenar">
+        <GripVertical size={16} />
+      </button>
+      <span className={`font-black text-sm flex-1${isHalf ? "" : " truncate"}`}>{stage.emoji} {stage.name}</span>
+      <span className="font-black text-sm shrink-0">{count} {count === 1 ? "cliente" : "clientes"}</span>
+      {value > 0 && <span className="font-bold text-xs opacity-90 shrink-0">{brl(value)}</span>}
+      <button type="button" onClick={openEdit}
+        className="opacity-0 group-hover:opacity-100 transition rounded-xl bg-white/20 p-1 shrink-0"
+        title="Editar etapa">
+        <Pencil size={14} />
+      </button>
+      <button type="button"
+        onClick={() => window.confirm(`Excluir etapa "${stage.name}"?`) && onRemove(stage.id)}
+        className="opacity-0 group-hover:opacity-100 transition rounded-xl bg-white/20 p-1 shrink-0"
+        title="Excluir etapa">
+        <Trash2 size={14} />
+      </button>
+    </div>
+  );
+}
+
+function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStages, setSalesFunnelStages, callSchedules, setCallSchedules, profiles }: {
+  salesClients: SalesClient[];
+  setSalesClients: Dispatch<SetStateAction<SalesClient[]>>;
+  salesFunnelStages: SalesFunnelStage[];
+  setSalesFunnelStages: Dispatch<SetStateAction<SalesFunnelStage[]>>;
+  callSchedules: CallSchedule[];
+  setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
+  profiles: Profile[];
+}) {
+  const [editingClient, setEditingClient] = useState<SalesClient | null>(null);
+  const [view, setView] = useState<"pipeline" | "funil">("pipeline");
+  const [addingStage, setAddingStage] = useState(false);
+  const [newStageName, setNewStageName] = useState("");
+  const [newStageColor, setNewStageColor] = useState("#3b82f6");
+  const [newStageEmoji, setNewStageEmoji] = useState("📌");
+  const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const sortedStages = [...salesFunnelStages].sort((a, b) => a.order - b.order);
+  const activeClients = salesClients.filter((c) => c.status !== "inativo");
+  const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+
+  // Métricas — usam apenas etapas de "não-final" para pipeline total
+  const pipelineStageIds = sortedStages.slice(0, Math.max(sortedStages.length - 2, 1)).map((s) => s.id);
+  const pipelineClients = activeClients.filter((c) => pipelineStageIds.includes(clientFunnelStage(c)));
+  const pipelineTotal = pipelineClients.reduce((acc, c) => acc + clientBestProposalValue(c), 0);
+  const wonProposals = salesClients.flatMap((c) => c.proposals.filter((p) => p.status === "ganha"));
+  const ticketMedio = wonProposals.length > 0
+    ? wonProposals.reduce((acc, p) => acc + (p.value ?? 0), 0) / wonProposals.length
+    : null;
+
+  function addSchedule(client: SalesClient, freq: CallFrequency) {
+    const schedule: CallSchedule = {
+      id: crypto.randomUUID(), clientId: client.id, clientName: client.name, phone: client.phone,
+      frequency: freq, nextCallAt: new Date().toISOString().slice(0, 10),
+      callHistory: [], assignedTo: client.assignedTo, active: true, archived: false, notes: "",
+    };
+    setCallSchedules((prev) => [...prev, schedule]);
+  }
+
+  function addStage() {
+    if (!newStageName.trim()) return;
+    const stage: SalesFunnelStage = {
+      id: crypto.randomUUID(),
+      name: newStageName.trim(),
+      color: newStageColor,
+      emoji: newStageEmoji || "📌",
+      order: sortedStages.length + 1,
+      halfWidth: false,
+    };
+    setSalesFunnelStages((prev) => [...prev, stage]);
+    setNewStageName(""); setNewStageColor("#3b82f6"); setNewStageEmoji("📌");
+    setAddingStage(false);
+  }
+
+  function removeStage(id: string) {
+    setSalesFunnelStages((prev) => prev.filter((s) => s.id !== id).map((s, i) => ({ ...s, order: i + 1 })));
+  }
+
+  function editStage(updated: SalesFunnelStage) {
+    setSalesFunnelStages((prev) => prev.map((s) => s.id === updated.id ? updated : s));
+  }
+
+  function reorderStages(event: DragEndEvent) {
+    const active = String(event.active.id);
+    const over = String(event.over?.id ?? "");
+    if (!over || active === over) return;
+    const next = arrayMove(
+      sortedStages,
+      sortedStages.findIndex((s) => s.id === active),
+      sortedStages.findIndex((s) => s.id === over)
+    ).map((s, i) => ({ ...s, order: i + 1 }));
+    setSalesFunnelStages(next);
+  }
+
+  function handleClientDrop(clientId: string, stageId: string) {
+    setSalesClients((prev) => prev.map((c) => c.id === clientId ? { ...c, salesFunnelStage: stageId } : c));
+  }
+
+  const colDropProps = (stageId: string) => ({
+    onDragOver:  (e: React.DragEvent) => { e.preventDefault(); setDragOverStage(stageId); },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverStage(null); },
+    onDrop:      (e: React.DragEvent) => { e.preventDefault(); const id = e.dataTransfer.getData("clientId"); if (id) handleClientDrop(id, stageId); setDragOverStage(null); },
+  });
+
+  const emptyState = (
+    <p className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-3 text-center text-xs font-bold text-slate-400">
+      Nenhum cliente
+    </p>
+  );
+
   return (
     <Panel title="Funil Comercial">
-      <div className="mb-4 rounded-3xl border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-800">
-        O Funil Comercial estará disponível em breve. Abaixo você pode visualizar as etapas que serão implementadas.
-      </div>
-      <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${stages.length}, minmax(0, 1fr))` }}>
-        {stages.map((stage, i) => (
-          <div key={stage} className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-4 text-center">
-            <div className="mb-2 flex h-8 w-8 mx-auto items-center justify-center rounded-full bg-slate-200 text-xs font-black text-slate-500">{i + 1}</div>
-            <p className="font-black text-sm text-slate-600">{stage}</p>
-            <p className="mt-1 text-xs font-bold text-slate-400">0 oportunidades</p>
-          </div>
+      {/* Tab switcher */}
+      <div className="mb-5 flex rounded-2xl bg-slate-100 p-1 gap-1 w-fit">
+        {([{ id: "pipeline", label: "Pipeline" }, { id: "funil", label: "Funil" }] as const).map((v) => (
+          <button key={v.id} type="button" onClick={() => setView(v.id)}
+            className={`rounded-xl px-4 py-1.5 text-sm font-black transition ${view === v.id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+            {v.label}
+          </button>
         ))}
       </div>
+
+      {/* Aba Pipeline — kanban com drag */}
+      {view === "pipeline" && (
+        <div className="flex gap-4 overflow-x-auto pb-2">
+          {sortedStages.map((stage) => {
+            const clients = activeClients.filter((c) => clientFunnelStage(c) === stage.id);
+            const colValue = clients.reduce((acc, c) => acc + clientBestProposalValue(c), 0);
+            const isOver = dragOverStage === stage.id;
+            return (
+              <div key={stage.id} {...colDropProps(stage.id)}
+                className={`min-w-[220px] flex-shrink-0 rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+                style={{ backgroundColor: stage.color + "28" }}>
+                <div className="mb-3">
+                  <div className="flex items-center justify-between">
+                    <p className="font-black text-slate-700">{stage.emoji} {stage.name}</p>
+                    <Badge tone="slate">{clients.length}</Badge>
+                  </div>
+                  {colValue > 0 && <p className="text-xs font-black text-blue-700 mt-0.5">{brl(colValue)}</p>}
+                </div>
+                <div className="space-y-2">
+                  {clients.map((client) => {
+                    const val = clientBestProposalValue(client);
+                    return (
+                      <div key={client.id}
+                        draggable
+                        onDragStart={(e) => { e.dataTransfer.setData("clientId", client.id); e.dataTransfer.effectAllowed = "move"; }}
+                        onClick={() => setEditingClient(client)}
+                        className="rounded-2xl bg-white p-3 shadow-sm cursor-grab active:cursor-grabbing transition hover:shadow-md border border-white/80">
+                        <p className="font-black text-sm truncate">{client.name}</p>
+                        {client.company && <p className="text-xs font-bold text-slate-500 truncate">{client.company}</p>}
+                        {val > 0 && <p className="text-xs font-black text-blue-700 mt-1">{brl(val)}</p>}
+                      </div>
+                    );
+                  })}
+                  {clients.length === 0 && emptyState}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Aba Funil — visual reordenável */}
+      {view === "funil" && (
+        <div>
+          {/* Toolbar */}
+          <div className="mb-5 flex flex-wrap items-center gap-3">
+            <button type="button" onClick={() => setAddingStage((v) => !v)}
+              className="flex items-center gap-1.5 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white hover:bg-blue-800 transition">
+              <Plus size={16} /> Nova etapa
+            </button>
+            <div className="rounded-2xl bg-blue-50 border border-blue-100 px-4 py-2 text-sm font-bold text-blue-700">
+              💡 Arraste as barras para reordenar. No Pipeline, arraste os clientes entre colunas.
+            </div>
+          </div>
+
+          {/* Form nova etapa */}
+          {addingStage && (
+            <div className="mx-auto max-w-4xl mb-5 flex flex-wrap gap-2 items-end rounded-3xl bg-slate-50 border border-slate-200 p-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Emoji</label>
+                <SalesFunnelEmojiPicker value={newStageEmoji} onChange={setNewStageEmoji} />
+              </div>
+              <div className="flex-1 min-w-[140px]">
+                <label className="block text-xs font-bold text-slate-500 mb-1">Nome</label>
+                <input value={newStageName} onChange={(e) => setNewStageName(e.target.value)}
+                  placeholder="Ex: Em demonstração" onKeyDown={(e) => e.key === "Enter" && addStage()}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-500 mb-1">Cor</label>
+                <input type="color" value={newStageColor} onChange={(e) => setNewStageColor(e.target.value)}
+                  className="h-10 w-12 rounded-2xl border border-slate-200 bg-white p-1 cursor-pointer" />
+              </div>
+              <button type="button" onClick={addStage} disabled={!newStageName.trim()}
+                className="h-10 rounded-2xl bg-blue-700 px-4 text-sm font-black text-white hover:bg-blue-800 disabled:opacity-50 transition">
+                Adicionar
+              </button>
+              <button type="button" onClick={() => setAddingStage(false)}
+                className="h-10 rounded-2xl bg-slate-100 px-4 text-sm font-black text-slate-600 hover:bg-slate-200 transition">
+                Cancelar
+              </button>
+            </div>
+          )}
+
+          {/* Funil visual reordenável */}
+          {(() => {
+            // Agrupar etapas consecutivas com halfWidth em linhas compartilhadas
+            type FunnelRow = SalesFunnelStage | SalesFunnelStage[];
+            const funnelRows: FunnelRow[] = [];
+            let fi = 0;
+            while (fi < sortedStages.length) {
+              if (sortedStages[fi].halfWidth) {
+                const group: SalesFunnelStage[] = [sortedStages[fi]];
+                while (fi + 1 < sortedStages.length && sortedStages[fi + 1].halfWidth) {
+                  fi++;
+                  group.push(sortedStages[fi]);
+                }
+                funnelRows.push(group);
+              } else {
+                funnelRows.push(sortedStages[fi]);
+              }
+              fi++;
+            }
+            return (
+              <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={reorderStages}>
+                <SortableContext items={sortedStages.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+                  <div className="mx-auto max-w-4xl space-y-2 mb-8">
+                    {funnelRows.map((row, rowIndex) => {
+                      if (Array.isArray(row)) {
+                        const widthPct = 100 - rowIndex * (40 / Math.max(sortedStages.length - 1, 1));
+                        return (
+                          <div key={row.map((s) => s.id).join("-")}
+                            className="mx-auto flex gap-2"
+                            style={{ width: `${widthPct}%` }}>
+                            {row.map((stage) => {
+                              const count = activeClients.filter((c) => clientFunnelStage(c) === stage.id).length;
+                              const value = activeClients.filter((c) => clientFunnelStage(c) === stage.id).reduce((acc, c) => acc + clientBestProposalValue(c), 0);
+                              return (
+                                <SalesFunnelStageRow key={stage.id}
+                                  stage={stage} index={rowIndex} total={sortedStages.length}
+                                  count={count} value={value} isHalf={true}
+                                  onRemove={removeStage} onEdit={editStage} />
+                              );
+                            })}
+                          </div>
+                        );
+                      }
+                      const count = activeClients.filter((c) => clientFunnelStage(c) === row.id).length;
+                      const value = activeClients.filter((c) => clientFunnelStage(c) === row.id).reduce((acc, c) => acc + clientBestProposalValue(c), 0);
+                      return (
+                        <SalesFunnelStageRow key={row.id}
+                          stage={row} index={rowIndex} total={sortedStages.length}
+                          count={count} value={value} isHalf={false}
+                          onRemove={removeStage} onEdit={editStage} />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+              </DndContext>
+            );
+          })()}
+
+          {/* 3 chips de resumo */}
+          <div className="mx-auto max-w-4xl grid gap-3 md:grid-cols-3">
+            {[
+              { label: "Pipeline total",    value: brl(pipelineTotal),                            sub: `${pipelineClients.length} cliente${pipelineClients.length !== 1 ? "s" : ""} em negociação` },
+              { label: "Propostas ganhas",  value: String(wonProposals.length),                    sub: "propostas com status ganha" },
+              { label: "Ticket médio",      value: ticketMedio !== null ? brl(ticketMedio) : "—",  sub: `${wonProposals.length} proposta${wonProposals.length !== 1 ? "s" : ""} ganha${wonProposals.length !== 1 ? "s" : ""}` },
+            ].map((m) => (
+              <div key={m.label} className="rounded-3xl bg-white px-5 py-4 shadow-sm">
+                <p className="text-lg font-black text-slate-800 leading-tight">{m.value}</p>
+                <p className="text-xs font-black text-slate-500 mt-0.5">{m.label}</p>
+                <p className="text-xs font-bold text-slate-400 mt-0.5">{m.sub}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Modal */}
+      {editingClient && (
+        <ClienteModal
+          client={editingClient}
+          profiles={profiles}
+          callSchedules={callSchedules}
+          onSave={(updated) => {
+            setSalesClients((prev) => prev.map((c) => c.id === updated.id ? updated : c));
+            setEditingClient(null);
+          }}
+          onClose={() => setEditingClient(null)}
+          onAddSchedule={addSchedule}
+        />
+      )}
     </Panel>
+  );
+}
+
+// ─── Metas de Vendas ─────────────────────────────────────────────────────────
+
+function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModal }: {
+  tasks: Task[];
+  setTasks: Dispatch<SetStateAction<Task[]>>;
+  currentUser: Profile | null;
+  profileById: Map<string, Profile>;
+  setModal: Dispatch<SetStateAction<ModalState>>;
+}) {
+  function addGoal(colId: string, freq: TaskResetFrequency) {
+    const title = window.prompt("Nome da meta");
+    if (!title) return;
+    const newTask: Task = {
+      id: crypto.randomUUID(),
+      title,
+      columnId: colId,
+      order: tasks.filter((t) => t.columnId === colId).length + 1,
+      priority: "Média",
+      progress: "No prazo",
+      createdBy: currentUser?.id ?? "",
+      assignedTo: currentUser ? [currentUser.id] : [],
+      relatedTo: "",
+      funnelStageId: "",
+      dueDate: "",
+      description: "",
+      checklist: [],
+      comments: [],
+      attachments: [],
+      resetFrequency: freq,
+      resetTime: "08:00",
+      resetMonthLastDay: false,
+      targetValue: 0,
+      currentValue: 0,
+      unit: ""
+    };
+    setTasks((prev) => [...prev, newTask]);
+  }
+
+  return (
+    <Panel title="Metas de Vendas">
+      <div className="overflow-x-auto pb-3">
+        <div className="flex min-w-full gap-4">
+          {VENDAS_GOALS_VIRTUAL_COLUMNS.map((col) => {
+            const colTasks = tasks
+              .filter((t) => t.columnId === col.id && !t.parentTaskId)
+              .sort((a, b) => a.order - b.order);
+            return (
+              <div key={col.id} className="flex w-72 shrink-0 flex-col gap-3 rounded-3xl p-4" style={{ background: col.color }}>
+                <div className="flex items-center justify-between">
+                  <p className="font-black text-slate-700">{col.name}</p>
+                  <Badge tone="slate">{colTasks.length}</Badge>
+                </div>
+                {colTasks.map((task) => (
+                  <VendasGoalCard key={task.id} task={task} setModal={setModal} setTasks={setTasks} />
+                ))}
+                <button
+                  type="button"
+                  onClick={() => addGoal(col.id, col.frequency)}
+                  className="mt-1 w-full rounded-2xl border border-dashed border-slate-300 bg-white/60 py-2 text-sm font-black text-slate-500 hover:border-blue-400 hover:bg-white hover:text-blue-600 transition"
+                >
+                  <Plus size={14} className="inline mr-1" />Nova meta
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function VendasGoalCard({ task, setModal, setTasks }: { task: Task; setModal: Dispatch<SetStateAction<ModalState>>; setTasks: Dispatch<SetStateAction<Task[]>> }) {
+  const [displayValue, setDisplayValue] = useState(task.currentValue ?? 0);
+  const adjustTimer = useRef<number | null>(null);
+  useEffect(() => {
+    if (!adjustTimer.current) setDisplayValue(task.currentValue ?? 0);
+  }, [task.currentValue]);
+
+  const target = task.targetValue ?? 0;
+  const unit = task.unit || "";
+  const status = computeGoalStatus({ ...task, currentValue: displayValue });
+  const colors = goalStatusColors(status.kind);
+
+  function adjust(delta: number, event: React.MouseEvent) {
+    event.stopPropagation();
+    const step = event.shiftKey ? 10 * delta : delta;
+    const newValue = Math.max(0, displayValue + step);
+    setDisplayValue(newValue);
+    if (adjustTimer.current) clearTimeout(adjustTimer.current);
+    adjustTimer.current = window.setTimeout(() => {
+      adjustTimer.current = null;
+      setTasks((all) => all.map((t) => t.id === task.id ? { ...t, currentValue: newValue } : t));
+    }, 500);
+  }
+
+  return (
+    <article
+      onClick={() => setModal({ kind: "task", id: task.id })}
+      className="cursor-pointer rounded-3xl border border-slate-100 bg-white p-4 shadow-sm hover:border-blue-200 hover:shadow-md transition"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <h4 className="min-w-0 flex-1 font-black text-sm">{task.title}</h4>
+        <Badge tone={colors.badge}>{colors.label}</Badge>
+      </div>
+      <div className="mt-3 flex items-baseline gap-1">
+        <span className="text-2xl font-black text-slate-950">{displayValue.toLocaleString("pt-BR")}</span>
+        <span className="text-sm font-bold text-slate-400">/ {target.toLocaleString("pt-BR")}{unit ? ` ${unit}` : ""}</span>
+      </div>
+      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+        <div className="h-full rounded-full transition-all" style={{ width: `${status.pct}%`, background: colors.bar }} />
+      </div>
+      <div className="mt-2 flex items-center justify-between text-xs">
+        <span className="font-bold text-slate-500">{status.pct.toFixed(0)}%</span>
+        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+          <button type="button" onClick={(e) => adjust(-1, e)} className="grid h-7 w-7 place-items-center rounded-full bg-slate-100 text-slate-600 hover:bg-rose-100 hover:text-rose-700" title="Diminuir">
+            <Minus size={14} />
+          </button>
+          <button type="button" onClick={(e) => adjust(1, e)} className="grid h-7 w-7 place-items-center rounded-full bg-blue-700 text-white hover:bg-blue-800" title="Aumentar">
+            <Plus size={14} />
+          </button>
+        </div>
+      </div>
+    </article>
   );
 }
 
@@ -3755,6 +5038,10 @@ function Header({
     }
     if (notification.targetKind === "metric") {
       setModal({ kind: "metric", id: notification.targetId });
+      return;
+    }
+    if (notification.targetKind === "question") {
+      openSection("marketing-banco-duvidas");
       return;
     }
     if (notification.targetKind === "system") return;
@@ -4337,6 +5624,7 @@ function Tasks(props: {
   setModal: Dispatch<SetStateAction<ModalState>>;
   createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void;
   addQuickTask: (columnId: string, title: string) => void;
+  areaScope?: "marketing" | "vendas";
 }) {
   const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { distance: 7 } }));
   const [taskMenu, setTaskMenu] = useState<{ taskId: string; x: number; y: number } | null>(null);
@@ -4350,7 +5638,8 @@ function Tasks(props: {
   function addBoard() {
     const name = window.prompt("Nome do novo quadro");
     if (!name) return;
-    const boardId = `${slug(name)}-${crypto.randomUUID().slice(0, 6)}`;
+    const rawId = `${slug(name)}-${crypto.randomUUID().slice(0, 6)}`;
+    const boardId = props.areaScope === "vendas" ? `vendas-${rawId}` : rawId;
     props.setTaskBoards((current) => [...current, { id: boardId, name, order: current.length + 1, isFixed: false }]);
     props.setTaskColumns((current) => [
       ...current,
@@ -4449,6 +5738,11 @@ function Tasks(props: {
   }
 
   const sortedBoards = props.taskBoards.slice().sort((a, b) => a.order - b.order);
+  const scopedBoards = props.areaScope === "vendas"
+    ? sortedBoards.filter((b) => b.id.startsWith("vendas-") && b.id !== "vendas-metas")
+    : props.areaScope === "marketing"
+      ? sortedBoards.filter((b) => !b.id.startsWith("vendas-"))
+      : sortedBoards;
   const goalsActive = isMetasBoardId(props.activeTaskBoardId, props.taskBoards);
   const activeColumns: TaskColumn[] = goalsActive
     ? GOALS_VIRTUAL_COLUMNS.map((c) => ({ id: c.id, boardId: c.boardId, name: c.name, color: c.color, order: c.order }))
@@ -4459,14 +5753,14 @@ function Tasks(props: {
   return (
     <Panel title="Tarefas" action={calendarActive ? <RoundAdd onClick={() => props.setModal({ kind: "post" })} label="Adicionar post" /> : goalsActive ? null : <button onClick={addColumn} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">Nova coluna</button>}>
       <div className="mb-5 flex flex-wrap items-center gap-2">
-        {sortedBoards.map((board) => (
+        {scopedBoards.map((board) => (
           <span key={board.id} className={`inline-flex items-center gap-1 rounded-2xl ${props.activeTaskBoardId === board.id ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}>
             <button
               type="button"
               onClick={() => props.setActiveTaskBoardId(board.id)}
               className="px-4 py-2 text-sm font-black"
             >
-              {board.name}
+              {props.areaScope === "vendas" && board.id === "vendas-atividades" ? "Tarefas" : board.name}
             </button>
             {!board.isFixed && (
               <button type="button" onClick={() => deleteBoard(board)} className={`mr-2 rounded-xl p-1 ${props.activeTaskBoardId === board.id ? "hover:bg-blue-800" : "hover:bg-rose-100 hover:text-rose-700"}`} title="Excluir aba">
@@ -4475,14 +5769,18 @@ function Tasks(props: {
             )}
           </span>
         ))}
-        <button
-          type="button"
-          onClick={() => props.setActiveTaskBoardId(calendarTaskBoardId)}
-          className={`rounded-2xl px-4 py-2 text-sm font-black ${calendarActive ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}
-        >
-          Calendário
-        </button>
-        <button type="button" onClick={addBoard} className="grid h-10 w-10 place-items-center rounded-full bg-blue-100 text-blue-700" title="Novo quadro"><Plus size={18} /></button>
+        {props.areaScope !== "vendas" && (
+          <button
+            type="button"
+            onClick={() => props.setActiveTaskBoardId(calendarTaskBoardId)}
+            className={`rounded-2xl px-4 py-2 text-sm font-black ${calendarActive ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600"}`}
+          >
+            Calendário
+          </button>
+        )}
+        {props.areaScope !== "vendas" && (
+          <button type="button" onClick={addBoard} className="grid h-10 w-10 place-items-center rounded-full bg-blue-100 text-blue-700" title="Novo quadro"><Plus size={18} /></button>
+        )}
       </div>
       {calendarActive ? (
         <CalendarPostsKanban posts={props.posts} setPosts={props.setPosts} ideas={props.ideas} currentUser={props.currentUser} campaigns={props.campaigns} channels={props.channels} channelById={props.channelById} setModal={props.setModal} createNotifications={props.createNotifications} />
@@ -6124,8 +7422,7 @@ function PostTemplateModal({ template, setTemplates, channels, contentTypes, fun
     close();
   }
   return (
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm animate-fade-in-up">
-      <section className="max-h-[92vh] w-full max-w-4xl overflow-y-auto rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl animate-soft-pop">
+    <CenteredModal close={close}>
         <div className="mb-5 flex items-center justify-between gap-4">
           <div>
             <p className="text-sm font-black text-blue-700">Padrão editorial</p>
@@ -6147,8 +7444,7 @@ function PostTemplateModal({ template, setTemplates, channels, contentTypes, fun
           <TextArea name="captionExample" label="Exemplo de legenda/copy" defaultValue={template?.captionExample} />
           <SubmitButton>{template ? "Salvar" : "Criar"}</SubmitButton>
         </EntityForm>
-      </section>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -6231,8 +7527,7 @@ function CalendarDateModal({ date, setCalendarDates, close }: { date?: CalendarD
     close();
   }
   return (
-    <div className="fixed inset-0 z-[60] grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm animate-fade-in-up">
-      <section className="w-full max-w-2xl rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl animate-soft-pop">
+    <CenteredModal close={close}>
         <div className="mb-5 flex items-center justify-between gap-4">
           <h3 className="text-2xl font-black">{date ? "Editar data" : "Nova data"}</h3>
           <button type="button" onClick={close} className="rounded-2xl bg-slate-100 p-2 text-slate-600"><X size={18} /></button>
@@ -6245,8 +7540,7 @@ function CalendarDateModal({ date, setCalendarDates, close }: { date?: CalendarD
           <TextArea name="notes" label="Observações" defaultValue={date?.notes} />
           <SubmitButton>{date ? "Salvar" : "Adicionar"}</SubmitButton>
         </EntityForm>
-      </section>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -6457,8 +7751,10 @@ function EntityModal(props: {
     }
   }, [modal.kind, task?.id]);
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm animate-fade-in-up">
-      <section ref={modalContentRef} className={`max-h-[92vh] w-full overflow-y-auto rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl shadow-slate-950/20 animate-soft-pop ${modal.kind === "task" || modal.kind === "post" ? "max-w-6xl" : "max-w-3xl"}`}>
+    <CenteredModal
+      close={close}
+      panelRef={modalContentRef}
+    >
         <div className="mb-5 flex items-start justify-between gap-4 rounded-[26px] bg-gradient-to-r from-blue-50 to-slate-50 px-4 py-3">
           <div>
             <p className="text-sm font-black text-blue-700">Gestão Embrepoli</p>
@@ -6473,8 +7769,7 @@ function EntityModal(props: {
         {modal.kind === "metric" && <MetricModalV2 {...props} close={close} />}
         {modal.kind === "profile" && <ProfileModal {...props} close={close} />}
         {modal.kind === "teamMember" && <TeamMemberModal {...props} close={close} />}
-      </section>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -6490,15 +7785,13 @@ function modalTitle(modal: NonNullable<ModalState>) {
 
 function MediaPreviewModal({ item, close }: { item: MediaPreviewItem; close: () => void }) {
   return (
-    <div className="fixed inset-0 z-[80] grid place-items-center bg-slate-950/75 p-4 backdrop-blur-sm animate-fade-in-up">
-      <section className="w-full max-w-5xl rounded-[34px] bg-white p-4 shadow-2xl animate-soft-pop">
+    <CenteredModal close={close} zClass="z-[120]" variant="media" className="bg-slate-950/75" panelClassName="border-0 p-4">
         <div className="mb-3 flex items-center justify-between gap-3">
           <h3 className="line-clamp-1 font-black">{item.name}</h3>
           <button type="button" onClick={close} className="rounded-2xl bg-slate-100 p-2 text-slate-600"><X size={18} /></button>
         </div>
         <MediaPreviewContent item={item} large />
-      </section>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -6682,8 +7975,7 @@ function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile)
   const others = items.filter((i) => !i.isFolder && !SELECTABLE_MIME_TYPES.has(i.mimeType));
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="flex h-[82vh] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl">
+    <CenteredModal close={onClose} zClass="z-[120]" variant="fullscreen-ish" className="bg-slate-950/75" panelClassName="flex h-[82vh] flex-col overflow-hidden rounded-[28px] border-0 p-0">
         {/* Header */}
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
           <div className="flex items-center gap-2">
@@ -6793,8 +8085,7 @@ function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile)
             {currentFolder.name} · {folders.length} pasta{folders.length !== 1 ? "s" : ""}, {files.length} arquivo{files.length !== 1 ? "s" : ""}
           </p>
         </div>
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -6847,8 +8138,7 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
   }
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="flex h-[88vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] bg-white shadow-2xl">
+    <CenteredModal close={onClose} zClass="z-[120]" variant="fullscreen-ish" className="bg-slate-950/75" panelClassName="flex h-[88vh] flex-col overflow-hidden rounded-[28px] border-0 p-0">
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-6 py-4">
           <div>
             <h2 className="font-black">Todos os vídeos · {channelLabel}</h2>
@@ -6942,8 +8232,7 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
             <button type="button" disabled={safePage === totalPages} onClick={() => setPage(totalPages)} className="rounded-xl bg-slate-100 px-2 py-1 text-xs font-black text-slate-700 disabled:opacity-40">»</button>
           </div>
         </div>
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -7090,8 +8379,7 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
   })();
 
   return (
-    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && phase !== "fetching" && phase !== "importing" && onClose()}>
-      <div className="w-full max-w-md rounded-[28px] bg-white p-6 shadow-2xl">
+    <CenteredModal close={onClose} closeOnOverlay={phase !== "fetching" && phase !== "importing"} zClass="z-[120]" variant="compact" className="bg-slate-950/75" panelClassName="rounded-[28px] border-0">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Youtube size={22} className="text-red-600" />
@@ -7141,8 +8429,7 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -7169,8 +8456,7 @@ function YouTubeSearchModal({ onSelect, onClose }: { onSelect: (video: YouTubeVi
   }
 
   return (
-    <div className="fixed inset-0 z-[90] grid place-items-center bg-slate-950/75 p-4 backdrop-blur-sm" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="w-full max-w-2xl rounded-[34px] bg-white p-6 shadow-2xl">
+    <CenteredModal close={onClose} zClass="z-[120]" className="bg-slate-950/75" panelClassName="border-0">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Youtube size={20} className="text-red-600" />
@@ -7209,8 +8495,7 @@ function YouTubeSearchModal({ onSelect, onClose }: { onSelect: (video: YouTubeVi
             </button>
           ))}
         </div>
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -8627,6 +9912,69 @@ function Panel({ title, action, children }: { title: string; action?: ReactNode;
   return <section className="rounded-[30px] border border-slate-200 bg-white p-5 shadow-sm motion-smooth animate-fade-in-up"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-2"><Search size={17} className="text-blue-700" /><h2 className="font-black">{title}</h2></div>{action}</div>{children}</section>;
 }
 
+function CenteredModal({
+  children,
+  close,
+  zClass = "z-[100]",
+  maxWidth,
+  variant = "standard",
+  className = "",
+  panelClassName = "",
+  closeOnOverlay = true,
+  panelRef,
+}: {
+  children: ReactNode;
+  close?: () => void;
+  zClass?: string;
+  maxWidth?: string;
+  variant?: "standard" | "compact" | "media" | "fullscreen-ish";
+  className?: string;
+  panelClassName?: string;
+  closeOnOverlay?: boolean;
+  panelRef?: RefObject<HTMLElement | null>;
+}) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mounted]);
+
+  const variantClasses = {
+    standard: "w-[min(1120px,calc(100vw-32px))] max-w-6xl max-h-[90vh]",
+    compact: "w-[min(560px,calc(100vw-32px))] max-w-xl max-h-[90vh]",
+    media: "w-[min(1120px,calc(100vw-32px))] max-w-5xl max-h-[90vh]",
+    "fullscreen-ish": "w-[min(1180px,calc(100vw-32px))] max-w-6xl max-h-[90vh]",
+  } satisfies Record<"standard" | "compact" | "media" | "fullscreen-ish", string>;
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      className={`fixed inset-0 ${zClass} grid place-items-center bg-slate-950/40 p-4 backdrop-blur-sm animate-fade-in-up ${className}`}
+      onClick={(event) => {
+        if (closeOnOverlay && close && event.target === event.currentTarget) close();
+      }}
+    >
+      <section
+        ref={panelRef}
+        className={`${maxWidth ?? variantClasses[variant]} overflow-y-auto rounded-[34px] border border-white/70 bg-white p-6 shadow-2xl shadow-slate-950/20 animate-soft-pop ${panelClassName}`}
+      >
+        {children}
+      </section>
+    </div>,
+    document.body
+  );
+}
+
 function RoundAdd({ onClick, label }: { onClick: () => void; label: string }) {
   return <button onClick={onClick} aria-label={label} title={label} className="grid h-11 w-11 place-items-center rounded-full bg-blue-700 text-white shadow-lg shadow-blue-700/20 motion-smooth hover:bg-blue-800"><Plus size={22} /></button>;
 }
@@ -8984,8 +10332,7 @@ function YoutubeImportModal({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="flex w-full max-w-lg flex-col gap-4 rounded-3xl bg-white p-6 shadow-xl">
+    <CenteredModal close={phase !== "importing" ? onClose : undefined} className="bg-black/40" variant="compact" panelClassName="flex flex-col gap-4 rounded-3xl border-0">
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -9128,8 +10475,7 @@ function YoutubeImportModal({
             </div>
           </div>
         )}
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 
@@ -9156,10 +10502,12 @@ function BancoDeDuvidas({
   const [newText, setNewText] = useState("");
 
   // ── Chat state ──
-  type ChatMsg = { role: "user" | "ai"; text: string; unknown?: boolean };
-  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [chatSession, setChatSession] = useState<KnowledgeChatSession | null>(null);
+  const [chatMessages, setChatMessages] = useState<KnowledgeChatMessage[]>([]);
+  const [activeGap, setActiveGap] = useState<KnowledgeGap | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [chatBootLoading, setChatBootLoading] = useState(false);
   const [unknownInput, setUnknownInput] = useState("");
   const [savingUnknown, setSavingUnknown] = useState(false);
 
@@ -9178,6 +10526,62 @@ function BancoDeDuvidas({
   };
 
   const needsReviewCount = questions.filter((q) => q.needsReview && !q.reviewedAt).length;
+
+  function localChatMessage(role: KnowledgeChatMessage["role"], content: string, unknown = false): KnowledgeChatMessage {
+    return {
+      id: crypto.randomUUID(),
+      sessionId: chatSession?.id ?? "local",
+      organizationId: currentUser.organizationId,
+      userId: currentUser.id,
+      role,
+      content,
+      unknown,
+      createdAt: new Date().toISOString()
+    };
+  }
+
+  async function chatAuthHeaders(contentType = false) {
+    if (!supabase) throw new Error("Supabase não configurado.");
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error("Sessão expirada. Entre novamente.");
+    return {
+      Authorization: `Bearer ${token}`,
+      ...(contentType ? { "Content-Type": "application/json" } : {})
+    };
+  }
+
+  useEffect(() => {
+    if (!supabase) return;
+    let cancelled = false;
+    async function loadTodayChat() {
+      setChatBootLoading(true);
+      try {
+        const res = await fetch("/api/knowledge-chat/today", { headers: await chatAuthHeaders() });
+        const data = await res.json() as {
+          session?: KnowledgeChatSession;
+          messages?: KnowledgeChatMessage[];
+          activeGap?: KnowledgeGap | null;
+          error?: string;
+        };
+        if (data.error) throw new Error(data.error);
+        if (!cancelled) {
+          setChatSession(data.session ?? null);
+          setChatMessages(data.messages ?? []);
+          setActiveGap(data.activeGap ?? null);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setChatMessages([localChatMessage("error", error instanceof Error ? error.message : "Erro ao carregar chat.")]);
+        }
+      } finally {
+        if (!cancelled) setChatBootLoading(false);
+      }
+    }
+    void loadTodayChat();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.id]);
 
   function openQuestion(q: CustomerQuestion) {
     setSelected(q);
@@ -9226,10 +10630,30 @@ function BancoDeDuvidas({
     const q = chatInput.trim();
     if (!q || chatLoading) return;
     setChatInput("");
-    setChatMessages((prev) => [...prev, { role: "user", text: q }]);
+    setChatMessages((prev) => [...prev, localChatMessage("user", q)]);
     setChatLoading(true);
     setUnknownInput("");
+    setActiveGap(null);
     try {
+      if (supabase) {
+        const res = await fetch("/api/knowledge-chat/send", {
+          method: "POST",
+          headers: await chatAuthHeaders(true),
+          body: JSON.stringify({ question: q })
+        });
+        const data = await res.json() as {
+          session?: KnowledgeChatSession;
+          messages?: KnowledgeChatMessage[];
+          activeGap?: KnowledgeGap | null;
+          error?: string;
+        };
+        if (data.error) throw new Error(data.error);
+        setChatSession(data.session ?? chatSession);
+        setChatMessages(data.messages ?? []);
+        setActiveGap(data.activeGap ?? null);
+        return;
+      }
+
       const bank = questions
         .filter((item) => item.status === "aprovado" && item.answerText?.trim())
         .map((item) => ({ id: item.id, questionText: item.questionText, answerText: item.answerText }));
@@ -9241,29 +10665,69 @@ function BancoDeDuvidas({
       const data = await res.json() as { answer: string | null; unknown: boolean; error?: string };
       if (data.error) throw new Error(data.error);
       if (!data.unknown && data.answer) {
-        setChatMessages((prev) => [...prev, { role: "ai", text: data.answer! }]);
+        setChatMessages((prev) => [...prev, localChatMessage("ai", data.answer!)]);
       } else {
+        setActiveGap({
+          id: "local-gap",
+          organizationId: currentUser.organizationId,
+          sessionId: chatSession?.id ?? "local",
+          userId: currentUser.id,
+          questionText: q,
+          status: "aguardando_resposta",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        });
         setChatMessages((prev) => [
           ...prev,
-          { role: "ai", text: "Nao encontrei essa resposta no banco ainda.", unknown: true },
+          localChatMessage("ai", "Ainda não sei responder isso com segurança pelo Banco de Dúvidas.", true),
         ]);
       }
-    } catch {
-      setChatMessages((prev) => [...prev, { role: "ai", text: "Erro ao consultar a IA. Tente novamente." }]);
+    } catch (error) {
+      setChatMessages((prev) => [...prev, localChatMessage("error", error instanceof Error ? error.message : "Erro ao consultar a IA. Tente novamente.")]);
     } finally {
       setChatLoading(false);
     }
   }
 
   async function handleSaveUnknown() {
-    const lastUserMsg = [...chatMessages].reverse().find((m) => m.role === "user");
+    const lastUserMsg = activeGap?.questionText
+      ? { content: activeGap.questionText }
+      : [...chatMessages].reverse().find((m) => m.role === "user");
     if (!lastUserMsg || !unknownInput.trim()) return;
     setSavingUnknown(true);
+    if (supabase && activeGap && activeGap.id !== "local-gap") {
+      try {
+        const res = await fetch("/api/knowledge-chat/gap-answer", {
+          method: "POST",
+          headers: await chatAuthHeaders(true),
+          body: JSON.stringify({ gapId: activeGap.id, answer: unknownInput.trim() })
+        });
+        const data = await res.json() as {
+          question?: CustomerQuestion;
+          messages?: KnowledgeChatMessage[];
+          activeGap?: KnowledgeGap | null;
+          error?: string;
+        };
+        if (data.error) throw new Error(data.error);
+        if (data.question && !questions.some((item) => item.id === data.question!.id)) {
+          setQuestions([data.question, ...questions]);
+        }
+        setChatMessages(data.messages ?? chatMessages);
+        setActiveGap(data.activeGap ?? null);
+        setUnknownInput("");
+      } catch (error) {
+        setChatMessages((prev) => [...prev, localChatMessage("error", error instanceof Error ? error.message : "Erro ao salvar resposta.")]);
+      } finally {
+        setSavingUnknown(false);
+      }
+      return;
+    }
+
     const newQ: CustomerQuestion = {
       id: crypto.randomUUID(),
       organizationId: currentUser.organizationId,
       source: "manual",
-      questionText: lastUserMsg.text,
+      questionText: lastUserMsg.content,
       answerText: unknownInput.trim(),
       authorName: currentUser.name,
       likes: 0,
@@ -9279,13 +10743,25 @@ function BancoDeDuvidas({
     }
     setChatMessages((prev) => [
       ...prev,
-      { role: "ai", text: "Resposta salva no banco! Ela sera usada nas proximas consultas." },
+      localChatMessage("system", "Resposta salva no banco! Ela será usada nas próximas consultas."),
     ]);
+    setActiveGap(null);
     setUnknownInput("");
     setSavingUnknown(false);
   }
 
-  const lastMsgUnknown = chatMessages.length > 0 && chatMessages[chatMessages.length - 1].unknown === true;
+  async function handleIgnoreGap() {
+    if (supabase && activeGap && activeGap.id !== "local-gap") {
+      const { error } = await supabase
+        .from("knowledge_gaps")
+        .update({ status: "ignorado", updated_at: new Date().toISOString() })
+        .eq("id", activeGap.id);
+      if (error) console.error("[knowledge-chat] ignore gap", error);
+    }
+    setActiveGap(null);
+  }
+
+  const lastMsgUnknown = Boolean(activeGap && activeGap.status === "aguardando_resposta");
 
   function addManual(e: FormEvent) {
     e.preventDefault();
@@ -9362,14 +10838,17 @@ function BancoDeDuvidas({
             {chatMessages.length === 0 && (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 text-slate-400">
                 <MessageSquare size={36} />
-                <p className="text-sm font-bold">Pergunte algo sobre produtos da Embrepoli</p>
-                <p className="text-xs">A IA vai buscar a resposta no banco de duvidas aprovadas</p>
+                <p className="text-sm font-bold">{chatBootLoading ? "Carregando chat do dia..." : "Pergunte algo sobre produtos da Embrepoli"}</p>
+                <p className="text-xs">A IA vai buscar a resposta no banco de dúvidas aprovadas</p>
               </div>
             )}
             {chatMessages.map((msg, i) => (
               <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${msg.role === "user" ? "bg-blue-700 text-white" : msg.unknown ? "border border-orange-200 bg-orange-50 text-orange-800" : "bg-slate-100 text-slate-800"}`}>
-                  {msg.text}
+                <div className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${msg.role === "user" ? "bg-blue-700 text-white" : msg.role === "error" ? "border border-rose-200 bg-rose-50 text-rose-700" : msg.unknown ? "border border-orange-200 bg-orange-50 text-orange-800" : msg.role === "system" ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-800"}`}>
+                  {msg.content}
+                  {msg.role === "ai" && msg.confidence !== undefined && !msg.unknown && (
+                    <p className="mt-1 text-[11px] font-bold opacity-60">Confiança: {Math.round(msg.confidence * 100)}%</p>
+                  )}
                 </div>
               </div>
             ))}
@@ -9400,7 +10879,7 @@ function BancoDeDuvidas({
                   {savingUnknown ? "Salvando..." : "Salvar no banco"}
                 </button>
                 <button
-                  onClick={() => setChatMessages((prev) => { const copy = [...prev]; copy[copy.length - 1] = { ...copy[copy.length - 1], unknown: false }; return copy; })}
+                  onClick={handleIgnoreGap}
                   className="rounded-xl bg-slate-100 px-4 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-200"
                 >
                   Ignorar
@@ -10165,8 +11644,7 @@ function CommentImportModal({
   const hasChanges = newItems.length > 0 || updatedItems.length > 0;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-3xl bg-white p-6 shadow-2xl">
+    <CenteredModal close={step !== "loading" ? onClose : undefined} className="bg-black/40" variant="compact" panelClassName="rounded-3xl border-0">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-red-100">
@@ -10250,8 +11728,7 @@ function CommentImportModal({
             )}
           </div>
         )}
-      </div>
-    </div>
+    </CenteredModal>
   );
 }
 

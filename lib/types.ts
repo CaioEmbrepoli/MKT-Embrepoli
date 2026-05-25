@@ -339,7 +339,7 @@ export type Notification = {
   description: string;
   createdAt: string;
   read: boolean;
-  targetKind: "post" | "task" | "review" | "idea" | "campaign" | "metric" | "calendar" | "system";
+  targetKind: "post" | "task" | "review" | "idea" | "campaign" | "metric" | "calendar" | "question" | "system";
   targetId: string;
 };
 
@@ -372,10 +372,80 @@ export type AutoFilter = {
   createdAt: string;
 };
 
+export type KnowledgeChatSessionStatus = "active" | "archived";
+
+export type KnowledgeChatSession = {
+  id: string;
+  organizationId: string;
+  userId: string;
+  dateKey: string;
+  status: KnowledgeChatSessionStatus;
+  title: string;
+  archivedAt?: string;
+  expiresAt?: string;
+  lastMessageAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KnowledgeChatMessageRole = "user" | "ai" | "system" | "error";
+
+export type KnowledgeChatMessage = {
+  id: string;
+  sessionId: string;
+  organizationId: string;
+  userId: string;
+  role: KnowledgeChatMessageRole;
+  content: string;
+  provider?: string;
+  model?: string;
+  unknown: boolean;
+  confidence?: number;
+  reason?: string;
+  gapId?: string;
+  errorMessage?: string;
+  createdAt: string;
+};
+
+export type KnowledgeChatMatch = {
+  id: string;
+  sessionId: string;
+  messageId: string;
+  questionId: string;
+  confidence?: number;
+  reason?: string;
+  createdAt: string;
+};
+
+export type KnowledgeGapStatus = "aguardando_resposta" | "convertido" | "ignorado" | "erro";
+
+export type KnowledgeGap = {
+  id: string;
+  organizationId: string;
+  sessionId: string;
+  userId: string;
+  questionText: string;
+  status: KnowledgeGapStatus;
+  customerQuestionId?: string;
+  answeredAt?: string;
+  resolvedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 // ── Vendas — Clientes ─────────────────────────────────────────────────────────
 
 export type SalesClientStatus = "lead" | "cliente" | "inativo";
 export type SalesClientSource = "instagram" | "youtube" | "indicacao" | "site" | "manual" | "outros";
+
+export type SalesFunnelStage = {
+  id: string;
+  name: string;
+  color: string;
+  emoji: string;
+  order: number;
+  halfWidth: boolean;
+};
 
 export type SalesProposal = {
   id: string;
@@ -388,16 +458,22 @@ export type SalesProposal = {
 
 export type SalesClient = {
   id: string;
+  externalCode: string;
   name: string;
+  clientType: string;
   email: string;
   phone: string;
   company: string;
   segment: string;
+  stateUf: string;
+  city: string;
+  lastPurchaseAt: string;
   status: SalesClientStatus;
   source: SalesClientSource;
   assignedTo: string;
   notes: string;
   proposals: SalesProposal[];
+  salesFunnelStage: string;
   createdAt: string;
 };
 
@@ -423,6 +499,8 @@ export type CallSchedule = {
   callHistory: CallLog[];
   assignedTo: string;
   active: boolean;
+  paused?: boolean;
+  archived?: boolean;
   notes: string;
 };
 

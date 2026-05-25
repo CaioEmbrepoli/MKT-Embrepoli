@@ -32,7 +32,8 @@ import type {
   SalesProposal,
   CallSchedule,
   CallLog,
-  CallFrequency
+  CallFrequency,
+  SalesFunnelStage
 } from "./types";
 
 export type AppData = {
@@ -60,6 +61,7 @@ export type AppData = {
   ytComments: Comment[];
   autoFilters: AutoFilter[];
   salesClients: SalesClient[];
+  salesFunnelStages: SalesFunnelStage[];
   callSchedules: CallSchedule[];
 };
 
@@ -126,6 +128,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     ytCommentsData,
     autoFiltersData,
     salesClientsData,
+    salesFunnelStagesData,
     callSchedulesData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
@@ -160,6 +163,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("comments").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
     client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }),
     client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true })
   ]);
 
@@ -197,6 +201,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     ytComments: (ytCommentsData.data ?? []).map(mapYtComment),
     autoFilters: (autoFiltersData.data ?? []).map(mapAutoFilter),
     salesClients: (salesClientsData.data ?? []).map(mapSalesClient),
+    salesFunnelStages: (salesFunnelStagesData.data ?? []).map(mapSalesFunnelStage),
     callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule)
   };
 }
@@ -592,10 +597,10 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
     post_title: item.postTitle,
     channel_id: item.channelId,
     campaign_id: item.campaignId || null,
-    product_line_id: item.productLineId,
+    product_line_id: item.productLineId || null,
     vehicle_type_id: item.vehicleTypeId || null,
     content_type_id: item.contentTypeId || null,
-    funnel_stage_id: item.funnelStageId,
+    funnel_stage_id: item.funnelStageId || null,
     metric_date: item.date,
     reach: item.reach,
     likes: item.likes,
@@ -1221,16 +1226,22 @@ export async function deleteAutoFilter(client: SupabaseClient, id: string) {
 function mapSalesClient(row: any): SalesClient {
   return {
     id: row.id,
+    externalCode: row.external_code ?? "",
     name: row.name ?? "",
+    clientType: row.client_type ?? "",
     email: row.email ?? "",
     phone: row.phone ?? "",
     company: row.company ?? "",
     segment: row.segment ?? "",
+    stateUf: row.state_uf ?? "",
+    city: row.city ?? "",
+    lastPurchaseAt: row.last_purchase_at ?? "",
     status: row.status ?? "lead",
     source: row.source ?? "manual",
     assignedTo: row.assigned_to ?? "",
     notes: row.notes ?? "",
     proposals: Array.isArray(row.proposals) ? (row.proposals as SalesProposal[]) : [],
+    salesFunnelStage: row.sales_funnel_stage ?? "lead",
     createdAt: row.created_at ?? new Date().toISOString()
   };
 }
@@ -1240,22 +1251,52 @@ export async function saveSalesClient(client: SupabaseClient, item: SalesClient)
   const { error } = await client.from("sales_clients").upsert({
     id: item.id,
     organization_id: organizationId,
+    external_code: item.externalCode,
     name: item.name,
+    client_type: item.clientType,
     email: item.email,
     phone: item.phone,
     company: item.company,
     segment: item.segment,
+    state_uf: item.stateUf,
+    city: item.city,
+    last_purchase_at: item.lastPurchaseAt || null,
     status: item.status,
     source: item.source,
     assigned_to: item.assignedTo || null,
     notes: item.notes,
-    proposals: item.proposals
+    proposals: item.proposals,
+    sales_funnel_stage: item.salesFunnelStage
   });
   if (error) throw new Error(`sales_clients upsert: ${error.message}`);
 }
 
 export async function deleteSalesClient(client: SupabaseClient, id: string) {
   await deleteById(client, "sales_clients", id);
+}
+
+// ─── Vendas — Funil Comercial (etapas) ───────────────────────────────────────
+
+function mapSalesFunnelStage(row: any): SalesFunnelStage {
+  return { id: row.id, name: row.name, color: row.color, emoji: row.emoji, order: row.sort_order, halfWidth: row.half_width ?? false };
+}
+
+export async function saveSalesFunnelStage(client: SupabaseClient, item: SalesFunnelStage) {
+  const organizationId = await currentOrganizationId(client);
+  const { error } = await client.from("sales_funnel_stages").upsert({
+    id: item.id,
+    organization_id: organizationId,
+    name: item.name,
+    color: item.color,
+    emoji: item.emoji,
+    sort_order: item.order,
+    half_width: item.halfWidth,
+  });
+  if (error) throw new Error(`sales_funnel_stages upsert: ${error.message}`);
+}
+
+export async function deleteSalesFunnelStage(client: SupabaseClient, id: string) {
+  await deleteById(client, "sales_funnel_stages", id);
 }
 
 // ─── Vendas — Ligações ────────────────────────────────────────────────────────
@@ -1272,6 +1313,7 @@ function mapCallSchedule(row: any): CallSchedule {
     callHistory: Array.isArray(row.call_history) ? (row.call_history as CallLog[]) : [],
     assignedTo: row.assigned_to ?? "",
     active: row.active ?? true,
+    archived: row.archived ?? false,
     notes: row.notes ?? ""
   };
 }
@@ -1290,6 +1332,7 @@ export async function saveCallSchedule(client: SupabaseClient, item: CallSchedul
     call_history: item.callHistory,
     assigned_to: item.assignedTo || null,
     active: item.active,
+    archived: item.archived,
     notes: item.notes
   });
   if (error) throw new Error(`call_schedules upsert: ${error.message}`);
