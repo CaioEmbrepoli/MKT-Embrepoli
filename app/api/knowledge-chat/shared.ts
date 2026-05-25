@@ -9,7 +9,7 @@ export type AuthContext = {
   service: SupabaseClient;
 };
 
-export type BankItem = { id: string; questionText: string; answerText: string };
+export type BankItem = { id: string; questionText: string; answerText: string; videoTitle?: string };
 export type AiResult = {
   found: boolean;
   answer: string | null;
@@ -138,7 +138,7 @@ export async function loadSessionBundle(service: SupabaseClient, sessionId: stri
 export async function loadAnswerBank(ctx: AuthContext): Promise<BankItem[]> {
   const { data, error } = await ctx.service
     .from("customer_questions")
-    .select("id, question_text, answer_text")
+    .select("id, question_text, answer_text, video_title")
     .eq("organization_id", ctx.organizationId)
     .eq("status", "aprovado")
     .not("answer_text", "is", null)
@@ -147,7 +147,8 @@ export async function loadAnswerBank(ctx: AuthContext): Promise<BankItem[]> {
   return (data ?? []).map((item) => ({
     id: item.id,
     questionText: item.question_text ?? "",
-    answerText: item.answer_text ?? ""
+    answerText: item.answer_text ?? "",
+    videoTitle: item.video_title ?? ""
   })).filter((item) => item.questionText.trim() && item.answerText.trim());
 }
 
@@ -193,8 +194,13 @@ export function searchBank(question: string, bank: BankItem[]): AiResult {
   for (const item of bank) {
     const qTokens = tokenize(item.questionText);
     const aTokens = tokenize(item.answerText);
-    // pontua contra a pergunta E contra a resposta (com peso menor)
-    const score = Math.max(jaccardScore(queryTokens, qTokens), jaccardScore(queryTokens, aTokens) * 0.6);
+    const vTokens = tokenize(item.videoTitle ?? "");
+    // pontua contra pergunta (1.0), resposta (0.6) e título do vídeo (0.4 — contexto de produto)
+    const score = Math.max(
+      jaccardScore(queryTokens, qTokens),
+      jaccardScore(queryTokens, aTokens) * 0.6,
+      jaccardScore(queryTokens, vTokens) * 0.4
+    );
     if (!best || score > best.score) best = { item, score };
   }
 
