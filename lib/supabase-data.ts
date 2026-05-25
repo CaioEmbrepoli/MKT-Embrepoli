@@ -572,7 +572,8 @@ export async function replaceTasks(client: SupabaseClient, tasks: Task[], previo
     next_reset_at: nullableText(item.nextResetAt),
     target_value: item.targetValue ?? null,
     current_value: item.currentValue ?? 0,
-    unit: item.unit ? item.unit : null
+    unit: item.unit ? item.unit : null,
+    is_private: item.isPrivate ?? false
   }));
   await replaceAssignees(client, "task_assignees", "task_id", organizationId, tasks.map((item) => ({ parentId: item.id, assignees: item.assignedTo ?? [] })));
   await replaceChildRows(client, "task_checklist_items", "task_id", organizationId, tasks.map((task) => task.id), tasks.flatMap((task) => (task.checklist ?? []).map((item, index) => ({ id: item.id, organization_id: organizationId, task_id: task.id, label: item.label, done: item.done, sort_order: index + 1 }))));
@@ -918,7 +919,8 @@ function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], 
     nextResetAt: row.next_reset_at ?? undefined,
     targetValue: row.target_value != null ? Number(row.target_value) : undefined,
     currentValue: row.current_value != null ? Number(row.current_value) : 0,
-    unit: row.unit ?? ""
+    unit: row.unit ?? "",
+    isPrivate: row.is_private ?? false
   };
 }
 
@@ -1312,6 +1314,7 @@ function mapCallSchedule(row: any): CallSchedule {
     lastCallAt: row.last_call_at ?? undefined,
     callHistory: Array.isArray(row.call_history) ? (row.call_history as CallLog[]) : [],
     assignedTo: row.assigned_to ?? "",
+    createdBy: row.created_by ?? "",
     active: row.active ?? true,
     archived: row.archived ?? false,
     notes: row.notes ?? ""
@@ -1331,6 +1334,7 @@ export async function saveCallSchedule(client: SupabaseClient, item: CallSchedul
     last_call_at: item.lastCallAt ?? null,
     call_history: item.callHistory,
     assigned_to: item.assignedTo || null,
+    created_by: item.createdBy,
     active: item.active,
     archived: item.archived,
     notes: item.notes

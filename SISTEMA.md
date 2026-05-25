@@ -6,7 +6,7 @@
 
 ## 1. Visão Geral
 
-O **Gestão Embrepoli** (anteriormente "Embrepoli Marketing App") é uma ferramenta interna de gestão de marketing desenvolvida para a equipe da Embrepoli. Centraliza o planejamento, produção, revisão, análise de conteúdo e CRM de comentários do YouTube em um único sistema.
+O **Gestão Embrepoli** (anteriormente "Embrepoli Marketing App") é uma ferramenta interna de gestão desenvolvida para a equipe da Embrepoli. Centraliza marketing, vendas, planejamento, produção, revisão, análise de conteúdo, CRM de comentários do YouTube e funil comercial em um único sistema.
 
 **URL de produção:** `mkt-embrepoli.vercel.app`  
 **Repositório:** `github.com/CaioEmbrepoli/MKT-Embrepoli`
@@ -89,43 +89,15 @@ Todas as tabelas têm isolamento por `organization_id` via Row-Level Security (R
 | `post_metric_snapshots` | Histórico de métricas |
 | `notifications` | Notificações dos usuários |
 | `calendar_dates` | Datas especiais no calendário |
-| `comments` | Comentários do YouTube importados (CRM) ⚠️ migration pendente |
-| `auto_filters` | Filtros automáticos de palavras-chave para comentários ⚠️ migration pendente |
+| `customer_questions` | Banco de perguntas e respostas usado pelo chat de IA |
+| `comments` | Comentários do YouTube importados (CRM) |
+| `auto_filters` | Filtros automáticos de palavras-chave para comentários |
+| `profile_module_permissions` | Permissões granulares por área, módulo e ação |
+| `sales_clients` | Clientes, leads e inativos da área de Vendas |
+| `sales_funnel_stages` | Etapas customizáveis do Funil Comercial |
+| `call_schedules` | Agenda e histórico de ligações comerciais |
 
-> **Migrations pendentes para novas tabelas:**
-> ```sql
-> -- Tabela de comentários
-> CREATE TABLE IF NOT EXISTS comments (
->   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
->   organization_id uuid NOT NULL,
->   source text NOT NULL DEFAULT 'youtube',
->   external_id text,
->   video_id text,
->   video_title text,
->   author_name text NOT NULL DEFAULT '',
->   text text NOT NULL DEFAULT '',
->   likes integer NOT NULL DEFAULT 0,
->   response text,
->   status text NOT NULL DEFAULT 'novo',
->   added_to_bank boolean NOT NULL DEFAULT false,
->   published_at timestamptz,
->   created_at timestamptz NOT NULL DEFAULT now(),
->   UNIQUE (organization_id, external_id)
-> );
-> 
-> -- Tabela de filtros automáticos
-> CREATE TABLE IF NOT EXISTS auto_filters (
->   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
->   organization_id uuid NOT NULL,
->   keyword text NOT NULL,
->   match_type text NOT NULL DEFAULT 'contains',
->   active boolean NOT NULL DEFAULT true,
->   created_at timestamptz NOT NULL DEFAULT now()
-> );
-> 
-> -- Coluna em customer_questions
-> ALTER TABLE customer_questions ADD COLUMN IF NOT EXISTS from_comment_id uuid;
-> ```
+**Migrations registradas:** `customer-questions-ai-migration.sql`, `profile-permissions-migration.sql` e `sales-client-import-migration.sql`.
 
 ---
 
@@ -180,7 +152,7 @@ CRM de comentários importados do YouTube. Visível apenas para **admin**.
 
 **Integração IA:** `POST /api/gemini-classify` — classifica todos os comentários em lote.
 
-**Adicionando ao banco:** Ao clicar "+ Adicionar ao Banco", comentário vira `CustomerQuestion` pendente no Banco de Dúvidas, com rastreabilidade via `fromCommentId`.
+**Adicionando ao banco:** Ao clicar "+ Adicionar ao Banco", comentário vira `CustomerQuestion` no Banco de Dúvidas, com rastreabilidade via `fromCommentId`/`bankQuestionId`. Itens vindos da IA podem entrar com `needsReview: true`.
 
 ### 4.11 Configurações
 Painel administrativo dividido em abas:
@@ -190,6 +162,20 @@ Painel administrativo dividido em abas:
 - **Templates:** Templates de post (estrutura, checklist, exemplos de legenda)
 - **Calendário:** Datas especiais (feriados, comemorativas, eventos)
 - **Conta:** Integrações Google (Drive e YouTube), gerenciamento de credenciais
+
+### 4.12 Vendas
+Área comercial separada de Marketing, com escopo próprio para clientes, ligações, funil, atividades, metas e configurações.
+
+**Módulos:**
+- **Painel:** cards de resumo de clientes ativos, leads, ligações de hoje e ligações atrasadas.
+- **Clientes:** lista unificada de leads, clientes e inativos, com filtros e busca.
+- **Ligações:** agenda/histórico com visualizações por Frequência, Urgência e Desfecho; cards clicáveis abrem `AgendaModal`; suporta arquivar, excluir e drag-and-drop.
+- **Funil Comercial:** pipeline e visualização de funil com etapas customizáveis, emojis, cores, reordenamento e layout lado a lado.
+- **Atividades:** tarefas comerciais separadas dos boards de Marketing.
+- **Metas:** metas comerciais com escopo de Vendas.
+- **Configurações:** ajustes comerciais.
+
+**Regra técnica:** usar `areaScope` para impedir mistura de boards, tarefas e metas entre Marketing e Vendas.
 
 ---
 
@@ -287,6 +273,23 @@ authorName, likes, learning, reviewerId, publishedAt, answeredAt,
 createdAt, needsReview (boolean), fromCommentId? (rastreabilidade)
 ```
 
+### SalesClient
+```typescript
+id, organizationId, externalCode, name, document, phone, email,
+clientType, stateUf, city, lastPurchaseAt, status, source, notes,
+proposals[], salesFunnelStage
+```
+
+### SalesFunnelStage
+```typescript
+id, name, color, emoji, order, halfWidth
+```
+
+### CallSchedule
+```typescript
+id, clientId, title, frequency, nextCallAt, outcome, notes, history, archived
+```
+
 ### Comment
 ```typescript
 id, organizationId, source ("youtube"), externalId?, videoId?, videoTitle?,
@@ -343,6 +346,10 @@ url, previewUrl, originalSize, compressedSize, mimeType
 - **Colaborador:** Veem apenas itens que criaram OU que foram atribuídos a eles
 - **Ideias:** Colaborador vê só as próprias ideias
 - **Configurações:** Acesso bloqueado para colaboradores
+- **Configuração de menus Marketing/Vendas:** restrita a administradores
+
+### Magic Link
+Admins podem enviar Magic Link pela listagem de membros da equipe. A ação usa `supabase.auth.signInWithOtp` e aparece com ícone `Wand2` e tooltip explicativo.
 
 ---
 

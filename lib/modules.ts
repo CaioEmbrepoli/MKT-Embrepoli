@@ -35,7 +35,7 @@ export const marketingModules = [
 ] as const satisfies ReadonlyArray<ModuleDefinition>;
 
 export const salesModules = [
-  { sectionId: "vendas-painel", moduleId: "painel", area: "vendas", label: "Painel de Vendas" },
+  { sectionId: "vendas-painel", moduleId: "painel", area: "vendas", label: "Painel" },
   { sectionId: "vendas-clientes", moduleId: "clientes", area: "vendas", label: "Clientes" },
   { sectionId: "vendas-ligacoes", moduleId: "ligacoes", area: "vendas", label: "Ligações" },
   { sectionId: "vendas-funil-comercial", moduleId: "funil-comercial", area: "vendas", label: "Funil Comercial" },

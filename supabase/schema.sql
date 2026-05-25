@@ -1258,6 +1258,202 @@ on public.auto_filters for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
+create table if not exists public.knowledge_chat_sessions (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  user_id text not null references public.profiles(id) on delete cascade,
+  date_key date not null,
+  status text not null default 'active',
+  title text not null default 'Chat do dia',
+  archived_at timestamptz,
+  expires_at timestamptz,
+  last_message_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint knowledge_chat_sessions_status_check check (status in ('active', 'archived')),
+  constraint knowledge_chat_sessions_user_day_unique unique (organization_id, user_id, date_key)
+);
+
+create table if not exists public.knowledge_gaps (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  session_id text not null references public.knowledge_chat_sessions(id) on delete cascade,
+  user_id text not null references public.profiles(id) on delete cascade,
+  question_text text not null,
+  status text not null default 'aguardando_resposta',
+  customer_question_id text references public.customer_questions(id) on delete set null,
+  answered_at timestamptz,
+  resolved_by text references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint knowledge_gaps_status_check check (status in ('aguardando_resposta', 'convertido', 'ignorado', 'erro'))
+);
+
+create table if not exists public.knowledge_chat_messages (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  session_id text not null references public.knowledge_chat_sessions(id) on delete cascade,
+  user_id text not null references public.profiles(id) on delete cascade,
+  role text not null,
+  content text not null,
+  provider text,
+  model text,
+  unknown boolean not null default false,
+  confidence numeric,
+  reason text,
+  gap_id text references public.knowledge_gaps(id) on delete set null,
+  error_message text,
+  created_at timestamptz not null default now(),
+  constraint knowledge_chat_messages_role_check check (role in ('user', 'ai', 'system', 'error'))
+);
+
+create table if not exists public.knowledge_chat_matches (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  session_id text not null references public.knowledge_chat_sessions(id) on delete cascade,
+  message_id text not null references public.knowledge_chat_messages(id) on delete cascade,
+  question_id text references public.customer_questions(id) on delete set null,
+  confidence numeric,
+  reason text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_knowledge_chat_sessions_user_day on public.knowledge_chat_sessions(organization_id, user_id, date_key);
+create index if not exists idx_knowledge_chat_sessions_cleanup on public.knowledge_chat_sessions(status, expires_at);
+create index if not exists idx_knowledge_chat_messages_session on public.knowledge_chat_messages(session_id, created_at);
+create index if not exists idx_knowledge_gaps_session on public.knowledge_gaps(session_id, status);
+create index if not exists idx_knowledge_chat_matches_message on public.knowledge_chat_matches(message_id);
+
+alter table public.knowledge_chat_sessions enable row level security;
+alter table public.knowledge_chat_messages enable row level security;
+alter table public.knowledge_chat_matches enable row level security;
+alter table public.knowledge_gaps enable row level security;
+
+drop policy if exists "users manage own knowledge chat sessions" on public.knowledge_chat_sessions;
+create policy "users manage own knowledge chat sessions"
+on public.knowledge_chat_sessions for all
+using (organization_id = public.current_organization_id() and user_id = auth.uid()::text)
+with check (organization_id = public.current_organization_id() and user_id = auth.uid()::text);
+
+drop policy if exists "users manage own knowledge chat messages" on public.knowledge_chat_messages;
+create policy "users manage own knowledge chat messages"
+on public.knowledge_chat_messages for all
+using (
+  organization_id = public.current_organization_id()
+  and exists (select 1 from public.knowledge_chat_sessions s where s.id = session_id and s.user_id = auth.uid()::text)
+)
+with check (
+  organization_id = public.current_organization_id()
+  and exists (select 1 from public.knowledge_chat_sessions s where s.id = session_id and s.user_id = auth.uid()::text)
+);
+
+drop policy if exists "users read own knowledge chat matches" on public.knowledge_chat_matches;
+create policy "users read own knowledge chat matches"
+on public.knowledge_chat_matches for select
+using (
+  organization_id = public.current_organization_id()
+  and exists (
+    select 1
+    from public.knowledge_chat_messages m
+    join public.knowledge_chat_sessions s on s.id = m.session_id
+    where m.id = message_id and s.user_id = auth.uid()::text
+  )
+);
+
+drop policy if exists "users manage own knowledge gaps" on public.knowledge_gaps;
+create policy "users manage own knowledge gaps"
+on public.knowledge_gaps for all
+using (organization_id = public.current_organization_id() and user_id = auth.uid()::text)
+with check (organization_id = public.current_organization_id() and user_id = auth.uid()::text);
+
+-- Vendas: clientes, funil comercial e agenda de ligações
+create table if not exists public.sales_clients (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  external_code text,
+  name text not null default '',
+  client_type text not null default '',
+  email text not null default '',
+  phone text not null default '',
+  company text not null default '',
+  segment text not null default '',
+  state_uf text not null default '',
+  city text not null default '',
+  last_purchase_at date,
+  status text not null default 'lead',
+  source text not null default 'manual',
+  assigned_to text references public.profiles(id) on delete set null,
+  notes text not null default '',
+  proposals jsonb not null default '[]'::jsonb,
+  sales_funnel_stage text not null default 'lead',
+  created_at timestamptz not null default now()
+);
+
+alter table public.sales_clients add column if not exists external_code text;
+alter table public.sales_clients add column if not exists client_type text not null default '';
+alter table public.sales_clients add column if not exists state_uf text not null default '';
+alter table public.sales_clients add column if not exists city text not null default '';
+alter table public.sales_clients add column if not exists last_purchase_at date;
+alter table public.sales_clients add column if not exists sales_funnel_stage text not null default 'lead';
+
+create unique index if not exists sales_clients_org_external_code_idx
+on public.sales_clients (organization_id, external_code)
+where external_code is not null and btrim(external_code) <> '';
+
+create table if not exists public.sales_funnel_stages (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  name text not null default '',
+  color text not null default '#64748b',
+  emoji text not null default '',
+  sort_order integer not null default 0,
+  half_width boolean not null default false
+);
+
+alter table public.sales_funnel_stages add column if not exists half_width boolean not null default false;
+
+create table if not exists public.call_schedules (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  client_id text references public.sales_clients(id) on delete cascade,
+  client_name text not null default '',
+  phone text not null default '',
+  frequency text not null default 'weekly',
+  next_call_at date not null default current_date,
+  call_history jsonb not null default '[]'::jsonb,
+  assigned_to text references public.profiles(id) on delete set null,
+  active boolean not null default true,
+  paused boolean not null default false,
+  archived boolean not null default false,
+  notes text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table public.call_schedules add column if not exists paused boolean not null default false;
+alter table public.call_schedules add column if not exists archived boolean not null default false;
+
+alter table public.sales_clients enable row level security;
+alter table public.sales_funnel_stages enable row level security;
+alter table public.call_schedules enable row level security;
+
+drop policy if exists "members manage sales clients" on public.sales_clients;
+create policy "members manage sales clients"
+on public.sales_clients for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+drop policy if exists "members manage sales funnel stages" on public.sales_funnel_stages;
+create policy "members manage sales funnel stages"
+on public.sales_funnel_stages for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+drop policy if exists "members manage call schedules" on public.call_schedules;
+create policy "members manage call schedules"
+on public.call_schedules for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
 alter publication supabase_realtime add table
   public.profiles,
   public.profile_areas,
@@ -1291,4 +1487,11 @@ alter publication supabase_realtime add table
   public.google_connections,
   public.customer_questions,
   public.comments,
-  public.auto_filters;
+  public.auto_filters,
+  public.sales_clients,
+  public.sales_funnel_stages,
+  public.call_schedules,
+  public.knowledge_chat_sessions,
+  public.knowledge_chat_messages,
+  public.knowledge_chat_matches,
+  public.knowledge_gaps;

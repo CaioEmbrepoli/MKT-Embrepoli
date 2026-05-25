@@ -83,6 +83,7 @@ import {
   salesModules
 } from "@/lib/modules";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import {
   type AppData,
@@ -865,6 +866,9 @@ export default function Home() {
   const [salesClients, setSalesClients] = useState<SalesClient[]>([]);
   const [salesFunnelStages, setSalesFunnelStages] = useState<SalesFunnelStage[]>([]);
   const [callSchedules, setCallSchedules] = useState<CallSchedule[]>([]);
+  const [salesClientFilter, setSalesClientFilter] = useState<"todos" | SalesClientStatus>("todos");
+  const [salesClientSearch, setSalesClientSearch] = useState("");
+  const [salesCallFilter, setSalesCallFilter] = useState<"all" | "today" | "overdue">("all");
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [modal, setModal] = useState<ModalState>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -2258,7 +2262,22 @@ export default function Home() {
             />
           )}
           {activeSection === "vendas-painel" && (
-            <PainelVendas salesClients={salesClients} callSchedules={callSchedules} />
+            <PainelVendas
+              salesClients={salesClients}
+              callSchedules={callSchedules}
+              tasks={tasks}
+              salesFunnelStages={salesFunnelStages}
+              openSection={openSection}
+              openClients={(filter) => {
+                setSalesClientFilter(filter);
+                setSalesClientSearch("");
+                openSection("vendas-clientes");
+              }}
+              openCalls={(filter) => {
+                setSalesCallFilter(filter);
+                openSection("vendas-ligacoes");
+              }}
+            />
           )}
           {activeSection === "vendas-clientes" && (
             <ClientesSection
@@ -2268,6 +2287,10 @@ export default function Home() {
               setCallSchedules={syncCallSchedules}
               profiles={profiles}
               currentUser={currentUser}
+              filter={salesClientFilter}
+              setFilter={setSalesClientFilter}
+              search={salesClientSearch}
+              setSearch={setSalesClientSearch}
             />
           )}
           {activeSection === "vendas-ligacoes" && (
@@ -2276,6 +2299,8 @@ export default function Home() {
               setCallSchedules={syncCallSchedules}
               salesClients={salesClients}
               currentUser={currentUser}
+              initialFilter={salesCallFilter}
+              onFilterApplied={() => setSalesCallFilter("all")}
             />
           )}
           {activeSection === "vendas-funil-comercial" && (
@@ -2287,12 +2312,17 @@ export default function Home() {
               callSchedules={callSchedules}
               setCallSchedules={syncCallSchedules}
               profiles={profiles}
+              currentUser={currentUser}
             />
           )}
           {activeSection === "vendas-atividades" && (
             <Tasks
               areaScope="vendas"
-              tasks={tasks}
+              tasks={tasks.filter((t) => {
+                if (!t.columnId.startsWith("vendas-atividades")) return true;
+                if (!t.isPrivate) return true;
+                return t.createdBy === currentUser?.id;
+              })}
               allTasks={tasks}
               setTasks={syncTasks}
               taskBoards={taskBoards}
@@ -2899,39 +2929,195 @@ const proposalStatusLabel: Record<SalesProposal["status"], string> = {
   expirada: "Expirada"
 };
 
-// ─── Painel de Vendas ─────────────────────────────────────────────────────────
+// ─── Painel ───────────────────────────────────────────────────────────────────
 
-function PainelVendas({ salesClients, callSchedules }: { salesClients: SalesClient[]; callSchedules: CallSchedule[] }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const clientesAtivos = salesClients.filter((c) => c.status === "cliente").length;
-  const leads = salesClients.filter((c) => c.status === "lead").length;
-  const ligacoesHoje = callSchedules.filter((c) => c.active && c.nextCallAt === today).length;
-  const ligacoesAtrasadas = callSchedules.filter((c) => c.active && c.nextCallAt < today).length;
+function MiniMetric({ label, value, tone = "blue" }: { label: string; value: string | number; tone?: "blue" | "green" | "amber" | "red" | "slate" }) {
+  const toneClasses = {
+    blue: "text-blue-700",
+    green: "text-emerald-700",
+    amber: "text-amber-700",
+    red: "text-rose-700",
+    slate: "text-slate-700"
+  } satisfies Record<"blue" | "green" | "amber" | "red" | "slate", string>;
 
   return (
-    <Panel title="Painel de Vendas">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {([
-          { label: "Clientes ativos", value: clientesAtivos, color: "emerald" },
-          { label: "Leads em aberto", value: leads, color: "amber" },
-          { label: "Ligações para hoje", value: ligacoesHoje, color: "blue" },
-          { label: "Ligações atrasadas", value: ligacoesAtrasadas, color: "rose" }
-        ] as const).map((card) => (
-          <div key={card.label} className={`rounded-3xl border p-5 ${
-            card.color === "emerald" ? "border-emerald-100 bg-emerald-50" :
-            card.color === "amber" ? "border-amber-100 bg-amber-50" :
-            card.color === "blue" ? "border-blue-100 bg-blue-50" :
-            "border-rose-100 bg-rose-50"
-          }`}>
+    <div className="rounded-2xl bg-white p-3">
+      <p className="text-xs font-bold text-slate-500">{label}</p>
+      <p className={`mt-1 text-2xl font-black ${toneClasses[tone]}`}>{value}</p>
+    </div>
+  );
+}
+
+function PainelVendas({ salesClients, callSchedules, tasks, salesFunnelStages, openSection, openClients, openCalls }: {
+  salesClients: SalesClient[];
+  callSchedules: CallSchedule[];
+  tasks: Task[];
+  salesFunnelStages: SalesFunnelStage[];
+  openSection: (sectionId: string) => void;
+  openClients: (filter: "todos" | SalesClientStatus) => void;
+  openCalls: (filter: "all" | "today" | "overdue") => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const brl = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const clientesAtivos = salesClients.filter((c) => c.status === "cliente").length;
+  const leads = salesClients.filter((c) => c.status === "lead").length;
+  const activeCalls = callSchedules.filter((c) => c.active && !c.archived);
+  const ligacoesHoje = activeCalls.filter((c) => c.nextCallAt === today).length;
+  const ligacoesAtrasadas = activeCalls.filter((c) => c.nextCallAt < today).length;
+  const ligacoesSemHistorico = activeCalls.filter((c) => c.callHistory.length === 0).length;
+
+  const salesActivities = tasks.filter((task) => !task.parentTaskId && task.columnId.startsWith("vendas-atividades"));
+  const atividadesAbertas = salesActivities.filter((task) => !task.columnId.endsWith("-done")).length;
+  const atividadesHoje = salesActivities.filter((task) => task.dueDate === today).length;
+  const atividadesAtrasadas = salesActivities.filter((task) => task.dueDate && task.dueDate < today && !task.columnId.endsWith("-done")).length;
+
+  const salesGoals = tasks.filter((task) => !task.parentTaskId && vendasGoalsColumnIds.has(task.columnId));
+  const goalsWithTarget = salesGoals.filter((task) => (task.targetValue ?? 0) > 0);
+  const metasAtingidas = goalsWithTarget.filter((task) => (task.currentValue ?? 0) >= (task.targetValue ?? 0)).length;
+  const metasEmAndamento = salesGoals.filter((task) => !((task.targetValue ?? 0) > 0 && (task.currentValue ?? 0) >= (task.targetValue ?? 0))).length;
+  const metasEmAtencao = goalsWithTarget.filter((task) => computeGoalStatus(task).kind === "atrasada").length;
+  const progressoMedioMetas = goalsWithTarget.length
+    ? Math.round(goalsWithTarget.reduce((sum, task) => sum + computeGoalStatus(task).pct, 0) / goalsWithTarget.length)
+    : 0;
+  const taxaMetasAtingidas = goalsWithTarget.length ? Math.round((metasAtingidas / goalsWithTarget.length) * 100) : 0;
+
+  const sortedStages = [...salesFunnelStages].sort((a, b) => a.order - b.order);
+  const activeClients = salesClients.filter((client) => client.status !== "inativo");
+  const pipelineStageIds = sortedStages.slice(0, Math.max(sortedStages.length - 2, 1)).map((stage) => stage.id);
+  const pipelineClients = activeClients.filter((client) => pipelineStageIds.includes(clientFunnelStage(client)));
+  const pipelineTotal = pipelineClients.reduce((sum, client) => sum + clientBestProposalValue(client), 0);
+  const stageSummaries = sortedStages.map((stage) => {
+    const clients = activeClients.filter((client) => clientFunnelStage(client) === stage.id);
+    return { stage, clients, total: clients.reduce((sum, client) => sum + clientBestProposalValue(client), 0) };
+  });
+  const topStage = stageSummaries.reduce<typeof stageSummaries[number] | null>((best, item) => {
+    if (!best || item.clients.length > best.clients.length) return item;
+    return best;
+  }, null);
+
+  const summaryCards = [
+    { label: "Clientes ativos", value: clientesAtivos, helper: `${salesClients.length} clientes no total`, color: "emerald", onClick: () => openClients("cliente") },
+    { label: "Leads em aberto", value: leads, helper: "Aguardando avanço no funil", color: "amber", onClick: () => openClients("lead") },
+    { label: "Ligações para hoje", value: ligacoesHoje, helper: `${ligacoesSemHistorico} sem histórico`, color: "blue", onClick: () => openCalls("today") },
+    { label: "Ligações atrasadas", value: ligacoesAtrasadas, helper: "Precisam de retorno", color: "rose", onClick: () => openCalls("overdue") },
+    { label: "Atividades abertas", value: atividadesAbertas, helper: `${atividadesHoje} para hoje`, color: "purple", onClick: () => openSection("vendas-atividades") },
+    { label: "Metas em andamento", value: metasEmAndamento, helper: `${progressoMedioMetas}% de progresso médio`, color: "cyan", onClick: () => openSection("vendas-metas") },
+    { label: "Pipeline em aberto", value: brl(pipelineTotal), helper: `${pipelineClients.length} clientes no pipeline`, color: "green", onClick: () => openSection("vendas-funil-comercial") },
+    { label: "Taxa de metas atingidas", value: `${taxaMetasAtingidas}%`, helper: `${metasAtingidas}/${goalsWithTarget.length || 0} metas com alvo`, color: "slate", onClick: () => openSection("vendas-metas") }
+  ] as const;
+
+  const colorClasses: Record<typeof summaryCards[number]["color"], string> = {
+    emerald: "border-emerald-100 bg-emerald-50 text-emerald-700",
+    amber: "border-amber-100 bg-amber-50 text-amber-700",
+    blue: "border-blue-100 bg-blue-50 text-blue-700",
+    rose: "border-rose-100 bg-rose-50 text-rose-700",
+    purple: "border-purple-100 bg-purple-50 text-purple-700",
+    cyan: "border-cyan-100 bg-cyan-50 text-cyan-700",
+    green: "border-green-100 bg-green-50 text-green-700",
+    slate: "border-slate-100 bg-slate-50 text-slate-700"
+  };
+
+  const shortcutButton = (label: string, sectionId: string) => (
+    <button type="button" onClick={() => openSection(sectionId)} className="rounded-2xl bg-blue-700 px-3 py-2 text-xs font-black text-white transition hover:bg-blue-800">
+      {label}
+    </button>
+  );
+
+  return (
+    <Panel title="Painel">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {summaryCards.map((card) => (
+          <button type="button" key={card.label} onClick={card.onClick} className={`rounded-3xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-lg ${colorClasses[card.color]}`}>
             <p className="text-sm font-bold text-slate-500">{card.label}</p>
-            <p className={`mt-1 text-4xl font-black ${
-              card.color === "emerald" ? "text-emerald-700" :
-              card.color === "amber" ? "text-amber-700" :
-              card.color === "blue" ? "text-blue-700" :
-              "text-rose-700"
-            }`}>{card.value}</p>
-          </div>
+            <p className="mt-1 text-3xl font-black">{card.value}</p>
+            <p className="mt-2 text-xs font-bold text-slate-500">{card.helper}</p>
+          </button>
         ))}
+      </div>
+
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        <div className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-black text-slate-900">Atividades</h3>
+              <p className="text-sm font-bold text-slate-500">Resumo das tarefas comerciais</p>
+            </div>
+            {shortcutButton("Ver atividades", "vendas-atividades")}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MiniMetric label="Abertas" value={atividadesAbertas} />
+            <MiniMetric label="Para hoje" value={atividadesHoje} />
+            <MiniMetric label="Atrasadas" value={atividadesAtrasadas} tone="red" />
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-black text-slate-900">Metas</h3>
+              <p className="text-sm font-bold text-slate-500">Acompanhamento das metas de vendas</p>
+            </div>
+            {shortcutButton("Ver metas", "vendas-metas")}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MiniMetric label="Atingidas" value={metasAtingidas} tone="green" />
+            <MiniMetric label="Em atenção" value={metasEmAtencao} tone="amber" />
+            <MiniMetric label="Progresso médio" value={`${progressoMedioMetas}%`} />
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-black text-slate-900">Ligações</h3>
+              <p className="text-sm font-bold text-slate-500">Agenda ativa e retornos pendentes</p>
+            </div>
+            {shortcutButton("Ver ligações", "vendas-ligacoes")}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MiniMetric label="Hoje" value={ligacoesHoje} />
+            <MiniMetric label="Atrasadas" value={ligacoesAtrasadas} tone="red" />
+            <MiniMetric label="Sem histórico" value={ligacoesSemHistorico} tone="slate" />
+          </div>
+        </div>
+
+        <div className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-black text-slate-900">Funil</h3>
+              <p className="text-sm font-bold text-slate-500">Pipeline comercial por etapa</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {shortcutButton("Ver funil", "vendas-funil-comercial")}
+              {shortcutButton("Ver clientes", "vendas-clientes")}
+            </div>
+          </div>
+          {sortedStages.length ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-2xl bg-white p-3">
+                <span className="text-sm font-bold text-slate-500">Etapa com mais clientes</span>
+                <span className="text-sm font-black text-slate-900">{topStage ? `${topStage.stage.name} · ${topStage.clients.length}` : "Sem clientes"}</span>
+              </div>
+              <div className="space-y-2">
+                {stageSummaries.slice(0, 5).map(({ stage, clients, total }) => (
+                  <div key={stage.id}>
+                    <div className="mb-1 flex items-center justify-between text-xs font-black text-slate-500">
+                      <span>{stage.emoji} {stage.name}</span>
+                      <span>{clients.length} · {brl(total)}</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-white">
+                      <div className="h-full rounded-full" style={{ width: `${activeClients.length ? Math.max(8, (clients.length / activeClients.length) * 100) : 0}%`, background: stage.color }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm font-bold text-slate-400">
+              Nenhuma etapa do funil comercial cadastrada ainda.
+            </p>
+          )}
+        </div>
       </div>
     </Panel>
   );
@@ -2939,19 +3125,22 @@ function PainelVendas({ salesClients, callSchedules }: { salesClients: SalesClie
 
 // ─── Clientes ─────────────────────────────────────────────────────────────────
 
-function ClientesSection({ salesClients, setSalesClients, callSchedules, setCallSchedules, profiles, currentUser }: {
+function ClientesSection({ salesClients, setSalesClients, callSchedules, setCallSchedules, profiles, currentUser, filter, setFilter, search, setSearch }: {
   salesClients: SalesClient[];
   setSalesClients: Dispatch<SetStateAction<SalesClient[]>>;
   callSchedules: CallSchedule[];
   setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
   profiles: Profile[];
   currentUser: Profile | null;
+  filter: "todos" | SalesClientStatus;
+  setFilter: Dispatch<SetStateAction<"todos" | SalesClientStatus>>;
+  search: string;
+  setSearch: Dispatch<SetStateAction<string>>;
 }) {
-  const [filter, setFilter] = useState<"todos" | SalesClientStatus>("todos");
-  const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<SalesClient | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [schedulingClient, setSchedulingClient] = useState<SalesClient | null>(null);
 
   const filtered = salesClients.filter((c) => {
     if (filter !== "todos" && c.status !== filter) return false;
@@ -3014,11 +3203,17 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
       nextCallAt: today,
       callHistory: [],
       assignedTo: currentUser?.id ?? "",
+      createdBy: currentUser?.id ?? "",
       active: true,
       paused: false,
       notes: ""
     };
     setCallSchedules((prev) => [...prev, schedule]);
+  }
+
+  function saveSchedule(schedule: CallSchedule) {
+    setCallSchedules((prev) => [...prev, schedule]);
+    setSchedulingClient(null);
   }
 
   const filterCounts = {
@@ -3044,16 +3239,17 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
           onChange={(e) => setSearch(e.target.value)}
           className="ml-auto rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
         />
-        <button type="button" onClick={() => setShowImportModal(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-blue-50 hover:text-blue-700">
+        <button type="button" aria-label="Importar clientes XLSX" onClick={() => setShowImportModal(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-blue-50 hover:text-blue-700">
           <FileUp size={16} /> Importar XLSX
         </button>
-        <button type="button" onClick={openNew} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
+        <button type="button" aria-label="Novo cliente" onClick={openNew} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
           <Plus size={16} /> Novo
         </button>
       </div>
       <div className="grid gap-3">
         {filtered.map((client) => {
           const hasSchedule = callSchedules.some((s) => s.clientId === client.id && s.active);
+          const openValue = clientOpenProposalTotal(client);
           return (
             <div key={client.id} className="flex flex-wrap items-center gap-3 rounded-3xl border border-slate-100 bg-white p-4 shadow-sm">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-sm font-black text-blue-700">
@@ -3077,19 +3273,22 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
                   {client.segment && <span>{client.segment}</span>}
                   {client.source !== "manual" && <span className="ml-3 opacity-70">via {salesSourceLabel[client.source]}</span>}
                 </p>
+                {openValue > 0 && (
+                  <p className="mt-1 text-xs font-black text-blue-700">Valor em aberto: {formatCurrency(openValue)}</p>
+                )}
               </div>
               <div className="flex flex-wrap gap-2">
                 {!hasSchedule && client.phone && (
                   <div className="relative group">
-                    <button type="button" onClick={() => addToCallSchedule(client, "weekly")}
+                    <button type="button" aria-label={`Agendar ligação para ${client.name}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); setSchedulingClient(client); }}
                       className="rounded-2xl bg-emerald-100 px-3 py-2 text-sm font-black text-emerald-700 transition hover:bg-emerald-200">
                       <Phone size={14} className="inline mr-1" />Agendar ligação
                     </button>
                   </div>
                 )}
                 {hasSchedule && <span className="rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-600">✓ Na agenda</span>}
-                <button type="button" onClick={() => openEdit(client)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">editar</button>
-                <button type="button" onClick={() => remove(client.id)} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600">excluir</button>
+                <button type="button" aria-label={`Editar cliente ${client.name}`} onClick={() => openEdit(client)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">editar</button>
+                <button type="button" aria-label={`Excluir cliente ${client.name}`} onClick={() => remove(client.id)} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600">excluir</button>
               </div>
             </div>
           );
@@ -3107,7 +3306,16 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
           callSchedules={callSchedules}
           onSave={save}
           onClose={() => { setShowModal(false); setEditing(null); }}
-          onAddSchedule={addToCallSchedule}
+          onRequestSchedule={(client) => setSchedulingClient(normalizeSalesClient(client))}
+        />
+      )}
+      {schedulingClient && (
+        <QuickScheduleModal
+          client={schedulingClient}
+          currentUser={currentUser}
+          profiles={profiles}
+          onSave={saveSchedule}
+          onClose={() => setSchedulingClient(null)}
         />
       )}
       {showImportModal && (
@@ -3117,6 +3325,84 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
         />
       )}
     </Panel>
+  );
+}
+
+function QuickScheduleModal({ client, currentUser, profiles, onSave, onClose }: {
+  client: SalesClient;
+  currentUser: Profile | null;
+  profiles: Profile[];
+  onSave: (schedule: CallSchedule) => void;
+  onClose: () => void;
+}) {
+  const [frequency, setFrequency] = useState<CallFrequency>("weekly");
+  const [nextDate, setNextDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [notes, setNotes] = useState("");
+  const [assignedTo, setAssignedTo] = useState(client.assignedTo || currentUser?.id || "");
+
+  function save() {
+    onSave({
+      id: crypto.randomUUID(),
+      clientId: client.id,
+      clientName: client.name,
+      phone: client.phone,
+      frequency,
+      nextCallAt: nextDate,
+      callHistory: [],
+      assignedTo,
+      createdBy: currentUser?.id ?? "",
+      active: true,
+      archived: false,
+      notes
+    });
+  }
+
+  return (
+    <CenteredModal close={onClose} variant="compact" panelClassName="rounded-[32px] border-0">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-black uppercase tracking-wide text-emerald-700">Vendas · Ligações</p>
+          <h2 className="text-xl font-black">Agendar ligação</h2>
+          <p className="mt-1 text-sm font-bold text-slate-500">{client.name}{client.phone ? ` · ${client.phone}` : ""}</p>
+        </div>
+        <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
+      </div>
+      <div className="mt-5 space-y-4">
+        <div>
+          <label className="block text-sm font-bold text-slate-600 mb-2">Frequência</label>
+          <div className="flex flex-wrap gap-2">
+            {(["daily", "weekly", "biweekly", "monthly"] as CallFrequency[]).map((item) => (
+              <button key={item} type="button" onClick={() => setFrequency(item)}
+                className={`rounded-2xl px-3 py-2 text-sm font-black transition ${frequency === item ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-blue-50"}`}>
+                {callFrequencyLabel[item]}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="block text-sm font-bold text-slate-600">Próxima ligação
+          <input type="date" value={nextDate} onChange={(event) => setNextDate(event.target.value)}
+            className="mt-1 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+        </label>
+        <label className="block text-sm font-bold text-slate-600">Responsável
+          <select value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)}
+            className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500">
+            <option value="">Sem responsável</option>
+            {profiles.filter((profile) => profile.active).map((profile) => (
+              <option key={profile.id} value={profile.id}>{profile.name || profile.email}</option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-sm font-bold text-slate-600">Observação inicial
+          <textarea value={notes} onChange={(event) => setNotes(event.target.value)} rows={3}
+            placeholder="Ex: ligar para confirmar interesse, orçamento ou retorno..."
+            className="mt-1 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+        </label>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
+        <button type="button" disabled={!client.name.trim() || !nextDate} onClick={save} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">Agendar</button>
+      </div>
+    </CenteredModal>
   );
 }
 
@@ -3195,17 +3481,23 @@ function ClienteImportModal({ onImport, onClose }: {
   );
 }
 
-function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddSchedule }: {
+function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequestSchedule }: {
   client: SalesClient;
   profiles: Profile[];
   callSchedules: CallSchedule[];
   onSave: (c: SalesClient) => void;
   onClose: () => void;
-  onAddSchedule: (c: SalesClient, freq: CallFrequency) => void;
+  onRequestSchedule: (c: SalesClient) => void;
 }) {
   const [tab, setTab] = useState<"dados" | "propostas">("dados");
   const [form, setForm] = useState(normalizeSalesClient(client));
   const hasSchedule = callSchedules.some((s) => s.clientId === client.id && s.active);
+  const bestProposal = clientBestProposalValue(form);
+  const openProposalTotal = clientOpenProposalTotal(form);
+  const bestProposalItem = form.proposals.reduce<SalesProposal | null>((best, proposal) => {
+    if (!best || (proposal.value ?? 0) > (best.value ?? 0)) return proposal;
+    return best;
+  }, null);
 
   function addProposal() {
     const p: SalesProposal = { id: crypto.randomUUID(), title: "", value: 0, status: "rascunho", createdAt: new Date().toISOString(), notes: "" };
@@ -3233,6 +3525,20 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
               {t === "dados" ? "Dados" : `Propostas (${form.proposals.length})`}
             </button>
           ))}
+        </div>
+        <div className="mb-4 grid gap-3 rounded-3xl border border-blue-100 bg-blue-50/70 p-4 md:grid-cols-3">
+          <div>
+            <p className="text-xs font-black uppercase text-blue-600">Maior proposta</p>
+            <p className="text-lg font-black text-slate-900">{bestProposal > 0 ? formatCurrency(bestProposal) : "Sem proposta"}</p>
+          </div>
+          <div>
+            <p className="text-xs font-black uppercase text-blue-600">Total em aberto</p>
+            <p className="text-lg font-black text-slate-900">{openProposalTotal > 0 ? formatCurrency(openProposalTotal) : "R$ 0,00"}</p>
+          </div>
+          <div>
+            <p className="text-xs font-black uppercase text-blue-600">Status principal</p>
+            <p className="text-lg font-black text-slate-900">{bestProposalItem ? proposalStatusLabel[bestProposalItem.status] : "Sem proposta"}</p>
+          </div>
         </div>
         {tab === "dados" && (
           <div className="grid gap-3 md:grid-cols-2">
@@ -3322,15 +3628,11 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
             {!hasSchedule && form.phone && (
               <div className="md:col-span-2 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
                 <p className="font-black text-emerald-800 text-sm">Adicionar à Agenda de Ligações</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {(["daily", "weekly", "biweekly", "monthly"] as CallFrequency[]).map((freq) => (
-                    <button key={freq} type="button"
-                      onClick={() => { onAddSchedule({ ...form }, freq); onSave({ ...form }); }}
-                      className="rounded-2xl bg-white border border-emerald-200 px-3 py-2 text-sm font-black text-emerald-700 hover:bg-emerald-100 transition">
-                      {callFrequencyLabel[freq]}
-                    </button>
-                  ))}
-                </div>
+                <button type="button"
+                  onClick={() => { onSave({ ...form }); onRequestSchedule({ ...form }); }}
+                  className="mt-2 rounded-2xl bg-white border border-emerald-200 px-3 py-2 text-sm font-black text-emerald-700 hover:bg-emerald-100 transition">
+                  Agendar ligação
+                </button>
               </div>
             )}
           </div>
@@ -3358,7 +3660,7 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onAddS
                 </div>
               </div>
             ))}
-            <button type="button" onClick={addProposal} className="flex items-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-black text-slate-500 hover:border-blue-400 hover:text-blue-600 transition w-full justify-center">
+            <button type="button" aria-label="Adicionar proposta" onClick={addProposal} className="flex items-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-black text-slate-500 hover:border-blue-400 hover:text-blue-600 transition w-full justify-center">
               <Plus size={16} /> Adicionar proposta
             </button>
           </div>
@@ -3440,6 +3742,72 @@ function clientFunnelStage(client: SalesClient): string {
 function clientBestProposalValue(client: SalesClient): number {
   if (!client.proposals.length) return 0;
   return Math.max(...client.proposals.map((p) => p.value ?? 0));
+}
+
+function clientOpenProposalTotal(client: SalesClient): number {
+  return client.proposals
+    .filter((proposal) => proposal.status !== "perdida")
+    .reduce((sum, proposal) => sum + (proposal.value ?? 0), 0);
+}
+
+function formatCurrency(value: number): string {
+  return value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
+function SalesPipelineClientCard({ client, onOpen }: { client: SalesClient; onOpen: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `sales-client:${client.id}` });
+  const value = clientBestProposalValue(client);
+  return (
+    <button
+      type="button"
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      onClick={onOpen}
+      style={{ transform: CSS.Translate.toString(transform) }}
+      className={`w-full min-w-0 rounded-2xl bg-white px-3 py-2.5 text-left shadow-sm cursor-grab active:cursor-grabbing transition hover:shadow-md border border-white/80 ${isDragging ? "z-50 opacity-80 ring-2 ring-blue-400" : ""}`}
+    >
+      <p className="truncate text-sm font-black">{pipelineName(client.name)}</p>
+      {client.company && <p className="text-xs font-bold text-slate-500 truncate">{client.company}</p>}
+      {value > 0 && <p className="text-xs font-black text-blue-700 mt-1">{formatCurrency(value)}</p>}
+    </button>
+  );
+}
+
+function SalesPipelineColumn({ stage, clients, totalClients, onOpenClient }: {
+  stage: SalesFunnelStage;
+  clients: SalesClient[];
+  totalClients: number;
+  onOpenClient: (client: SalesClient) => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `sales-stage:${stage.id}` });
+  const colValue = clients.reduce((acc, client) => acc + clientBestProposalValue(client), 0);
+  return (
+    <div
+      ref={setNodeRef}
+      className={`w-[214px] min-w-[214px] max-w-[214px] flex-shrink-0 rounded-3xl p-3 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+      style={{ backgroundColor: stage.color + "28" }}
+    >
+      <div className="mb-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-sm font-black text-slate-700">{stage.emoji} {stage.name}</p>
+          <Badge tone="slate">{clients.length}</Badge>
+        </div>
+        <p className="text-xs font-black text-slate-500 mt-0.5">{clients.length} de {totalClients} clientes</p>
+        {colValue > 0 && <p className="text-xs font-black text-blue-700 mt-0.5">{formatCurrency(colValue)}</p>}
+      </div>
+      <div className="min-h-[140px] space-y-1.5">
+        {clients.map((client) => (
+          <SalesPipelineClientCard key={client.id} client={client} onOpen={() => onOpenClient(client)} />
+        ))}
+        {clients.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-slate-300 bg-white/50 p-3 text-center text-xs font-bold text-slate-400">
+            Nenhum cliente
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function CallCard({ schedule, onLog, onOpen, onDragStart }: {
@@ -3614,20 +3982,40 @@ function AgendaModal({ schedule, onSave, onArchive, onRemove, onClose }: {
   );
 }
 
-function LigacoesSection({ callSchedules, setCallSchedules, salesClients, currentUser }: {
+function LigacoesSection({ callSchedules, setCallSchedules, salesClients, currentUser, initialFilter, onFilterApplied }: {
   callSchedules: CallSchedule[];
   setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
   salesClients: SalesClient[];
   currentUser: Profile | null;
+  initialFilter: "all" | "today" | "overdue";
+  onFilterApplied: () => void;
 }) {
   const [viewMode, setViewMode] = useState<CallViewMode>("frequency");
+  const [ligacoesFilter, setLigacoesFilter] = useState<"minhas" | "todas">("minhas");
   const [logModal, setLogModal] = useState<CallSchedule | null>(null);
   const [agendaModal, setAgendaModal] = useState<CallSchedule | null>(null);
   const [newModal, setNewModal] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  const [quickFilter, setQuickFilter] = useState<"all" | "today" | "overdue">(initialFilter);
 
-  const visibleSchedules = callSchedules.filter((s) => s.active && !s.archived);
+  useEffect(() => {
+    if (initialFilter === "all") return;
+    setQuickFilter(initialFilter);
+    setViewMode("urgency");
+    setLigacoesFilter("todas");
+    onFilterApplied();
+  }, [initialFilter, onFilterApplied]);
+
+  const allActiveSchedules = callSchedules.filter((s) => s.active && !s.archived);
+  const visibleSchedules = allActiveSchedules.filter((s) => {
+    if (ligacoesFilter === "todas") return true;
+    return s.createdBy === currentUser?.id || s.assignedTo === currentUser?.id;
+  }).filter((s) => {
+    if (quickFilter === "today") return urgencyColumnId(s.nextCallAt) === "today";
+    if (quickFilter === "overdue") return urgencyColumnId(s.nextCallAt) === "overdue";
+    return true;
+  });
   const archivedSchedules = callSchedules.filter((s) => s.active && s.archived);
 
   function registerCall(schedule: CallSchedule, notes: string, outcome: string, nextDate: string) {
@@ -3812,7 +4200,20 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
             </button>
           ))}
         </div>
+        <div className="flex rounded-2xl bg-slate-100 p-1 gap-1">
+          {(["minhas", "todas"] as const).map((f) => (
+            <button key={f} type="button" onClick={() => setLigacoesFilter(f)}
+              className={`rounded-xl px-4 py-1.5 text-sm font-black transition ${ligacoesFilter === f ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+              {f === "minhas" ? "Minhas" : "Todas"}
+            </button>
+          ))}
+        </div>
         <span className="text-sm font-bold text-slate-400">{visibleSchedules.length} contatos ativos</span>
+        {quickFilter !== "all" && (
+          <button type="button" onClick={() => setQuickFilter("all")} className="rounded-2xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100">
+            Filtro: {quickFilter === "today" ? "Hoje" : "Atrasadas"} · limpar
+          </button>
+        )}
         <div className="ml-auto">
           <button type="button" onClick={() => setNewModal(true)}
             className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
@@ -3943,6 +4344,7 @@ function NovaAgendaModal({ salesClients, currentUser, callSchedules, onSave, onC
       nextCallAt: firstDate,
       callHistory: [],
       assignedTo: currentUser?.id ?? "",
+      createdBy: currentUser?.id ?? "",
       active: true,
       archived: false,
       notes: ""
@@ -4004,6 +4406,13 @@ function NovaAgendaModal({ salesClients, currentUser, callSchedules, onSave, onC
 }
 
 // ─── Funil Comercial (placeholder visual) ────────────────────────────────────
+
+function pipelineName(name: string, max = 20): string {
+  if (name.length <= max) return name;
+  const sub = name.slice(0, max);
+  const cut = sub.lastIndexOf(" ");
+  return (cut > 0 ? sub.slice(0, cut) : sub) + "…";
+}
 
 // ─── Emoji picker curado (sem biblioteca extra) ───────────────────────────────
 const SALES_EMOJIS = [
@@ -4117,12 +4526,12 @@ function SalesFunnelStageRow({ stage, index, total, count, value, isHalf, onRemo
   return (
     <div ref={setNodeRef}
       style={{ ...baseStyle, ...widthStyle, backgroundColor: stage.color }}
-      className={`flex items-center gap-3 rounded-3xl px-4 py-3 text-white shadow group${isHalf ? " flex-1 min-w-0" : " mx-auto"}`}>
+      className={`flex items-center rounded-3xl text-white shadow group${isHalf ? " flex-1 min-w-0 gap-2 px-3 py-2.5" : " gap-3 px-4 py-3 mx-auto"}`}>
       <button {...attributes} {...listeners} className="rounded-xl bg-white/20 p-1 cursor-grab shrink-0" title="Reordenar">
         <GripVertical size={16} />
       </button>
-      <span className={`font-black text-sm flex-1${isHalf ? "" : " truncate"}`}>{stage.emoji} {stage.name}</span>
-      <span className="font-black text-sm shrink-0">{count} {count === 1 ? "cliente" : "clientes"}</span>
+      <span className={`font-black flex-1${isHalf ? " text-sm" : " text-sm truncate"}`}>{stage.emoji} {stage.name}</span>
+      <span className={`font-black shrink-0 ${isHalf ? "text-xs" : "text-sm"}`}>{count} {count === 1 ? "cliente" : "clientes"}</span>
       {value > 0 && <span className="font-bold text-xs opacity-90 shrink-0">{brl(value)}</span>}
       <button type="button" onClick={openEdit}
         className="opacity-0 group-hover:opacity-100 transition rounded-xl bg-white/20 p-1 shrink-0"
@@ -4139,7 +4548,7 @@ function SalesFunnelStageRow({ stage, index, total, count, value, isHalf, onRemo
   );
 }
 
-function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStages, setSalesFunnelStages, callSchedules, setCallSchedules, profiles }: {
+function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStages, setSalesFunnelStages, callSchedules, setCallSchedules, profiles, currentUser }: {
   salesClients: SalesClient[];
   setSalesClients: Dispatch<SetStateAction<SalesClient[]>>;
   salesFunnelStages: SalesFunnelStage[];
@@ -4147,6 +4556,7 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
   callSchedules: CallSchedule[];
   setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
   profiles: Profile[];
+  currentUser: Profile | null;
 }) {
   const [editingClient, setEditingClient] = useState<SalesClient | null>(null);
   const [view, setView] = useState<"pipeline" | "funil">("pipeline");
@@ -4155,10 +4565,19 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
   const [newStageColor, setNewStageColor] = useState("#3b82f6");
   const [newStageEmoji, setNewStageEmoji] = useState("📌");
   const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+  const [pipelineSearch, setPipelineSearch] = useState("");
+  const [schedulingClient, setSchedulingClient] = useState<SalesClient | null>(null);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const sortedStages = [...salesFunnelStages].sort((a, b) => a.order - b.order);
   const activeClients = salesClients.filter((c) => c.status !== "inativo");
+  const normalizedPipelineSearch = normalizeText(pipelineSearch);
+  const visiblePipelineClients = activeClients.filter((client) => {
+    if (!normalizedPipelineSearch) return true;
+    const stage = sortedStages.find((item) => item.id === clientFunnelStage(client));
+    return [client.name, client.externalCode, client.company, client.city, client.stateUf, client.phone, stage?.name]
+      .some((value) => normalizeText(value ?? "").includes(normalizedPipelineSearch));
+  });
   const brl = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
   // Métricas — usam apenas etapas de "não-final" para pipeline total
@@ -4174,9 +4593,14 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
     const schedule: CallSchedule = {
       id: crypto.randomUUID(), clientId: client.id, clientName: client.name, phone: client.phone,
       frequency: freq, nextCallAt: new Date().toISOString().slice(0, 10),
-      callHistory: [], assignedTo: client.assignedTo, active: true, archived: false, notes: "",
+      callHistory: [], assignedTo: client.assignedTo, createdBy: currentUser?.id ?? "", active: true, archived: false, notes: "",
     };
     setCallSchedules((prev) => [...prev, schedule]);
+  }
+
+  function saveSchedule(schedule: CallSchedule) {
+    setCallSchedules((prev) => [...prev, schedule]);
+    setSchedulingClient(null);
   }
 
   function addStage() {
@@ -4218,6 +4642,16 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
     setSalesClients((prev) => prev.map((c) => c.id === clientId ? { ...c, salesFunnelStage: stageId } : c));
   }
 
+  function handlePipelineDragEnd(event: DragEndEvent) {
+    setDragOverStage(null);
+    const activeId = String(event.active.id);
+    const overId = String(event.over?.id ?? "");
+    if (!activeId.startsWith("sales-client:") || !overId.startsWith("sales-stage:")) return;
+    const clientId = activeId.replace("sales-client:", "");
+    const stageId = overId.replace("sales-stage:", "");
+    handleClientDrop(clientId, stageId);
+  }
+
   const colDropProps = (stageId: string) => ({
     onDragOver:  (e: React.DragEvent) => { e.preventDefault(); setDragOverStage(stageId); },
     onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverStage(null); },
@@ -4244,43 +4678,39 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
 
       {/* Aba Pipeline — kanban com drag */}
       {view === "pipeline" && (
-        <div className="flex gap-4 overflow-x-auto pb-2">
-          {sortedStages.map((stage) => {
-            const clients = activeClients.filter((c) => clientFunnelStage(c) === stage.id);
-            const colValue = clients.reduce((acc, c) => acc + clientBestProposalValue(c), 0);
-            const isOver = dragOverStage === stage.id;
-            return (
-              <div key={stage.id} {...colDropProps(stage.id)}
-                className={`min-w-[220px] flex-shrink-0 rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
-                style={{ backgroundColor: stage.color + "28" }}>
-                <div className="mb-3">
-                  <div className="flex items-center justify-between">
-                    <p className="font-black text-slate-700">{stage.emoji} {stage.name}</p>
-                    <Badge tone="slate">{clients.length}</Badge>
-                  </div>
-                  {colValue > 0 && <p className="text-xs font-black text-blue-700 mt-0.5">{brl(colValue)}</p>}
-                </div>
-                <div className="space-y-2">
-                  {clients.map((client) => {
-                    const val = clientBestProposalValue(client);
-                    return (
-                      <div key={client.id}
-                        draggable
-                        onDragStart={(e) => { e.dataTransfer.setData("clientId", client.id); e.dataTransfer.effectAllowed = "move"; }}
-                        onClick={() => setEditingClient(client)}
-                        className="rounded-2xl bg-white p-3 shadow-sm cursor-grab active:cursor-grabbing transition hover:shadow-md border border-white/80">
-                        <p className="font-black text-sm truncate">{client.name}</p>
-                        {client.company && <p className="text-xs font-bold text-slate-500 truncate">{client.company}</p>}
-                        {val > 0 && <p className="text-xs font-black text-blue-700 mt-1">{brl(val)}</p>}
-                      </div>
-                    );
-                  })}
-                  {clients.length === 0 && emptyState}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <input
+              type="search"
+              value={pipelineSearch}
+              onChange={(event) => setPipelineSearch(event.target.value)}
+              placeholder="Buscar cliente, código, telefone, cidade ou etapa..."
+              className="min-w-[260px] flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+            />
+            {pipelineSearch && (
+              <button type="button" onClick={() => setPipelineSearch("")} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">
+                Limpar
+              </button>
+            )}
+            <span className="text-sm font-bold text-slate-400">{visiblePipelineClients.length} de {activeClients.length} clientes visíveis</span>
+          </div>
+          <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={handlePipelineDragEnd}>
+            <div className="flex gap-4 overflow-x-auto pb-2">
+              {sortedStages.map((stage) => {
+                const clients = visiblePipelineClients.filter((client) => clientFunnelStage(client) === stage.id);
+                return (
+                  <SalesPipelineColumn
+                    key={stage.id}
+                    stage={stage}
+                    clients={clients}
+                    totalClients={activeClients.filter((client) => clientFunnelStage(client) === stage.id).length}
+                    onOpenClient={setEditingClient}
+                  />
+                );
+              })}
+            </div>
+          </DndContext>
+        </>
       )}
 
       {/* Aba Funil — visual reordenável */}
@@ -4412,7 +4842,16 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
             setEditingClient(null);
           }}
           onClose={() => setEditingClient(null)}
-          onAddSchedule={addSchedule}
+          onRequestSchedule={(client) => setSchedulingClient(normalizeSalesClient(client))}
+        />
+      )}
+      {schedulingClient && (
+        <QuickScheduleModal
+          client={schedulingClient}
+          currentUser={currentUser}
+          profiles={profiles}
+          onSave={saveSchedule}
+          onClose={() => setSchedulingClient(null)}
         />
       )}
     </Panel>
@@ -4428,18 +4867,28 @@ function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModa
   profileById: Map<string, Profile>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
-  function addGoal(colId: string, freq: TaskResetFrequency) {
-    const title = window.prompt("Nome da meta");
-    if (!title) return;
+  const [newGoalModal, setNewGoalModal] = useState<{ colId: string; freq: TaskResetFrequency } | null>(null);
+  const [newGoalTitle, setNewGoalTitle] = useState("");
+  const [newGoalScope, setNewGoalScope] = useState<"individual" | "grupo">("individual");
+
+  function openAddGoal(colId: string, freq: TaskResetFrequency) {
+    setNewGoalTitle("");
+    setNewGoalScope("individual");
+    setNewGoalModal({ colId, freq });
+  }
+
+  function confirmAddGoal() {
+    if (!newGoalModal || !newGoalTitle.trim()) return;
+    const { colId, freq } = newGoalModal;
     const newTask: Task = {
       id: crypto.randomUUID(),
-      title,
+      title: newGoalTitle.trim(),
       columnId: colId,
       order: tasks.filter((t) => t.columnId === colId).length + 1,
       priority: "Média",
       progress: "No prazo",
       createdBy: currentUser?.id ?? "",
-      assignedTo: currentUser ? [currentUser.id] : [],
+      assignedTo: newGoalScope === "individual" ? (currentUser ? [currentUser.id] : []) : [],
       relatedTo: "",
       funnelStageId: "",
       dueDate: "",
@@ -4455,6 +4904,15 @@ function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModa
       unit: ""
     };
     setTasks((prev) => [...prev, newTask]);
+    setNewGoalModal(null);
+  }
+
+  const isAdminOrGestor = currentUser?.role === "admin" || currentUser?.role === "gestor";
+
+  function isGoalVisible(t: Task): boolean {
+    if (isAdminOrGestor) return true;
+    if (t.assignedTo.length === 0) return true;
+    return t.assignedTo.includes(currentUser?.id ?? "");
   }
 
   return (
@@ -4463,7 +4921,7 @@ function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModa
         <div className="flex min-w-full gap-4">
           {VENDAS_GOALS_VIRTUAL_COLUMNS.map((col) => {
             const colTasks = tasks
-              .filter((t) => t.columnId === col.id && !t.parentTaskId)
+              .filter((t) => t.columnId === col.id && !t.parentTaskId && isGoalVisible(t))
               .sort((a, b) => a.order - b.order);
             return (
               <div key={col.id} className="flex w-72 shrink-0 flex-col gap-3 rounded-3xl p-4" style={{ background: col.color }}>
@@ -4476,7 +4934,7 @@ function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModa
                 ))}
                 <button
                   type="button"
-                  onClick={() => addGoal(col.id, col.frequency)}
+                  onClick={() => openAddGoal(col.id, col.frequency)}
                   className="mt-1 w-full rounded-2xl border border-dashed border-slate-300 bg-white/60 py-2 text-sm font-black text-slate-500 hover:border-blue-400 hover:bg-white hover:text-blue-600 transition"
                 >
                   <Plus size={14} className="inline mr-1" />Nova meta
@@ -4486,6 +4944,45 @@ function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModa
           })}
         </div>
       </div>
+
+      {/* Modal nova meta */}
+      {newGoalModal && (
+        <CenteredModal close={() => setNewGoalModal(null)} panelClassName="rounded-[32px] border-0 max-w-sm">
+          <h2 className="text-lg font-black mb-4">Nova meta</h2>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Nome da meta</label>
+              <input
+                autoFocus
+                type="text"
+                value={newGoalTitle}
+                onChange={(e) => setNewGoalTitle(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") confirmAddGoal(); }}
+                placeholder="Ex: Fechar 10 vendas"
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-slate-600 mb-2">Visibilidade</label>
+              <div className="flex rounded-2xl bg-slate-100 p-1 gap-1">
+                {(["individual", "grupo"] as const).map((s) => (
+                  <button key={s} type="button" onClick={() => setNewGoalScope(s)}
+                    className={`flex-1 rounded-xl py-1.5 text-sm font-black transition ${newGoalScope === s ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                    {s === "individual" ? "🔒 Individual" : "👥 Grupo"}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-slate-400 font-bold">
+                {newGoalScope === "individual" ? "Só você e gestores veem esta meta" : "Todos os membros veem esta meta"}
+              </p>
+            </div>
+          </div>
+          <div className="mt-5 flex gap-2 justify-end">
+            <button type="button" onClick={() => setNewGoalModal(null)} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
+            <button type="button" onClick={confirmAddGoal} disabled={!newGoalTitle.trim()} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-40">Criar</button>
+          </div>
+        </CenteredModal>
+      )}
     </Panel>
   );
 }
@@ -4521,7 +5018,12 @@ function VendasGoalCard({ task, setModal, setTasks }: { task: Task; setModal: Di
     >
       <div className="flex items-start justify-between gap-2">
         <h4 className="min-w-0 flex-1 font-black text-sm">{task.title}</h4>
-        <Badge tone={colors.badge}>{colors.label}</Badge>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-xs" title={task.assignedTo.length > 0 ? "Meta individual" : "Meta de grupo"}>
+            {task.assignedTo.length > 0 ? "🔒" : "👥"}
+          </span>
+          <Badge tone={colors.badge}>{colors.label}</Badge>
+        </div>
       </div>
       <div className="mt-3 flex items-baseline gap-1">
         <span className="text-2xl font-black text-slate-950">{displayValue.toLocaleString("pt-BR")}</span>
@@ -6056,7 +6558,10 @@ function SortableTaskCard({ task, profileById, funnelById, setModal, openTaskMen
         </div>
       </div>
       <div className="mt-3 w-full text-left">
-        <h4 className="font-black">{task.title}</h4>
+        <div className="flex items-center gap-1.5">
+          {task.isPrivate && <span className="text-xs" title="Só você vê esta atividade">🔒</span>}
+          <h4 className="font-black">{task.title}</h4>
+        </div>
         <p className="mt-2 line-clamp-2 text-sm text-slate-500">{task.description || "Clique para detalhar esta tarefa."}</p>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
@@ -8008,7 +8513,27 @@ function DriveExplorerModal({ onSelect, onClose }: { onSelect: (file: DriveFile)
               <p className="text-sm font-bold text-slate-400">Carregando...</p>
             </div>
           )}
-          {error && <div className="rounded-2xl bg-rose-50 p-4 text-sm font-bold text-rose-700">{error}</div>}
+          {error && (
+            (() => {
+              const isTokenError = /expired|revoked|invalid.grant|invalid_grant/i.test(error);
+              return (
+                <div className="rounded-2xl bg-rose-50 p-5 text-rose-700">
+                  {isTokenError ? (
+                    <div className="space-y-3 text-center">
+                      <p className="text-3xl">🔗</p>
+                      <p className="font-black">Conexão com o Google Drive expirou</p>
+                      <p className="text-sm font-bold text-rose-500">O acesso precisa ser renovado.</p>
+                      <p className="text-sm font-bold text-rose-500">
+                        Feche este modal e vá em <span className="rounded bg-rose-100 px-1.5 py-0.5">Configurações → Google → Reconectar Google Drive</span>.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-sm font-bold">{error}</p>
+                  )}
+                </div>
+              );
+            })()
+          )}
           {!loading && !error && items.length === 0 && (
             <p className="py-10 text-center text-sm font-bold text-slate-400">Pasta vazia.</p>
           )}
@@ -8655,6 +9180,19 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         }} /></DetailRow>
         <DetailRow label="Data de conclusão"><input value={task.dueDate} type="date" onChange={(event) => updateTask(task.id, (current) => ({ ...current, dueDate: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /></DetailRow>
         <DetailRow label="Funil"><SelectControlled label="" value={task.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((stage) => [stage.id, stage.name])]} onChange={(value) => updateTask(task.id, (current) => ({ ...current, funnelStageId: value }))} /></DetailRow>
+        {task.columnId.startsWith("vendas-atividades") && (
+          <DetailRow label="Visibilidade">
+            <div className="flex rounded-2xl bg-slate-100 p-1 gap-1">
+              {([false, true] as const).map((priv) => (
+                <button key={String(priv)} type="button"
+                  onClick={() => updateTask(task.id, (current) => ({ ...current, isPrivate: priv }))}
+                  className={`flex-1 rounded-xl py-1.5 text-sm font-black transition ${(task.isPrivate ?? false) === priv ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
+                  {priv ? "🔒 Só eu" : "👁 Todos"}
+                </button>
+              ))}
+            </div>
+          </DetailRow>
+        )}
       </div>
 
       <section className="space-y-2">
@@ -11199,28 +11737,47 @@ function ComentariosSection({
       };
     });
 
-    // Classificar com IA — guarda confiança e motivo por comentário
+    // Classificação híbrida: regras locais primeiro, Gemini só para os casos incertos
     const classifyMap = new Map<string, { confidence: number; reason: string }>();
-    try {
-      const res = await fetch("/api/gemini-classify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comments: newComments.map((c) => ({ id: c.id, text: c.text })) }),
-      });
-      if (res.ok) {
-        const { results } = await res.json() as {
-          results: Array<{ id: string; tipo: "duvida_relevante" | "normal"; confidence: number; reason: string }>;
-        };
-        for (const r of results) {
-          if (r.tipo === "duvida_relevante") {
-            const c = newComments.find((nc) => nc.id === r.id);
-            if (c) c.addedToBank = true;
+
+    // 1ª passagem — classificação local (sem custo, instantânea)
+    const uncertainForAi: typeof newComments = [];
+    for (const c of newComments) {
+      if (c.addedToBank) continue; // auto-filter já marcou → não reclassificar
+      const local = classifyLocal(c.text);
+      if (local === "duvida") {
+        c.addedToBank = true;
+        classifyMap.set(c.id, { confidence: 1, reason: "regra local: pergunta identificada" });
+      } else if (local === "normal") {
+        classifyMap.set(c.id, { confidence: 1, reason: "regra local: comentário normal" });
+      } else {
+        uncertainForAi.push(c); // incerto → vai para Gemini
+      }
+    }
+
+    // 2ª passagem — Gemini só para os casos incertos
+    if (uncertainForAi.length > 0) {
+      try {
+        const res = await fetch("/api/gemini-classify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ comments: uncertainForAi.map((c) => ({ id: c.id, text: c.text })) }),
+        });
+        if (res.ok) {
+          const { results } = await res.json() as {
+            results: Array<{ id: string; tipo: "duvida_relevante" | "normal"; confidence: number; reason: string }>;
+          };
+          for (const r of results) {
+            if (r.tipo === "duvida_relevante") {
+              const c = uncertainForAi.find((nc) => nc.id === r.id);
+              if (c) c.addedToBank = true;
+            }
             classifyMap.set(r.id, { confidence: r.confidence, reason: r.reason });
           }
         }
+      } catch {
+        // Gemini falhou — comentários incertos ficam fora do banco (seguro)
       }
-    } catch {
-      // Classificação falhou — continua sem ela
     }
 
     // Pré-gerar IDs das perguntas para linkar de volta nos comentários

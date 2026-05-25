@@ -294,6 +294,7 @@ export type Task = {
   targetValue?: number;
   currentValue?: number;
   unit?: string;
+  isPrivate?: boolean;
 };
 
 export type PostMetric = {
@@ -498,6 +499,7 @@ export type CallSchedule = {
   lastCallAt?: string;
   callHistory: CallLog[];
   assignedTo: string;
+  createdBy: string;
   active: boolean;
   paused?: boolean;
   archived?: boolean;
