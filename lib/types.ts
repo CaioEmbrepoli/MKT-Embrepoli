@@ -353,11 +353,13 @@ export type Notification = {
 };
 
 export type CommentStatus = "novo" | "respondido" | "ignorado";
+export type CommentClassificationStatus = "pendente" | "relevante" | "normal" | "erro";
 
 export type Comment = {
   id: string;
   source: "youtube" | "instagram" | "facebook" | "tiktok";
   externalId?: string;
+  importSignature?: string;
   videoId?: string;
   videoTitle?: string;
   authorName: string;
@@ -368,6 +370,11 @@ export type Comment = {
   addedToBank: boolean;
   bankQuestionId?: string;
   publishedAt?: string;
+  retentionUntil?: string;
+  processedAt?: string;
+  isRelevant?: boolean;
+  classificationStatus?: CommentClassificationStatus;
+  classificationReason?: string;
   createdAt: string;
 };
 

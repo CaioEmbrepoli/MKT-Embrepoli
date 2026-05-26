@@ -12933,23 +12933,30 @@ function CommentImportModal({
   onImport: (newItems: YouTubeCommentItem[], updatedItems: YouTubeCommentItem[]) => Promise<void>;
   onClose: () => void;
 }) {
-  const [step, setStep] = useState<"loading" | "confirm" | "error">("loading");
+  const [step, setStep] = useState<"scope" | "loading" | "confirm" | "error">("scope");
+  const [scope, setScope] = useState<"recent" | "all">("recent");
   const [progressMsg, setProgressMsg] = useState("Buscando canal...");
   const [progressPct, setProgressPct] = useState(0);
   const [newItems, setNewItems] = useState<YouTubeCommentItem[]>([]);
   const [updatedItems, setUpdatedItems] = useState<YouTubeCommentItem[]>([]);
+  const [ignoredByDate, setIgnoredByDate] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
 
-  useEffect(() => {
-    void runScan();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const scopeLabel = scope === "recent" ? "últimos 30 dias" : "todos os comentários";
 
   async function runScan() {
     setStep("loading");
     setError(null);
+    setProgressPct(0);
+    setProgressMsg("Buscando canal...");
+    setNewItems([]);
+    setUpdatedItems([]);
+    setIgnoredByDate(0);
     try {
+      const minDate = new Date();
+      minDate.setDate(minDate.getDate() - 30);
+
       // 1. Listar vídeos do canal
       const videos = await listMyYouTubeChannelVideos((p) => {
         if (p.phase === "fetching-channel") setProgressMsg("Buscando canal...");
@@ -12973,6 +12980,7 @@ function CommentImportModal({
 
       const allNew: YouTubeCommentItem[] = [];
       const allUpdated: YouTubeCommentItem[] = [];
+      let skippedOld = 0;
 
       // 2. Buscar comentários de cada vídeo
       for (let i = 0; i < targets.length; i++) {
@@ -12982,6 +12990,13 @@ function CommentImportModal({
         try {
           const items = await listVideoComments(v.videoId, v.title, 200);
           for (const item of items) {
+            if (scope === "recent") {
+              const publishedAt = item.publishedAt ? new Date(item.publishedAt) : null;
+              if (!publishedAt || Number.isNaN(publishedAt.getTime()) || publishedAt < minDate) {
+                skippedOld += 1;
+                continue;
+              }
+            }
             const extId = item.commentId;
             const existing = existingByExtId.get(extId) ?? existingByExtId.get(`yt_comment:${extId}`);
             if (!existing) {
@@ -12998,6 +13013,7 @@ function CommentImportModal({
 
       setNewItems(allNew);
       setUpdatedItems(allUpdated);
+      setIgnoredByDate(skippedOld);
       setStep("confirm");
     } catch (e: any) {
       setError(String(e?.message ?? e));
@@ -13027,11 +13043,43 @@ function CommentImportModal({
           )}
         </div>
 
+        {/* Scope */}
+        {step === "scope" && (
+          <div className="flex flex-col gap-4">
+            <div className="rounded-2xl bg-slate-50 p-4">
+              <p className="text-sm font-bold text-slate-600">Escolha o escopo da busca antes de importar.</p>
+            </div>
+            <div className="grid gap-2">
+              <button
+                type="button"
+                onClick={() => setScope("recent")}
+                className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "recent" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
+              >
+                <span className="block font-black">Últimos 30 dias</span>
+                <span className="text-xs font-bold opacity-75">Busca só comentários feitos nos últimos 30 dias.</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setScope("all")}
+                className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "all" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
+              >
+                <span className="block font-black">Todos os comentários</span>
+                <span className="text-xs font-bold opacity-75">Faz uma varredura completa do canal.</span>
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={onClose} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancelar</button>
+              <button onClick={runScan} className="flex-1 rounded-2xl bg-red-600 py-2 text-sm font-bold text-white hover:bg-red-700">Buscar comentários</button>
+            </div>
+          </div>
+        )}
+
         {/* Loading */}
         {step === "loading" && (
           <div className="flex flex-col items-center gap-4 py-8">
             <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-red-600" />
             <p className="text-sm font-bold text-slate-700">{progressMsg}</p>
+            <p className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">Escopo: {scopeLabel}</p>
             {progressPct > 0 && (
               <div className="w-full">
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
@@ -13057,6 +13105,7 @@ function CommentImportModal({
         {/* Confirm */}
         {step === "confirm" && (
           <div className="flex flex-col gap-4">
+            <div className="rounded-full bg-slate-100 px-3 py-1 text-center text-xs font-black text-slate-500">Escopo: {scopeLabel}</div>
             {hasChanges ? (
               <>
                 <div className="flex flex-col gap-2 rounded-2xl bg-slate-50 p-4">
@@ -13070,6 +13119,12 @@ function CommentImportModal({
                     <div className="flex items-center gap-2 text-sm">
                       <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-black text-emerald-700">{updatedItems.length}</span>
                       <span className="font-bold text-slate-700">resposta{updatedItems.length !== 1 ? "s" : ""} atualizada{updatedItems.length !== 1 ? "s" : ""}</span>
+                    </div>
+                  )}
+                  {scope === "recent" && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-black text-slate-600">{ignoredByDate}</span>
+                      <span className="font-bold text-slate-700">comentário{ignoredByDate !== 1 ? "s" : ""} ignorado{ignoredByDate !== 1 ? "s" : ""} por estar fora dos últimos 30 dias</span>
                     </div>
                   )}
                 </div>
@@ -13090,10 +13145,17 @@ function CommentImportModal({
                   <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100">
                     <CheckCircle2 size={24} className="text-emerald-600" />
                   </div>
-                  <p className="font-bold text-slate-800">Tudo atualizado!</p>
-                  <p className="text-sm text-slate-500">Nenhum comentário novo ou atualizado encontrado.</p>
+                  <p className="font-bold text-slate-800">{scope === "recent" ? "Nenhum comentário novo nos últimos 30 dias." : "Tudo atualizado!"}</p>
+                  <p className="text-sm text-slate-500">
+                    {scope === "recent"
+                      ? `${ignoredByDate} comentário${ignoredByDate !== 1 ? "s" : ""} fora do período foram ignorados.`
+                      : "Nenhum comentário novo ou atualizado encontrado."}
+                  </p>
                 </div>
-                <button onClick={onClose} className="w-full rounded-2xl bg-slate-800 py-2 text-sm font-bold text-white hover:bg-slate-900">Fechar</button>
+                <div className="flex gap-2">
+                  <button onClick={() => setStep("scope")} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Trocar escopo</button>
+                  <button onClick={onClose} className="flex-1 rounded-2xl bg-slate-800 py-2 text-sm font-bold text-white hover:bg-slate-900">Fechar</button>
+                </div>
               </>
             )}
           </div>
