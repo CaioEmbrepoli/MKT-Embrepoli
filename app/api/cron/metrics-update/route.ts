@@ -11,10 +11,86 @@ async function ytFetch(url: string, token: string) {
   return data;
 }
 
+async function ytAnalyticsFetch(url: string, token: string) {
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data?.error?.message ?? `Erro YouTube Analytics API (${response.status}).`);
+  return data;
+}
+
 function parseDurationSeconds(duration: string): number {
   const match = duration.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
   if (!match) return 0;
   return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0);
+}
+
+type VideoAnalytics = {
+  watchTimeMinutes?: number;
+  averageViewDurationSeconds?: number;
+  averageViewPercentage?: number;
+  subscribersGained?: number;
+  subscribersLost?: number;
+  impressions?: number;
+  impressionClickThroughRate?: number;
+};
+
+function mergeAnalyticsRows(map: Map<string, VideoAnalytics>, data: any, fields: Record<string, keyof VideoAnalytics>) {
+  const headers: string[] = (data?.columnHeaders ?? []).map((header: any) => String(header.name));
+  const videoIndex = headers.indexOf("video");
+  if (videoIndex < 0) return;
+  for (const row of data?.rows ?? []) {
+    const videoId = String(row[videoIndex] ?? "");
+    if (!videoId) continue;
+    const current = map.get(videoId) ?? {};
+    headers.forEach((name, index) => {
+      const field = fields[name];
+      if (!field) return;
+      const raw = Number(row[index]);
+      if (Number.isFinite(raw)) current[field] = raw;
+    });
+    map.set(videoId, current);
+  }
+}
+
+async function fetchYouTubeAnalyticsByVideo(videoIds: string[], accessToken: string) {
+  const analytics = new Map<string, VideoAnalytics>();
+  const endDate = new Date().toISOString().slice(0, 10);
+  for (let i = 0; i < videoIds.length; i += 50) {
+    const chunk = videoIds.slice(i, i + 50);
+    if (!chunk.length) continue;
+    const base = {
+      ids: "channel==MINE",
+      startDate: "2005-02-14",
+      endDate,
+      dimensions: "video",
+      filters: `video==${chunk.join(",")}`,
+      maxResults: "50"
+    };
+    const core = await ytAnalyticsFetch(`https://youtubeanalytics.googleapis.com/v2/reports?${new URLSearchParams({
+      ...base,
+      metrics: "estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,subscribersLost"
+    })}`, accessToken);
+    mergeAnalyticsRows(analytics, core, {
+      estimatedMinutesWatched: "watchTimeMinutes",
+      averageViewDuration: "averageViewDurationSeconds",
+      averageViewPercentage: "averageViewPercentage",
+      subscribersGained: "subscribersGained",
+      subscribersLost: "subscribersLost"
+    });
+    try {
+      const discovery = await ytAnalyticsFetch(`https://youtubeanalytics.googleapis.com/v2/reports?${new URLSearchParams({
+        ...base,
+        metrics: "impressions,impressionClickThroughRate"
+      })}`, accessToken);
+      mergeAnalyticsRows(analytics, discovery, {
+        impressions: "impressions",
+        impressionClickThroughRate: "impressionClickThroughRate"
+      });
+    } catch {
+      // Algumas contas/canais não retornam impressões por vídeo. Mantém o restante das métricas.
+    }
+  }
+  return analytics;
 }
 
 async function fetchYouTubeVideos(accessToken: string) {
@@ -62,7 +138,8 @@ async function fetchYouTubeVideos(accessToken: string) {
       });
     }
   }
-  return videos;
+  const analytics = await fetchYouTubeAnalyticsByVideo(ids, accessToken).catch(() => new Map<string, VideoAnalytics>());
+  return videos.map((video) => ({ ...video, ...(analytics.get(video.videoId) ?? {}) }));
 }
 
 export async function GET(request: Request) {
@@ -167,6 +244,13 @@ export async function GET(request: Request) {
           learning: existing?.learning ?? "",
           video_type: v.isShort ? "short" : "video",
           privacy_status: v.privacyStatus,
+          watch_time_minutes: v.watchTimeMinutes ?? existing?.watch_time_minutes ?? null,
+          average_view_duration_seconds: v.averageViewDurationSeconds ?? existing?.average_view_duration_seconds ?? null,
+          average_view_percentage: v.averageViewPercentage ?? existing?.average_view_percentage ?? null,
+          subscribers_gained: v.subscribersGained ?? existing?.subscribers_gained ?? null,
+          subscribers_lost: v.subscribersLost ?? existing?.subscribers_lost ?? null,
+          impressions: v.impressions ?? existing?.impressions ?? null,
+          impression_click_through_rate: v.impressionClickThroughRate ?? existing?.impression_click_through_rate ?? null,
           channel_id: existing?.channel_id ?? null,
           campaign_id: existing?.campaign_id ?? null,
           product_line_id: existing?.product_line_id ?? null,

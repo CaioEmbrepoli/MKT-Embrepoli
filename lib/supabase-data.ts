@@ -525,7 +525,8 @@ export async function replacePostReviewAssets(client: SupabaseClient, assets: Po
     mime_type: item.mimeType,
     status: item.status,
     uploaded_at: item.uploadedAt,
-    reviewed_at: item.reviewedAt || null
+    reviewed_at: item.reviewedAt || null,
+    is_cover: item.isCover ?? false
   }));
   await replaceChildRows(client, "post_review_comments", "asset_id", organizationId, assets.map((asset) => asset.id), assets.flatMap((asset) => asset.comments.map((comment) => ({
     id: comment.id,
@@ -612,7 +613,14 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
     notes: item.notes,
     learning: item.learning,
     video_type: item.videoType ?? null,
-    privacy_status: item.privacyStatus ?? null
+    privacy_status: item.privacyStatus ?? null,
+    watch_time_minutes: item.watchTimeMinutes ?? null,
+    average_view_duration_seconds: item.averageViewDurationSeconds ?? null,
+    average_view_percentage: item.averageViewPercentage ?? null,
+    subscribers_gained: item.subscribersGained ?? null,
+    subscribers_lost: item.subscribersLost ?? null,
+    impressions: item.impressions ?? null,
+    impression_click_through_rate: item.impressionClickThroughRate ?? null
   }));
 }
 
@@ -861,6 +869,7 @@ function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {
     reviewedBy: row.reviewed_by ?? "",
     uploadedAt: row.uploaded_at ?? row.created_at,
     reviewedAt: row.reviewed_at ?? "",
+    isCover: row.is_cover ?? false,
     comments: comments.map((item): PostReviewComment => ({
       id: item.id,
       assetId: item.asset_id,
@@ -946,7 +955,14 @@ function mapMetric(row: any): PostMetric {
     notes: row.notes ?? "",
     learning: row.learning ?? "",
     videoType: row.video_type ?? undefined,
-    privacyStatus: row.privacy_status ?? undefined
+    privacyStatus: row.privacy_status ?? undefined,
+    watchTimeMinutes: row.watch_time_minutes != null ? Number(row.watch_time_minutes) : undefined,
+    averageViewDurationSeconds: row.average_view_duration_seconds != null ? Number(row.average_view_duration_seconds) : undefined,
+    averageViewPercentage: row.average_view_percentage != null ? Number(row.average_view_percentage) : undefined,
+    subscribersGained: row.subscribers_gained != null ? Number(row.subscribers_gained) : undefined,
+    subscribersLost: row.subscribers_lost != null ? Number(row.subscribers_lost) : undefined,
+    impressions: row.impressions != null ? Number(row.impressions) : undefined,
+    impressionClickThroughRate: row.impression_click_through_rate != null ? Number(row.impression_click_through_rate) : undefined
   };
 }
 

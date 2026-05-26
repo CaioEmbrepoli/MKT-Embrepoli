@@ -24,9 +24,10 @@ export async function POST(request: Request) {
       description: string;
       format: string;
       scheduledAt?: string | null;
+      thumbnailUrl?: string | null;
     };
 
-    const { assetUrl, title, description, format, scheduledAt } = body;
+    const { assetUrl, title, description, format, scheduledAt, thumbnailUrl } = body;
 
     if (!assetUrl || !title) {
       return NextResponse.json({ error: "assetUrl e title são obrigatórios." }, { status: 400 });
@@ -120,6 +121,44 @@ export async function POST(request: Request) {
     const videoId = videoData.id;
     if (!videoId) {
       return NextResponse.json({ error: "YouTube não retornou o ID do vídeo." }, { status: 500 });
+    }
+
+    // ── Thumbnail (best-effort) ──────────────────────────────────────────────
+    if (thumbnailUrl) {
+      try {
+        const driveThumbId = extractDriveFileId(thumbnailUrl);
+        let thumbBuffer: ArrayBuffer;
+        let thumbContentType: string;
+
+        if (driveThumbId) {
+          const driveToken = await getGoogleAccessToken(context, "drive");
+          const r = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${driveThumbId}?alt=media`,
+            { headers: { Authorization: `Bearer ${driveToken}` } }
+          );
+          thumbBuffer = await r.arrayBuffer();
+          thumbContentType = r.headers.get("content-type") ?? "image/jpeg";
+        } else {
+          const r = await fetch(thumbnailUrl);
+          thumbBuffer = await r.arrayBuffer();
+          thumbContentType = r.headers.get("content-type") ?? "image/jpeg";
+        }
+
+        await fetch(
+          `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${videoId}&uploadType=media`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${ytToken}`,
+              "Content-Type": thumbContentType,
+              "Content-Length": String(thumbBuffer.byteLength),
+            },
+            body: thumbBuffer,
+          }
+        );
+      } catch {
+        // Falha no thumbnail não impede o retorno de sucesso
+      }
     }
 
     return NextResponse.json({ videoId });

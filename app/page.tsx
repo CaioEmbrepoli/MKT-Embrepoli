@@ -649,6 +649,18 @@ const formatNumber = (value: number) => new Intl.NumberFormat("pt-BR").format(va
 
 const formatPercent = (value: number) => `${value.toFixed(1).replace(".", ",")}%`;
 
+const formatDuration = (seconds: number) => {
+  const safe = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(safe / 60);
+  const remainingSeconds = safe % 60;
+  if (minutes >= 60) {
+    const hours = Math.floor(minutes / 60);
+    const restMinutes = minutes % 60;
+    return `${hours}h ${String(restMinutes).padStart(2, "0")}min`;
+  }
+  return `${minutes}min ${String(remainingSeconds).padStart(2, "0")}s`;
+};
+
 const metricEngagement = (metric: PostMetric) => metric.likes + metric.comments + metric.shares;
 
 const metricEngagementRate = (metric: PostMetric) => metric.reach ? (metricEngagement(metric) / metric.reach) * 100 : 0;
@@ -665,18 +677,65 @@ function metricMatchesFilter(value: string | undefined, filter: string): boolean
   return filter === "all" || !value || value === filter;
 }
 
-type MetricTotals = { reach: number; engagement: number; clicks: number; leads: number; likes: number; comments: number; shares: number };
+type MetricTotals = {
+  reach: number;
+  engagement: number;
+  clicks: number;
+  leads: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  watchTimeMinutes: number;
+  averageViewDurationSeconds: number;
+  averageViewPercentage: number;
+  subscribersGained: number;
+  subscribersLost: number;
+  impressions: number;
+  impressionClickThroughRate: number;
+  analyticsCount: number;
+  impressionCount: number;
+};
 
 function computeMetricTotals(items: PostMetric[]): MetricTotals {
-  return items.reduce<MetricTotals>((acc, metric) => ({
-    reach: acc.reach + metric.reach,
-    engagement: acc.engagement + metricEngagement(metric),
-    clicks: acc.clicks + metric.clicks,
-    leads: acc.leads + metric.leads,
-    likes: acc.likes + metric.likes,
-    comments: acc.comments + metric.comments,
-    shares: acc.shares + metric.shares,
-  }), { reach: 0, engagement: 0, clicks: 0, leads: 0, likes: 0, comments: 0, shares: 0 });
+  return items.reduce<MetricTotals>((acc, metric) => {
+    const hasAnalytics = metric.averageViewDurationSeconds != null || metric.averageViewPercentage != null || metric.watchTimeMinutes != null;
+    const hasImpressions = metric.impressions != null || metric.impressionClickThroughRate != null;
+    return {
+      reach: acc.reach + metric.reach,
+      engagement: acc.engagement + metricEngagement(metric),
+      clicks: acc.clicks + metric.clicks,
+      leads: acc.leads + metric.leads,
+      likes: acc.likes + metric.likes,
+      comments: acc.comments + metric.comments,
+      shares: acc.shares + metric.shares,
+      watchTimeMinutes: acc.watchTimeMinutes + (metric.watchTimeMinutes ?? 0),
+      averageViewDurationSeconds: acc.averageViewDurationSeconds + (metric.averageViewDurationSeconds ?? 0),
+      averageViewPercentage: acc.averageViewPercentage + (metric.averageViewPercentage ?? 0),
+      subscribersGained: acc.subscribersGained + (metric.subscribersGained ?? 0),
+      subscribersLost: acc.subscribersLost + (metric.subscribersLost ?? 0),
+      impressions: acc.impressions + (metric.impressions ?? 0),
+      impressionClickThroughRate: acc.impressionClickThroughRate + (metric.impressionClickThroughRate ?? 0),
+      analyticsCount: acc.analyticsCount + (hasAnalytics ? 1 : 0),
+      impressionCount: acc.impressionCount + (hasImpressions ? 1 : 0),
+    };
+  }, {
+    reach: 0,
+    engagement: 0,
+    clicks: 0,
+    leads: 0,
+    likes: 0,
+    comments: 0,
+    shares: 0,
+    watchTimeMinutes: 0,
+    averageViewDurationSeconds: 0,
+    averageViewPercentage: 0,
+    subscribersGained: 0,
+    subscribersLost: 0,
+    impressions: 0,
+    impressionClickThroughRate: 0,
+    analyticsCount: 0,
+    impressionCount: 0
+  });
 }
 
 type MetricBreakdownItem = { id: string; name: string; value: number; color: string };
@@ -707,12 +766,19 @@ function channelKpiConfig(channelId: string, totals: MetricTotals, count: number
   if (channelId === "youtube") {
     const avgViews = count ? Math.round(totals.reach / count) : 0;
     const likeRate = totals.reach ? (totals.likes / totals.reach) * 100 : 0;
+    const avgDuration = totals.analyticsCount ? totals.averageViewDurationSeconds / totals.analyticsCount : 0;
+    const avgPercent = totals.analyticsCount ? totals.averageViewPercentage / totals.analyticsCount : 0;
+    const avgCtr = totals.impressionCount ? totals.impressionClickThroughRate / totals.impressionCount : 0;
     return [
       { label: "Visualizações",       value: formatNumber(totals.reach) },
       { label: "Vídeos publicados",   value: formatNumber(count) },
       { label: "Média views/vídeo",   value: formatNumber(avgViews) },
-      { label: "Curtidas",            value: formatNumber(totals.likes) },
-      { label: "Comentários",         value: formatNumber(totals.comments) },
+      { label: "Tempo assistido",     value: `${formatNumber(Math.round(totals.watchTimeMinutes))} min` },
+      { label: "Duração média",       value: formatDuration(avgDuration) },
+      { label: "Retenção média",      value: formatPercent(avgPercent) },
+      { label: "Impressões",          value: totals.impressions ? formatNumber(totals.impressions) : "—" },
+      { label: "CTR impressões",      value: totals.impressionCount ? formatPercent(avgCtr) : "—" },
+      { label: "Inscritos líquidos",  value: formatNumber(totals.subscribersGained - totals.subscribersLost) },
       { label: "Taxa de curtidas",    value: formatPercent(likeRate) },
     ];
   }
@@ -1880,7 +1946,7 @@ export default function Home() {
     return (assignedManagers.length ? assignedManagers : fallbackManagers).filter((profileId) => profileId !== currentUser.id);
   }
 
-  async function addPostReviewAssets(post: EditorialPost, files: FileList | File[]) {
+  async function addPostReviewAssets(post: EditorialPost, files: FileList | File[], isCover = false) {
     const uploaded: PostReviewAsset[] = [];
     for (const file of Array.from(files)) {
       setSaveStatus("saving");
@@ -1907,7 +1973,8 @@ export default function Home() {
           reviewedBy: "",
           uploadedAt: new Date().toISOString(),
           reviewedAt: "",
-          comments: []
+          comments: [],
+          isCover,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Erro ao enviar arquivo.";
@@ -1918,8 +1985,10 @@ export default function Home() {
     }
     if (!uploaded.length) return;
     syncPostReviewAssets((current) => [...uploaded, ...current]);
-    syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
-    createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
+    if (!isCover) {
+      syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
+      createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
+    }
   }
 
   function addPostReviewExternalAsset(post: EditorialPost, url: string, previewUrlOverride?: string) {
@@ -7599,6 +7668,13 @@ function Metrics({
                   <p className="mt-0.5 text-xs font-bold text-slate-700">
                     {formatNumber(metric.reach)} views · {formatNumber(metric.likes)} curtidas · {formatNumber(metric.comments)} coment.
                   </p>
+                  {(metric.watchTimeMinutes != null || metric.averageViewPercentage != null || metric.impressions != null) && (
+                    <p className="mt-0.5 text-xs font-bold text-blue-700">
+                      {metric.watchTimeMinutes != null && `${formatNumber(Math.round(metric.watchTimeMinutes))} min assistidos`}
+                      {metric.averageViewPercentage != null && ` · ${formatPercent(metric.averageViewPercentage)} retenção`}
+                      {metric.impressions != null && ` · ${formatNumber(metric.impressions)} impressões`}
+                    </p>
+                  )}
                 </div>
               </button>
             );
@@ -8404,7 +8480,7 @@ function EntityModal(props: {
   posts: EditorialPost[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   postReviewAssets: PostReviewAsset[];
-  addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
   addPostReviewExternalAsset: (post: EditorialPost, url: string, thumbnailUrl?: string) => void;
   deletePostReviewAsset: (assetId: string) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
@@ -8926,6 +9002,13 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
                       <p className="mt-0.5 text-xs font-bold text-slate-700">
                         {formatNumber(metric.reach)} views · {formatNumber(metric.likes)} curtidas · {formatNumber(metric.comments)} coment.
                       </p>
+                      {(metric.watchTimeMinutes != null || metric.averageViewPercentage != null || metric.impressions != null) && (
+                        <p className="mt-0.5 text-xs font-bold text-blue-700">
+                          {metric.watchTimeMinutes != null && `${formatNumber(Math.round(metric.watchTimeMinutes))} min assistidos`}
+                          {metric.averageViewPercentage != null && ` · ${formatPercent(metric.averageViewPercentage)} retenção`}
+                          {metric.impressions != null && ` · ${formatNumber(metric.impressions)} impressões`}
+                        </p>
+                      )}
                     </div>
                   </button>
                 );
@@ -9032,6 +9115,13 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
           reach:     v.viewCount,
           likes:     v.likeCount,
           comments:  v.commentCount,
+          watchTimeMinutes: v.watchTimeMinutes,
+          averageViewDurationSeconds: v.averageViewDurationSeconds,
+          averageViewPercentage: v.averageViewPercentage,
+          subscribersGained: v.subscribersGained,
+          subscribersLost: v.subscribersLost,
+          impressions: v.impressions,
+          impressionClickThroughRate: v.impressionClickThroughRate,
         };
       });
 
@@ -9905,7 +9995,20 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
               <span className="mt-3 inline-flex rounded-2xl bg-blue-700 px-3 py-2 text-sm font-black text-white">{assets.length ? "Abrir revisão" : "Adicionar arte para revisão"}</span>
             </button>
           )}
-          <SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton>
+          {editing && approvedCount > 0 ? (
+            <div className="flex gap-3 md:col-span-2">
+              <SubmitButton className="flex-1">Salvar</SubmitButton>
+              <button
+                type="button"
+                onClick={() => setModal({ kind: "publish", postId: editing.id })}
+                className="flex-1 rounded-3xl bg-blue-700 px-5 py-3 font-black text-white transition hover:bg-blue-800"
+              >
+                Publicar / Agendar
+              </button>
+            </div>
+          ) : (
+            <SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton>
+          )}
         </EntityForm>
         {editing && <DeleteButton label="Excluir post" onDelete={() => { setPosts((current) => current.filter((post) => post.id !== editing.id)); close(); }} />}
       </div>
@@ -9954,7 +10057,7 @@ function PostReviewPanel({
   setSelectedAssetId: (id: string) => void;
   profileById: Map<string, Profile>;
   canReview: boolean;
-  addPostReviewAssets: (post: EditorialPost, files: FileList | File[]) => void;
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
   addPostReviewExternalAsset: (post: EditorialPost, url: string, thumbnailUrl?: string) => void;
   deletePostReviewAsset: (assetId: string) => void;
   openMediaPreview: (item: MediaPreviewItem) => void;
@@ -9963,7 +10066,11 @@ function PostReviewPanel({
   onPublish?: () => void;
   close: () => void;
 }) {
-  const approvedCount = assets.filter((a) => a.status === "Aprovado").length;
+  const approvedCount = assets.filter((a) => a.status === "Aprovado" && !a.isCover).length;
+  const mainAsset = assets.find((a) => !a.isCover);
+  const coverAsset = assets.find((a) => a.isCover);
+  const canUploadMain = !mainAsset;
+  const canUploadCover = mainAsset?.type === "video" && !coverAsset;
   const [adjustmentMessage, setAdjustmentMessage] = useState("");
   const [showAdjustInput, setShowAdjustInput] = useState(false);
   const [comment, setComment] = useState("");
@@ -10024,14 +10131,25 @@ function PostReviewPanel({
         </button>
       )}
 
-      <FileDropZone
-        className="mb-4"
-        icon="file"
-        multiple
-        title={assets.length ? "Adicionar mais artes" : "Enviar arquivo"}
-        hint="Imagens até 2 MB, vídeos até 100 MB"
-        onFiles={(files) => addPostReviewAssets(post, files)}
-      />
+      {canUploadMain && (
+        <FileDropZone
+          className="mb-4"
+          icon="file"
+          title="Enviar arte principal"
+          hint="Imagens até 2 MB, vídeos até 100 MB"
+          onFiles={(files) => addPostReviewAssets(post, files, false)}
+        />
+      )}
+      {canUploadCover && (
+        <FileDropZone
+          className="mb-4"
+          icon="image"
+          title="Enviar capa / thumbnail"
+          hint="Imagem JPG ou PNG — usada como thumbnail no YouTube"
+          accept="image/*"
+          onFiles={(files) => addPostReviewAssets(post, files, true)}
+        />
+      )}
       <div className="mb-3 flex flex-wrap gap-2">
         <button type="button" onClick={() => setDriveOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
           <HardDrive size={15} /> Selecionar do Drive
@@ -10051,7 +10169,7 @@ function PostReviewPanel({
         <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
           {assets.map((asset) => (
             <button key={asset.id} type="button" onClick={() => setSelectedAssetId(asset.id)} className={`shrink-0 rounded-2xl border px-3 py-2 text-xs font-black ${selectedAsset?.id === asset.id ? "border-blue-600 bg-blue-700 text-white" : "border-slate-200 bg-white text-slate-600"}`}>
-              {asset.name}
+              {asset.name}{asset.isCover && " (capa)"}
             </button>
           ))}
         </div>
@@ -10075,7 +10193,7 @@ function PostReviewPanel({
               </button>
             </div>
           </div>
-          {canReview && (
+          {canReview && !selectedAsset.isCover && (
             <div className="rounded-3xl bg-white p-3">
               {selectedAsset.status === "Aprovado" ? (
                 showAdjustInput ? (
@@ -10164,7 +10282,8 @@ function PublishModal({
   close: () => void;
 }) {
   const channelById = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
-  const approvedAssets = postReviewAssets.filter((a) => a.postId === post.id && a.status === "Aprovado");
+  const approvedAssets = postReviewAssets.filter((a) => a.postId === post.id && a.status === "Aprovado" && !a.isCover);
+  const coverAsset = postReviewAssets.find((a) => a.postId === post.id && a.isCover);
 
   const allChannelIds = useMemo(() => {
     const ids = [post.channelId, ...(post.extraChannels?.map((e) => e.channelId) ?? [])];
@@ -10210,7 +10329,7 @@ function PublishModal({
             const res = await fetch("/api/google/youtube/publish", {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt }),
+              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: coverAsset?.url ?? null }),
             });
             if (res.ok) {
               const { videoId } = await res.json() as { videoId: string };
@@ -10325,6 +10444,16 @@ function PublishModal({
                 <div className="mb-3">
                   <p className="mb-1 text-xs font-black text-slate-500">Título</p>
                   <input value={config.title} onChange={(e) => updateConfig(config.channelId, { title: e.target.value })} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
+                </div>
+              )}
+              {/* Thumbnail (YouTube only) */}
+              {isYoutube && coverAsset && (
+                <div className="mb-3 flex items-center gap-3 rounded-2xl bg-white p-3">
+                  <img src={coverAsset.previewUrl} className="h-14 w-24 shrink-0 rounded-xl object-cover" alt="thumbnail" />
+                  <div>
+                    <p className="text-sm font-black text-slate-700">Thumbnail detectada</p>
+                    <p className="text-xs text-slate-500">{coverAsset.name}</p>
+                  </div>
                 </div>
               )}
               {/* Descrição / Legenda */}
@@ -11007,18 +11136,20 @@ function FileDropZone({
   hint,
   icon,
   multiple = false,
+  accept,
   className = "",
   onFiles
 }: {
   title: string;
   hint: string;
-  icon: "camera" | "file";
+  icon: "camera" | "file" | "image";
   multiple?: boolean;
+  accept?: string;
   className?: string;
   onFiles: (files: File[]) => void;
 }) {
   const [dragging, setDragging] = useState(false);
-  const Icon = icon === "camera" ? Camera : FileUp;
+  const Icon = icon === "camera" ? Camera : icon === "image" ? FileImage : FileUp;
 
   function filesFromList(fileList: FileList | null) {
     return fileList ? Array.from(fileList).filter((file) => file.size > 0) : [];
@@ -11063,6 +11194,7 @@ function FileDropZone({
       <input
         type="file"
         multiple={multiple}
+        accept={accept}
         className="hidden"
         onChange={(event) => {
           const files = filesFromList(event.target.files);
@@ -11182,8 +11314,8 @@ function MultiSelectField({ label, name, values, profiles }: { label: string; na
   );
 }
 
-function SubmitButton({ children, full = false }: { children: ReactNode; full?: boolean }) {
-  return <button type="submit" className={`${full ? "w-full" : ""} inline-flex items-center justify-center rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950`}>{children}</button>;
+function SubmitButton({ children, full = false, className }: { children: ReactNode; full?: boolean; className?: string }) {
+  return <button type="submit" className={`${full ? "w-full" : ""} ${className ?? ""} inline-flex items-center justify-center rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-slate-950`}>{children}</button>;
 }
 
 // ─── Banco de Dúvidas ───────────────────────────────────────────────────────

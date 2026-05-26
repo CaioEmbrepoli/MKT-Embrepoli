@@ -201,6 +201,13 @@ export type YouTubeChannelVideo = {
   commentCount: number;
   isShort: boolean;
   privacyStatus: "public" | "unlisted" | "private";
+  watchTimeMinutes?: number;
+  averageViewDurationSeconds?: number;
+  averageViewPercentage?: number;
+  subscribersGained?: number;
+  subscribersLost?: number;
+  impressions?: number;
+  impressionClickThroughRate?: number;
 };
 
 export type YouTubeImportProgress =

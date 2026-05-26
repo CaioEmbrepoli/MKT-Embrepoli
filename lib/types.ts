@@ -200,6 +200,7 @@ export type PostReviewAsset = {
   uploadedAt: string;
   reviewedAt: string;
   comments: PostReviewComment[];
+  isCover?: boolean;
 };
 
 export type Idea = {
@@ -319,6 +320,13 @@ export type PostMetric = {
   learning: string;
   videoType?: 'video' | 'short';
   privacyStatus?: 'public' | 'unlisted' | 'private';
+  watchTimeMinutes?: number;
+  averageViewDurationSeconds?: number;
+  averageViewPercentage?: number;
+  subscribersGained?: number;
+  subscribersLost?: number;
+  impressions?: number;
+  impressionClickThroughRate?: number;
 };
 
 export type PostMetricSnapshot = {

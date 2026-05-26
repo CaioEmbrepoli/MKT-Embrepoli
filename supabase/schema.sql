@@ -363,6 +363,7 @@ create table if not exists public.task_reset_history (
 create table if not exists public.post_metrics (
   id text primary key default gen_random_uuid()::text,
   organization_id text not null references public.organizations(id) on delete cascade,
+  external_id text,
   post_id text references public.posts(id) on delete set null,
   channel_id text references public.channels(id) on delete set null,
   campaign_id text references public.campaigns(id) on delete set null,
@@ -380,6 +381,15 @@ create table if not exists public.post_metrics (
   leads integer not null default 0,
   notes text not null default '',
   learning text not null default '',
+  video_type text,
+  privacy_status text,
+  watch_time_minutes numeric,
+  average_view_duration_seconds numeric,
+  average_view_percentage numeric,
+  subscribers_gained integer,
+  subscribers_lost integer,
+  impressions integer,
+  impression_click_through_rate numeric,
   created_at timestamptz not null default now()
 );
 
@@ -443,10 +453,21 @@ alter table public.post_templates add column if not exists structure_items jsonb
 alter table public.post_templates add column if not exists checklist_items jsonb not null default '[]'::jsonb;
 alter table public.post_templates add column if not exists suggested_time text not null default '';
 alter table public.post_metrics add column if not exists campaign_id text references public.campaigns(id) on delete set null;
+alter table public.post_metrics add column if not exists external_id text;
 alter table public.post_metrics add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;
 alter table public.post_metrics add column if not exists content_type_id text references public.content_types(id) on delete set null;
 alter table public.post_metrics add column if not exists metric_date date not null default current_date;
 alter table public.post_metrics add column if not exists learning text not null default '';
+alter table public.post_metrics add column if not exists video_type text;
+alter table public.post_metrics add column if not exists privacy_status text;
+alter table public.post_metrics add column if not exists watch_time_minutes numeric;
+alter table public.post_metrics add column if not exists average_view_duration_seconds numeric;
+alter table public.post_metrics add column if not exists average_view_percentage numeric;
+alter table public.post_metrics add column if not exists subscribers_gained integer;
+alter table public.post_metrics add column if not exists subscribers_lost integer;
+alter table public.post_metrics add column if not exists impressions integer;
+alter table public.post_metrics add column if not exists impression_click_through_rate numeric;
+create unique index if not exists post_metrics_external_id_idx on public.post_metrics (external_id);
 
 -- Histórico de snapshots de métricas (capturado antes de cada reimport do YouTube)
 create table if not exists public.post_metric_snapshots (
@@ -476,6 +497,7 @@ alter table public.post_review_assets add column if not exists preview_url text 
 alter table public.post_review_assets add column if not exists original_size bigint not null default 0;
 alter table public.post_review_assets add column if not exists compressed_size bigint not null default 0;
 alter table public.post_review_assets add column if not exists mime_type text not null default '';
+alter table public.post_review_assets add column if not exists is_cover boolean default false;
 alter table public.task_attachments add column if not exists source text not null default 'upload';
 alter table public.task_attachments add column if not exists preview_url text not null default '';
 alter table public.task_attachments add column if not exists original_size bigint not null default 0;
