@@ -10002,6 +10002,11 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
           )}
           {!editing && creationMode === "idea" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Ideia de origem<select name="ideaId" value={selectedIdeaId} onChange={(event) => applyIdea(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem ideia vinculada</option>{postIdeas.map((idea) => <option key={idea.id} value={idea.id}>{idea.title}</option>)}</select></label> : <input type="hidden" name="ideaId" value={selectedIdeaId} />}
           {!editing && creationMode === "template" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Usar modelo<select name="templateId" value={selectedTemplateId} onChange={(event) => applyTemplate(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem modelo</option>{postTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label> : <input type="hidden" name="templateId" value={selectedTemplateId} />}
+          {editing?.status && postStatusConfig[editing.status] && (
+            <div className="md:col-span-2 -mb-1">
+              <Badge tone={postStatusConfig[editing.status].tone}>{postStatusConfig[editing.status].label}</Badge>
+            </div>
+          )}
           <TextInput name="title" label="Título" required defaultValue={editing?.title ?? ideaPrefill?.title} />
           <div className="md:col-span-2">
             <label className="mb-2 block text-sm font-bold text-slate-600">Canais</label>
@@ -10419,6 +10424,7 @@ function PublishModal({
   const [localThumbnailUrl, setLocalThumbnailUrl] = useState<string | null>(null);
   const [localThumbnailPreview, setLocalThumbnailPreview] = useState<string | null>(null);
   const [thumbDriveOpen, setThumbDriveOpen] = useState(false);
+  const [thumbFullscreen, setThumbFullscreen] = useState(false);
   const [confirmedDuplicate, setConfirmedDuplicate] = useState(false);
 
   const alreadyPublished = Boolean(post.publishedVideoId) || post.status === "Publicado" || post.status === "Agendado";
@@ -10598,7 +10604,9 @@ function PublishModal({
                   <p className="mb-1 text-xs font-black text-slate-500">Thumbnail</p>
                   {effectiveThumbnailPreview ? (
                     <div className="flex items-center gap-3 rounded-2xl bg-white p-3">
-                      <img src={effectiveThumbnailPreview} className="h-14 w-24 shrink-0 rounded-xl object-cover" alt="thumbnail" />
+                      <button type="button" onClick={() => setThumbFullscreen(true)} className="shrink-0 cursor-zoom-in" title="Ver capa em tamanho grande">
+                        <img src={effectiveThumbnailPreview} className="h-14 w-24 rounded-xl object-cover" alt="thumbnail" />
+                      </button>
                       <div className="flex-1">
                         <p className="text-sm font-black text-slate-700">{coverAsset ? "Capa da revisão" : "Thumbnail selecionada"}</p>
                         {!coverAsset && (
@@ -10657,6 +10665,28 @@ function PublishModal({
         <button type="button" onClick={close} className="w-full rounded-3xl bg-emerald-600 px-4 py-3 font-black text-white transition hover:bg-emerald-700">
           Concluído ✓
         </button>
+      )}
+
+      {/* Fullscreen thumbnail */}
+      {thumbFullscreen && effectiveThumbnailPreview && (
+        <div
+          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80"
+          onClick={() => setThumbFullscreen(false)}
+        >
+          <img
+            src={effectiveThumbnailPreview}
+            className="max-h-[90vh] max-w-[90vw] rounded-2xl object-contain shadow-2xl"
+            alt="thumbnail"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            type="button"
+            onClick={() => setThumbFullscreen(false)}
+            className="absolute right-4 top-4 rounded-full bg-white/20 p-2 text-white hover:bg-white/40"
+          >
+            ✕
+          </button>
+        </div>
       )}
     </div>
   );
