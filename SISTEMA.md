@@ -1,6 +1,6 @@
 # Gestão Embrepoli — Documentação do Sistema
 
-> Documento gerado em 2026-05-20. Última atualização: 2026-05-21. Alimenta a memória persistente do assistente de IA para este projeto.
+> Documento gerado em 2026-05-20. Última atualização: 2026-05-26. Alimenta a memória persistente do assistente de IA para este projeto.
 
 ---
 
@@ -41,8 +41,14 @@ C:\Caio\app\
 │       ├── drive-thumb-by-id/ # Thumbnail por ID
 │       ├── dev-login/         # Login automático em desenvolvimento
 │       ├── task-resets/       # Endpoint para reset de metas
-│       ├── gemini-chat/       # Chat de IA para Banco de Dúvidas (Ollama/Gemini)
+│       ├── gemini-chat/       # Chat de IA legado (mantido por compatibilidade)
 │       ├── gemini-classify/   # Classificação em batch de comentários (Ollama/Gemini)
+│       ├── knowledge-chat/    # Sistema de chat do Banco de Dúvidas (sessões por dia)
+│       │   ├── send/          # Envia pergunta, salva sessão/mensagem/gap
+│       │   ├── today/         # Carrega sessão do dia + mensagens + gaps
+│       │   ├── gap-answer/    # Admin responde um gap pendente
+│       │   ├── cleanup/       # Arquiva sessões antigas
+│       │   └── shared.ts      # Auth, busca Jaccard, mappers
 │       └── cron/
 │           └── metrics-update/ # Cron de atualização de métricas
 ├── lib/
@@ -96,6 +102,10 @@ Todas as tabelas têm isolamento por `organization_id` via Row-Level Security (R
 | `sales_clients` | Clientes, leads e inativos da área de Vendas |
 | `sales_funnel_stages` | Etapas customizáveis do Funil Comercial |
 | `call_schedules` | Agenda e histórico de ligações comerciais |
+| `knowledge_chat_sessions` | Sessões de chat do Banco de Dúvidas (1 por usuário por dia) |
+| `knowledge_chat_messages` | Mensagens trocadas em cada sessão (role: user/ai/system/error) |
+| `knowledge_chat_matches` | Rastreabilidade de qual Q&A respondeu qual mensagem |
+| `knowledge_gaps` | Perguntas sem resposta no banco, aguardando admin responder |
 
 **Migrations registradas:** `customer-questions-ai-migration.sql`, `profile-permissions-migration.sql` e `sales-client-import-migration.sql`.
 
@@ -129,15 +139,25 @@ Registro e análise de performance. Métricas podem ser vinculadas a posts espec
 Gráficos de pizza e barras mostram breakdowns por canal, tipo de conteúdo, linha de produto, tipo de veículo e etapa do funil. Suporta filtros múltiplos simultâneos.
 
 ### 4.8 Banco de Dúvidas
-Base de conhecimento interna com chat de IA. Visível apenas para **admin**.
+Base de conhecimento interna com chat de dúvidas. Visível apenas para **admin**.
 
 **Dois painéis:**
-- **Chat de IA (esquerda):** Usuário faz uma pergunta → IA busca no banco de Q&A aprovadas → responde. Se não encontrar, envia para fila pendente.
+- **Chat (esquerda):** Usuário faz uma pergunta → busca local procura no banco de Q&A aprovadas → responde. Se não encontrar, registra gap pendente e informa o usuário.
 - **Base de Conhecimento (direita):** Lista de perguntas/respostas com filtro de status (pendente/aprovado/respondido). Admin pode responder perguntas pendentes inline.
 
-**Integração IA:** `POST /api/gemini-chat` — usa Ollama (se configurado) ou Gemini como fallback.
+**Sessões por dia:** Cada usuário tem 1 sessão ativa por dia (tabela `knowledge_chat_sessions`). Sessões de dias anteriores são arquivadas automaticamente com TTL de 30 dias ao abrir nova sessão. Endpoint `today` carrega ou cria a sessão do dia junto com mensagens e gaps.
 
-**Fluxo de pendência:** Se IA não sabe responder → insere `CustomerQuestion` com status `pendente` → admin responde pelo painel direito → entra no banco e IA passa a responder.
+**Busca:** Similaridade por Jaccard com remoção de stopwords em português — `provider: "local"`, `model: "keyword-search"`. Pontua contra pergunta (1.0×), resposta (0.6×) e título do vídeo (0.4×). Threshold: 0.30.
+
+**Fluxo completo:**
+1. `POST /api/knowledge-chat/send` recebe a pergunta
+2. Salva mensagem do usuário em `knowledge_chat_messages`
+3. Executa busca Jaccard no banco de Q&A aprovadas
+4. Se encontrou: salva resposta + registra match em `knowledge_chat_matches`
+5. Se não encontrou: salva resposta padrão + cria `KnowledgeGap` (status `aguardando_resposta`) + vincula ao `gap_id` da mensagem
+6. Admin responde o gap via `POST /api/knowledge-chat/gap-answer` → gap vira `convertido` e entra no banco
+
+**Cleanup:** `POST /api/knowledge-chat/cleanup` arquiva sessões antigas.
 
 ### 4.9 Comentários
 CRM de comentários importados do YouTube. Visível apenas para **admin**.
@@ -147,6 +167,8 @@ CRM de comentários importados do YouTube. Visível apenas para **admin**.
 - Classificação automática via IA (Ollama/Gemini): `duvida_relevante` ou `normal` — 1 chamada em batch por importação
 - Filtros automáticos por palavras-chave (override manual, antes da IA)
 - Ações por comentário: Responder, Ignorar, Adicionar ao Banco de Dúvidas
+- Classificação híbrida: regras locais primeiro; Gemini apenas para casos incertos
+- Proteção contra duplicatas: filtro em memória por `existingExternalIds` + upsert/constraint por `organization_id, external_id`
 
 **Status de comentário:** `novo` → `respondido` / `ignorado`
 
@@ -176,6 +198,14 @@ Painel administrativo dividido em abas:
 - **Configurações:** ajustes comerciais.
 
 **Regra técnica:** usar `areaScope` para impedir mistura de boards, tarefas e metas entre Marketing e Vendas.
+
+**Visibilidade:**
+- Ligações: toggle "Minhas / Todas" para todos; filtro de foco, não privacidade rígida.
+- Atividades: `isPrivate` por item; privado fica visível só ao criador.
+- Metas: Individual quando `assignedTo` está preenchido; Grupo quando vazio.
+- Funil: compartilhado para a equipe.
+
+**Importação XLSX:** clientes de Vendas usam campos `external_code`, `client_type`, `state_uf`, `city` e `last_purchase_at`; dependência `xlsx` deve estar versionada em `package.json`/`package-lock.json`.
 
 ---
 
@@ -228,7 +258,18 @@ Edição de membros (visível para admins/gestores): Nome, Email, Telefone, Role
 ### Profile
 ```typescript
 id, organizationId, name, email, phone, bio, role, avatarUrl, active,
-notificationSound (boolean), pendingApproval (boolean)
+notificationSound (boolean)
+```
+
+### ProfileArea
+```typescript
+id, profileId, area (AppArea), active
+```
+
+### ProfileModulePermission
+```typescript
+id, profileId, area (AppArea), moduleId, canView, canCreate, canEdit,
+canDelete, canApprove, canManage
 ```
 
 ### EditorialPost
@@ -246,10 +287,12 @@ contentTypeId, funnelStageId, priority, description, attachments[]
 
 ### Task
 ```typescript
-id, boardId, columnId, title, description, priority, progress, dueDate,
-assignedTo[], checklist[], comments[], attachments[], parentTaskId,
-isGoal, targetValue, currentValue, unit, resetFrequency, resetTime,
-resetWeekday, lastReset, nextReset
+id, columnId, title, description, priority, progress, dueDate, order,
+createdBy, assignedTo[], relatedTo, funnelStageId, parentTaskId?,
+previousColumnId?, checklist[], comments[], attachments[],
+resetFrequency, resetTime, resetWeekday?, resetMonthDay?,
+resetMonthLastDay (boolean), fixedGoalKey?, lastResetAt?, nextResetAt?,
+targetValue?, currentValue?, unit?, isPrivate?
 ```
 
 ### Campaign
@@ -268,16 +311,32 @@ shares, clicks, leads, notes, learning, videoType, privacyStatus, externalId
 
 ### CustomerQuestion
 ```typescript
-id, organizationId, questionText, answerText, category, status,
-authorName, likes, learning, reviewerId, publishedAt, answeredAt,
-createdAt, needsReview (boolean), fromCommentId? (rastreabilidade)
+id, organizationId, source (CustomerQuestionSource), externalId?,
+videoId?, videoTitle?, questionText, answerText, authorName, likes,
+status (CustomerQuestionStatus), category, reviewerId?, learning,
+fromCommentId?, sourceCommentId?, needsReview (boolean),
+reviewedAt?, reviewedBy?, aiConfidence?, aiReason?,
+publishedAt?, answeredAt?, createdAt
 ```
+
+**CustomerQuestionStatus:** `"pendente" | "respondido" | "aprovado" | "descartado"`  
+**CustomerQuestionSource:** `"youtube" | "instagram" | "facebook" | "tiktok" | "manual"`
 
 ### SalesClient
 ```typescript
-id, organizationId, externalCode, name, document, phone, email,
-clientType, stateUf, city, lastPurchaseAt, status, source, notes,
-proposals[], salesFunnelStage
+id, externalCode, name, clientType, email, phone, company, segment,
+stateUf, city, lastPurchaseAt, status (SalesClientStatus),
+source (SalesClientSource), assignedTo, notes, proposals[],
+salesFunnelStage, createdAt
+```
+
+**SalesClientStatus:** `"lead" | "cliente" | "inativo"`  
+**SalesClientSource:** `"instagram" | "youtube" | "indicacao" | "site" | "manual" | "outros"`
+
+### SalesProposal
+```typescript
+id, title, value, status ("rascunho"|"enviada"|"negociacao"|"ganha"|"perdida"|"expirada"),
+createdAt, notes
 ```
 
 ### SalesFunnelStage
@@ -287,14 +346,24 @@ id, name, color, emoji, order, halfWidth
 
 ### CallSchedule
 ```typescript
-id, clientId, title, frequency, nextCallAt, outcome, notes, history, archived
+id, clientId, clientName, phone, frequency (CallFrequency),
+nextCallAt, lastCallAt?, callHistory (CallLog[]), assignedTo,
+createdBy, active, paused?, archived?, notes
+```
+
+**CallFrequency:** `"daily" | "weekly" | "biweekly" | "monthly"`
+
+### CallLog
+```typescript
+id, date, notes, outcome
 ```
 
 ### Comment
 ```typescript
-id, organizationId, source ("youtube"), externalId?, videoId?, videoTitle?,
-authorName, text, likes, response?, status (CommentStatus),
-addedToBank (boolean), publishedAt?, createdAt
+id, source ("youtube"|"instagram"|"facebook"|"tiktok"), externalId?,
+videoId?, videoTitle?, authorName, text, likes, response?,
+status (CommentStatus), addedToBank (boolean), bankQuestionId?,
+publishedAt?, createdAt
 ```
 
 ### CommentStatus
@@ -317,6 +386,35 @@ id, organizationId, keyword, matchType (AutoFilterMatchType), active, createdAt
 commentId, videoId, videoTitle, authorName, text, likes, publishedAt
 ```
 *(Tipo de transporte — usado na busca de comentários do YouTube, não persistido diretamente)*
+
+### KnowledgeChatSession
+```typescript
+id, organizationId, userId, dateKey, status (KnowledgeChatSessionStatus),
+title, archivedAt?, expiresAt?, lastMessageAt?, createdAt, updatedAt
+```
+**KnowledgeChatSessionStatus:** `"active" | "archived"`
+
+### KnowledgeChatMessage
+```typescript
+id, sessionId, organizationId, userId, role (KnowledgeChatMessageRole),
+content, provider?, model?, unknown (boolean), confidence?,
+reason?, gapId?, errorMessage?, createdAt
+```
+**KnowledgeChatMessageRole:** `"user" | "ai" | "system" | "error"`
+
+### KnowledgeChatMatch
+```typescript
+id, sessionId, messageId, questionId, confidence?, reason?, createdAt
+```
+*(Rastreabilidade: qual Q&A do banco respondeu qual mensagem do chat)*
+
+### KnowledgeGap
+```typescript
+id, organizationId, sessionId, userId, questionText,
+status (KnowledgeGapStatus), customerQuestionId?,
+answeredAt?, resolvedBy?, createdAt, updatedAt
+```
+**KnowledgeGapStatus:** `"aguardando_resposta" | "convertido" | "ignorado" | "erro"`
 
 ### PostReviewAsset
 ```typescript
@@ -440,8 +538,12 @@ Em `localhost`, existe bypass automático de login via `/api/dev-login`.
 | `/api/dev-login` | POST | Login automático (apenas desenvolvimento) |
 | `/api/google/youtube/comments` | GET | Comentários de um vídeo YouTube (backend-mediated) |
 | `/api/task-resets` | POST | Reset de metas por frequência |
-| `/api/gemini-chat` | POST | Chat de IA para Banco de Dúvidas (Ollama ou Gemini) |
+| `/api/gemini-chat` | POST | Chat de IA legado (compatibilidade) |
 | `/api/gemini-classify` | POST | Classificação em batch de comentários (Ollama ou Gemini) |
+| `/api/knowledge-chat/send` | POST | Envia pergunta ao chat, salva sessão/mensagem/gap |
+| `/api/knowledge-chat/today` | GET | Carrega sessão do dia + mensagens + gaps do usuário |
+| `/api/knowledge-chat/gap-answer` | POST | Admin responde gap pendente → gap vira `convertido` |
+| `/api/knowledge-chat/cleanup` | POST | Arquiva sessões antigas (TTL 30 dias) |
 | `/api/cron/metrics-update` | GET | Atualização automática de métricas (cron) |
 
 ---
@@ -462,7 +564,7 @@ Em `localhost`, existe bypass automático de login via `/api/dev-login`.
 ### Configuração
 - **Som:** Usuário pode ativar/desativar som de notificação (Web Audio API)
 - **Leitura:** Marcar como lido individualmente ou em lote
-- **Tipos target:** `post`, `task`, `review`, `idea`, `campaign`, `metric`, `calendar`, `system`
+- **Tipos target:** `post`, `task`, `review`, `idea`, `campaign`, `metric`, `calendar`, `question`, `system`
 
 ---
 

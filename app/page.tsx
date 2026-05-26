@@ -223,6 +223,7 @@ type ModalState =
   | { kind: "task"; id: string }
   | { kind: "profile" }
   | { kind: "teamMember"; id: string }
+  | { kind: "publish"; postId: string }
   | null;
 
 type MediaPreviewItem = Pick<FileAttachment, "name" | "type" | "source" | "url" | "previewUrl" | "mimeType">;
@@ -798,6 +799,29 @@ function allowedAreasForProfile(profile: Profile, profileAreas: ProfileArea[], p
   return appAreas.filter((area) => hasAreaAccess(profile, area.id, profileAreas, permissions)).map((area) => area.id);
 }
 
+function preferredSectionForArea(
+  profile: Profile,
+  area: AppArea,
+  profileAreas: ProfileArea[],
+  permissions: ProfileModulePermission[]
+) {
+  const preferredPanel = `${area}-painel`;
+  const panelItem = menusForArea(area).find((item) => item.sectionId === preferredPanel);
+  if (panelItem && hasModulePermission(profile, area, panelItem.moduleId, "view", profileAreas, permissions)) {
+    return panelItem.sectionId;
+  }
+  return menusForArea(area).find((item) => hasModulePermission(profile, item.area, item.moduleId, "view", profileAreas, permissions))?.sectionId ?? `${area}-configuracoes`;
+}
+
+function defaultLandingForProfile(profile: Profile, profileAreas: ProfileArea[], permissions: ProfileModulePermission[]) {
+  const allowedAreas = allowedAreasForProfile(profile, profileAreas, permissions);
+  if (allowedAreas.includes("marketing")) {
+    return { area: "marketing" as const, sectionId: preferredSectionForArea(profile, "marketing", profileAreas, permissions) };
+  }
+  const area = allowedAreas[0] ?? "marketing";
+  return { area, sectionId: preferredSectionForArea(profile, area, profileAreas, permissions) };
+}
+
 function sameDay(left: Date, right: Date) {
   return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth() && left.getDate() === right.getDate();
 }
@@ -892,6 +916,7 @@ export default function Home() {
   const realtimeReloadTimer = useRef<number | null>(null);
   const remoteReady = useRef(false);
   const lastLocalSaveAt = useRef(0);
+  const initialLandingAppliedFor = useRef("");
 
   const emptyUser: Profile = { id: "", organizationId: "", role: "colaborador", name: "", email: "", phone: "", bio: "", active: false, notificationSound: false, avatarUrl: "" };
   const currentUser = profiles.find((profile) => profile.id === currentUserId)
@@ -1052,6 +1077,20 @@ export default function Home() {
   const recentSubtaskSignature = useRef<{ signature: string; at: number } | null>(null);
 
   useEffect(() => {
+    if (!loggedIn) {
+      initialLandingAppliedFor.current = "";
+      return;
+    }
+    if (userHasNoTeam || !currentUser.id || !currentUser.active) return;
+    const landingKey = `${currentUser.id}:${allowedAreas.join("|")}`;
+    if (initialLandingAppliedFor.current === landingKey) return;
+    const landing = defaultLandingForProfile(currentUser, profileAreas, profileModulePermissions);
+    setActiveArea(landing.area);
+    setActiveSection(landing.sectionId);
+    initialLandingAppliedFor.current = landingKey;
+  }, [loggedIn, userHasNoTeam, currentUser, allowedAreas, profileAreas, profileModulePermissions]);
+
+  useEffect(() => {
     const unreadIds = currentNotifications.filter((item) => !item.read).map((item) => item.id);
     const fresh = unreadIds.some((id) => !seenNotificationIds.current.has(id));
     if (seenNotificationIds.current.size && fresh && currentUser.notificationSound) {
@@ -1065,13 +1104,13 @@ export default function Home() {
     const nextArea = allowedAreas.includes(activeArea) ? activeArea : allowedAreas[0] ?? "marketing";
     if (nextArea !== activeArea) {
       setActiveArea(nextArea);
-      setActiveSection(menusForArea(nextArea)[0]?.sectionId ?? `${nextArea}-configuracoes`);
+      setActiveSection(preferredSectionForArea(currentUser, nextArea, profileAreas, profileModulePermissions));
       return;
     }
     const currentItem = menu.find((item) => item.sectionId === activeSection);
     const allowedItem = currentItem && currentItem.area === activeArea && hasModulePermission(currentUser, currentItem.area, currentItem.moduleId, "view", profileAreas, profileModulePermissions);
     if (!allowedItem) {
-      setActiveSection(visibleMenu[0]?.sectionId ?? `${activeArea}-configuracoes`);
+      setActiveSection(preferredSectionForArea(currentUser, activeArea, profileAreas, profileModulePermissions));
     }
   }, [loggedIn, userHasNoTeam, allowedAreas, activeArea, activeSection, currentUser, profileAreas, profileModulePermissions, visibleMenu]);
 
@@ -2078,7 +2117,7 @@ export default function Home() {
                   type="button"
                   onClick={() => {
                     setActiveArea(area);
-                    setActiveSection(menusForArea(area).find((item) => hasModulePermission(currentUser, item.area, item.moduleId, "view", profileAreas, profileModulePermissions))?.sectionId ?? `${area}-configuracoes`);
+                    setActiveSection(preferredSectionForArea(currentUser, area, profileAreas, profileModulePermissions));
                   }}
                   className={`rounded-xl px-3 py-2 text-sm font-black transition ${activeArea === area ? "bg-blue-700 text-white shadow-sm" : "text-slate-500 hover:bg-white"}`}
                 >
@@ -2138,7 +2177,7 @@ export default function Home() {
           />
 
           {activeSection === "marketing-painel" && (
-            <Dashboard posts={visiblePosts} tasks={visibleTasks} campaigns={visibleCampaigns} metrics={metrics} funnelStages={funnelStages} channelById={channelById} />
+            <Dashboard posts={visiblePosts} tasks={visibleTasks} campaigns={visibleCampaigns} metrics={metrics} ideas={visibleIdeas} postReviewAssets={postReviewAssets} openSection={openSection} channels={channels} channelById={channelById} />
           )}
           {activeSection === "marketing-calendario" && (
             <EditorialCalendar
@@ -5659,94 +5698,243 @@ function Dashboard({
   tasks,
   campaigns,
   metrics,
-  funnelStages,
+  ideas,
+  postReviewAssets,
+  openSection,
+  channels,
   channelById
 }: {
   posts: EditorialPost[];
   tasks: Task[];
   campaigns: Campaign[];
   metrics: PostMetric[];
-  funnelStages: FunnelStage[];
+  ideas: Idea[];
+  postReviewAssets: PostReviewAsset[];
+  openSection: (sectionId: string) => void;
+  channels: Channel[];
   channelById: Map<string, Channel>;
 }) {
-  const reach = metrics.reduce((sum, metric) => sum + metric.reach, 0);
-  const leads = metrics.reduce((sum, metric) => sum + metric.leads, 0);
-  const week = makeWeek(new Date(2026, 4, 11));
-  const chartData = metrics.map((metric) => ({ name: metric.postTitle.slice(0, 14), alcance: metric.reach, leads: metric.leads }));
-  const bestMetric = metrics.slice().sort((a, b) => b.leads - a.leads || metricEngagement(b) - metricEngagement(a))[0];
-  const postsWithoutMetric = posts.filter((post) => !metrics.some((metric) => metric.postId === post.id || metric.postTitle === post.title));
-  const bestChannelId = Object.entries(metrics.reduce<Record<string, number>>((acc, metric) => {
-    acc[metric.channelId] = (acc[metric.channelId] ?? 0) + metric.leads;
-    return acc;
-  }, {})).sort((a, b) => b[1] - a[1])[0]?.[0];
-  const funnelData = funnelStages.map((stage) => ({
-    name: stage.name,
-    value: posts.filter((post) => post.funnelStageId === stage.id).length + campaigns.filter((campaign) => campaign.funnelStageId === stage.id).length,
-    color: stage.color
-  }));
+  const [selectedChannelId, setSelectedChannelId] = useState<string>("all");
+  const [comparisonPeriod, setComparisonPeriod] = useState<7 | 14 | 30>(7);
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  // ── Cards de resumo ────────────────────────────────────────────────────────
+  const publishedPosts = posts.filter((p) => p.status === "Publicado").length;
+  const inProductionPosts = posts.filter((p) => ["Produção", "Revisão", "Aprovado", "Agendado"].includes(p.status)).length;
+  const pendingReviews = postReviewAssets.filter((a) => a.status === "Aguardando revisão").length;
+  const activeCampaigns = campaigns.filter((c) => c.status === "Ativa").length;
+  const totalReach = metrics.reduce((s, m) => s + m.reach, 0);
+  const totalLeads = metrics.reduce((s, m) => s + m.leads, 0);
+  const mktTasks = tasks.filter((t) => !t.parentTaskId && !t.columnId.startsWith("vendas-"));
+  const openTasks = mktTasks.filter((t) => !t.columnId.endsWith("-done")).length;
+  const tasksOverdue = mktTasks.filter((t) => t.dueDate && t.dueDate < today && !t.columnId.endsWith("-done")).length;
+
+  // ── Widget Métricas ────────────────────────────────────────────────────────
+  const filteredMetrics = selectedChannelId === "all" ? metrics : metrics.filter((m) => m.channelId === selectedChannelId);
+  const filteredReach = filteredMetrics.reduce((s, m) => s + m.reach, 0);
+  const filteredLeads = filteredMetrics.reduce((s, m) => s + m.leads, 0);
+  const filteredEngagement = filteredMetrics.length
+    ? Math.round(filteredMetrics.reduce((s, m) => s + metricEngagementRate(m), 0) / filteredMetrics.length * 10) / 10
+    : 0;
+
+  // Comparação de postagens por período
+  const periodStart = new Date(); periodStart.setDate(periodStart.getDate() - comparisonPeriod);
+  const prevStart = new Date(periodStart); prevStart.setDate(prevStart.getDate() - comparisonPeriod);
+  const periodStartStr = periodStart.toISOString().slice(0, 10);
+  const prevStartStr = prevStart.toISOString().slice(0, 10);
+  const postsThisPeriod = posts.filter((p) => p.publishAt && p.publishAt.slice(0, 10) >= periodStartStr && p.publishAt.slice(0, 10) <= today).length;
+  const postsLastPeriod = posts.filter((p) => p.publishAt && p.publishAt.slice(0, 10) >= prevStartStr && p.publishAt.slice(0, 10) < periodStartStr).length;
+  const postsDelta = postsLastPeriod === 0 ? null : Math.round(((postsThisPeriod - postsLastPeriod) / postsLastPeriod) * 100);
+
+  // Mini gráfico: posts por dia no período selecionado
+  const chartData = Array.from({ length: comparisonPeriod }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (comparisonPeriod - 1 - i));
+    const ds = d.toISOString().slice(0, 10);
+    return { name: ds.slice(5), posts: posts.filter((p) => p.publishAt?.slice(0, 10) === ds).length };
+  });
+
+  // ── Widget Tarefas ─────────────────────────────────────────────────────────
+  const tasksToday = mktTasks.filter((t) => t.dueDate?.slice(0, 10) === today).length;
+  const nearestTasks = mktTasks
+    .filter((t) => !t.columnId.endsWith("-done") && t.dueDate)
+    .sort((a, b) => (a.dueDate ?? "").localeCompare(b.dueDate ?? ""))
+    .slice(0, 2);
+
+  // ── Mini calendário semanal ────────────────────────────────────────────────
+  const week = makeWeek(new Date());
+
+  const summaryCards = [
+    { label: "Posts publicados", value: publishedPosts, helper: `${posts.length} posts no total`, color: "emerald", onClick: () => openSection("marketing-calendario") },
+    { label: "Em produção", value: inProductionPosts, helper: "Produção, revisão e agendados", color: "blue", onClick: () => openSection("marketing-calendario") },
+    { label: "Revisões pendentes", value: pendingReviews, helper: "Artes aguardando aprovação", color: "rose", onClick: () => openSection("marketing-revisoes") },
+    { label: "Ideias", value: ideas.length, helper: "No banco de ideias", color: "amber", onClick: () => openSection("marketing-ideias") },
+    { label: "Campanhas ativas", value: activeCampaigns, helper: `${campaigns.length} campanhas no total`, color: "purple", onClick: () => openSection("marketing-campanhas") },
+    { label: "Alcance total", value: formatNumber(totalReach), helper: "Somatório das métricas", color: "cyan", onClick: () => openSection("marketing-metricas") },
+    { label: "Leads gerados", value: formatNumber(totalLeads), helper: "Somatório das métricas", color: "green", onClick: () => openSection("marketing-metricas") },
+    { label: "Tarefas abertas", value: openTasks, helper: `${tasksOverdue} atrasadas`, color: "slate", onClick: () => openSection("marketing-tarefas") }
+  ] as const;
+
+  const colorClasses: Record<typeof summaryCards[number]["color"], string> = {
+    emerald: "border-emerald-100 bg-emerald-50 text-emerald-700",
+    blue: "border-blue-100 bg-blue-50 text-blue-700",
+    rose: "border-rose-100 bg-rose-50 text-rose-700",
+    amber: "border-amber-100 bg-amber-50 text-amber-700",
+    purple: "border-purple-100 bg-purple-50 text-purple-700",
+    cyan: "border-cyan-100 bg-cyan-50 text-cyan-700",
+    green: "border-green-100 bg-green-50 text-green-700",
+    slate: "border-slate-100 bg-slate-50 text-slate-700"
+  };
+
+  const shortcutButton = (label: string, sectionId: string) => (
+    <button type="button" onClick={() => openSection(sectionId)} className="rounded-2xl bg-blue-700 px-3 py-2 text-xs font-black text-white transition hover:bg-blue-800">
+      {label}
+    </button>
+  );
 
   return (
-    <div className="space-y-6 animate-task-switch">
-      <div className="grid gap-4 md:grid-cols-4">
-        <Stat label="Alcance" value={formatNumber(reach)} icon={BarChart3} />
-        <Stat label="Leads" value={formatNumber(leads)} icon={CheckCircle2} />
-        <Stat label="Posts" value={posts.length} icon={CalendarDays} />
-        <Stat label="Tarefas" value={tasks.length} icon={KanbanSquare} />
+    <Panel title="Painel">
+      {/* 8 cards de resumo */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {summaryCards.map((card) => (
+          <button type="button" key={card.label} onClick={card.onClick} className={`rounded-3xl border p-5 text-left transition hover:-translate-y-0.5 hover:shadow-lg ${colorClasses[card.color]}`}>
+            <p className="text-sm font-bold text-slate-500">{card.label}</p>
+            <p className="mt-1 text-3xl font-black">{card.value}</p>
+            <p className="mt-2 text-xs font-bold text-slate-500">{card.helper}</p>
+          </button>
+        ))}
       </div>
-      <div className="grid gap-4 lg:grid-cols-3">
-        <div className="rounded-[28px] border border-blue-100 bg-blue-50 p-4">
-          <p className="text-sm font-black text-blue-700">Melhor conteúdo</p>
-          <h3 className="mt-2 line-clamp-2 font-black">{bestMetric?.postTitle ?? "Sem métricas ainda"}</h3>
-          <p className="mt-2 text-sm font-bold text-slate-600">{bestMetric ? `${bestMetric.leads} leads · ${formatPercent(metricEngagementRate(bestMetric))} engajamento` : "Cadastre métricas para comparar resultados."}</p>
-        </div>
-        <div className="rounded-[28px] border border-slate-200 bg-white p-4 shadow-sm">
-          <p className="text-sm font-black text-slate-500">Canal com melhor resultado</p>
-          <h3 className="mt-2 font-black">{channelById.get(bestChannelId ?? "")?.name ?? "Sem dados"}</h3>
-          <p className="mt-2 text-sm font-bold text-slate-500">Baseado em leads registrados.</p>
-        </div>
-        <div className="rounded-[28px] border border-amber-100 bg-amber-50 p-4">
-          <p className="text-sm font-black text-amber-700">Posts sem métrica</p>
-          <h3 className="mt-2 text-2xl font-black">{postsWithoutMetric.length}</h3>
-          <p className="mt-2 text-sm font-bold text-slate-600">Itens que ainda precisam de acompanhamento.</p>
-        </div>
-      </div>
-      <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-        <Panel title="Desempenho">
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                <XAxis dataKey="name" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
-                <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
-                <Tooltip />
-                <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe">
-                  <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={13} fontWeight={900} />
-                </Area>
-              </AreaChart>
-            </ResponsiveContainer>
+
+      {/* Widgets — row 1: Tarefas | Métricas */}
+      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+        {/* Widget Tarefas */}
+        <div className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-black text-slate-900">Tarefas</h3>
+              <p className="text-sm font-bold text-slate-500">Atividades de marketing</p>
+            </div>
+            {shortcutButton("Ver tarefas", "marketing-tarefas")}
           </div>
-          <ChartValueList data={chartData.slice(0, 5).map((item) => ({ label: item.name, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />
-        </Panel>
-        <Panel title="Funil">
-          <div className="h-72">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie data={funnelData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={94} label={({ value }) => String(value)}>
-                  {funnelData.map((item) => <Cell key={item.name} fill={item.color} />)}
-                </Pie>
-                <Tooltip />
-              </PieChart>
-            </ResponsiveContainer>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MiniMetric label="Abertas" value={openTasks} />
+            <MiniMetric label="Para hoje" value={tasksToday} tone="blue" />
+            <MiniMetric label="Atrasadas" value={tasksOverdue} tone="red" />
           </div>
-          <ChartValueList data={funnelData.map((item) => ({ label: item.name, value: `${item.value} item(ns)` }))} />
-        </Panel>
+          {nearestTasks.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {nearestTasks.map((t) => (
+                <div key={t.id} className="rounded-3xl border border-slate-100 bg-white p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <h4 className="line-clamp-1 font-black text-slate-900">{t.title}</h4>
+                    <span className={`shrink-0 text-xs font-black ${t.dueDate! < today ? "text-rose-600" : "text-slate-500"}`}>
+                      {new Date(t.dueDate! + "T12:00:00").toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}
+                    </span>
+                  </div>
+                  {t.description && (
+                    <p className="mt-1 line-clamp-2 text-sm text-slate-500">{t.description}</p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge tone={priorityToneMap[t.priority] ?? "slate"}>{t.priority}</Badge>
+                    <Badge tone={progressToneMap[t.progress] ?? "slate"}>{t.progress}</Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm font-bold text-slate-400">
+              Nenhuma tarefa com prazo definido.
+            </p>
+          )}
+        </div>
+
+        {/* Widget Métricas */}
+        <div className="rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="font-black text-slate-900">Métricas</h3>
+              <p className="text-sm font-bold text-slate-500">Desempenho por canal</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={selectedChannelId}
+                onChange={(e) => setSelectedChannelId(e.target.value)}
+                className="rounded-xl border border-slate-200 bg-white px-2 py-1 text-xs font-black text-slate-700 focus:outline-none"
+              >
+                <option value="all">Todos os canais</option>
+                {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              {shortcutButton("Ver métricas", "marketing-metricas")}
+            </div>
+          </div>
+          {/* Bloco 1 — MiniMetrics */}
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MiniMetric label="Alcance" value={formatNumber(filteredReach)} />
+            <MiniMetric label="Leads" value={formatNumber(filteredLeads)} tone="green" />
+            <MiniMetric label="Engajamento médio" value={`${filteredEngagement}%`} tone="blue" />
+          </div>
+          {/* Bloco 2 — Postagens com gráfico e comparação */}
+          <div className="mt-3 rounded-2xl bg-white p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-black text-slate-700">Postagens</p>
+              <div className="flex gap-1">
+                {([7, 14, 30] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setComparisonPeriod(d)}
+                    className={`rounded-xl px-2 py-1 text-xs font-black transition ${comparisonPeriod === d ? "bg-blue-700 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+                  >
+                    {d}d
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="h-20">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+                  <Area type="monotone" dataKey="posts" stroke="#2563eb" fill="#bfdbfe" dot={false} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 11, fontWeight: 700, borderRadius: 12, border: "1px solid #e2e8f0" }}
+                    formatter={(value: number) => [value, "Posts"]}
+                    labelFormatter={(label) => label}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-2 flex items-end justify-between">
+              <div>
+                <p className="text-2xl font-black text-slate-900">{postsThisPeriod}</p>
+                <p className="text-xs font-bold text-slate-500">últimos {comparisonPeriod} dias</p>
+              </div>
+              {postsDelta !== null ? (
+                <p className={`text-sm font-black ${postsDelta >= 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                  {postsDelta >= 0 ? "↑" : "↓"} {Math.abs(postsDelta)}% vs anterior
+                </p>
+              ) : (
+                <p className="text-xs font-bold text-slate-400">sem dados anteriores</p>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
-      <Panel title="Mini calendário da semana">
+
+      {/* Mini calendário da semana — full-width */}
+      <div className="mt-4 rounded-3xl border border-slate-100 bg-slate-50 p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="font-black text-slate-900">Mini calendário da semana</h3>
+            <p className="text-sm font-bold text-slate-500">Posts agendados para os próximos 7 dias</p>
+          </div>
+          {shortcutButton("Ver calendário", "marketing-calendario")}
+        </div>
         <div className="grid grid-cols-7 gap-2">
           {week.map((day) => (
-            <div key={day.toISOString()} className="min-h-32 rounded-3xl bg-slate-50 p-3">
-              <p className="text-xs font-black uppercase text-slate-500">{day.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit" })}</p>
-              {posts.filter((post) => sameDay(new Date(post.publishAt), day)).map((post) => (
+            <div key={day.toISOString()} className="min-h-32 rounded-3xl bg-white p-3">
+              <p className="text-xs font-black uppercase text-slate-500">
+                {day.toLocaleDateString("pt-BR", { weekday: "short", day: "2-digit" })}
+              </p>
+              {posts.filter((post) => post.publishAt && sameDay(new Date(post.publishAt), day)).map((post) => (
                 <div key={post.id} className="mt-2 rounded-2xl bg-blue-700 p-2 text-xs font-black text-white">
                   {new Date(post.publishAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })} {channelById.get(post.channelId)?.name}
                 </div>
@@ -5754,8 +5942,8 @@ function Dashboard({
             </div>
           ))}
         </div>
-      </Panel>
-    </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -8274,6 +8462,11 @@ function EntityModal(props: {
         {modal.kind === "metric" && <MetricModalV2 {...props} close={close} />}
         {modal.kind === "profile" && <ProfileModal {...props} close={close} />}
         {modal.kind === "teamMember" && <TeamMemberModal {...props} close={close} />}
+        {modal.kind === "publish" && (() => {
+          const publishPost = props.posts.find((p) => p.id === modal.postId);
+          if (!publishPost) return null;
+          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} setPosts={props.setPosts} close={close} />;
+        })()}
     </CenteredModal>
   );
 }
@@ -8285,6 +8478,7 @@ function modalTitle(modal: NonNullable<ModalState>) {
   if (modal.kind === "campaign") return modal.id ? "Editar campanha" : "Nova campanha";
   if (modal.kind === "profile") return "Editar perfil";
   if (modal.kind === "teamMember") return "Editar membro";
+  if (modal.kind === "publish") return "Publicar / Agendar";
   return modal.id ? "Editar métrica" : "Nova métrica";
 }
 
@@ -9478,7 +9672,7 @@ function applyTimeToDateTimeLocal(currentValue: string, time: string) {
   return `${datePart}T${time}`;
 }
 
-function PostModalV2({ modal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function PostModalV2({ modal, setModal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
   const initialIdea = editing?.ideaId ?? (modal?.kind === "post" ? modal.ideaId ?? "" : "");
   const ideaPrefill = ideas.find((idea) => idea.id === initialIdea);
@@ -9729,6 +9923,7 @@ function PostModalV2({ modal, currentUser, profiles, profileById, channels, prod
           openMediaPreview={openMediaPreview}
           setReviewAssetStatus={setReviewAssetStatus}
           addReviewComment={addReviewComment}
+          onPublish={() => setModal({ kind: "publish", postId: editing.id })}
           close={() => setReviewOpen(false)}
         />
       )}
@@ -9749,6 +9944,7 @@ function PostReviewPanel({
   openMediaPreview,
   setReviewAssetStatus,
   addReviewComment,
+  onPublish,
   close
 }: {
   post: EditorialPost;
@@ -9763,8 +9959,10 @@ function PostReviewPanel({
   openMediaPreview: (item: MediaPreviewItem) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
+  onPublish?: () => void;
   close: () => void;
 }) {
+  const approvedCount = assets.filter((a) => a.status === "Aprovado").length;
   const [adjustmentMessage, setAdjustmentMessage] = useState("");
   const [showAdjustInput, setShowAdjustInput] = useState(false);
   const [comment, setComment] = useState("");
@@ -9817,6 +10015,13 @@ function PostReviewPanel({
         </div>
         <button type="button" onClick={close} className="rounded-2xl bg-white p-2"><X size={18} /></button>
       </div>
+
+      {approvedCount > 0 && onPublish && (
+        <button type="button" onClick={onPublish} className="mb-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800">
+          <span>Publicar / Agendar</span>
+          <Badge tone="blue">{approvedCount} aprovada{approvedCount !== 1 ? "s" : ""}</Badge>
+        </button>
+      )}
 
       <FileDropZone
         className="mb-4"
@@ -9909,6 +10114,247 @@ function PostReviewPanel({
         <p className="rounded-3xl bg-white p-5 text-sm font-bold text-slate-500">Adicione uma arte para iniciar a revisão.</p>
       )}
     </aside>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PublishModal — publica ou agenda o post em múltiplos canais simultaneamente
+// ─────────────────────────────────────────────────────────────────────────────
+type ChannelPublishConfig = {
+  channelId: string;
+  enabled: boolean;
+  format: string;
+  title: string;
+  description: string;
+  status: "idle" | "publishing" | "success" | "error" | "unsupported";
+  errorMessage?: string;
+};
+
+const formatsByPlatform: Record<string, string[]> = {
+  youtube:   ["Vídeo", "Shorts"],
+  instagram: ["Feed", "Story", "Reels", "Lives"],
+  tiktok:    ["Vídeo", "Story", "Live", "Feed"],
+  facebook:  ["Post", "Story", "Reels"],
+  linkedin:  ["Post", "Artigo", "Vídeo"],
+  outros:    ["Post"],
+};
+
+function publishPlatformKey(name: string): string {
+  const n = name.toLowerCase();
+  if (n.includes("youtube"))   return "youtube";
+  if (n.includes("instagram")) return "instagram";
+  if (n.includes("tiktok"))    return "tiktok";
+  if (n.includes("facebook"))  return "facebook";
+  if (n.includes("linkedin"))  return "linkedin";
+  return "outros";
+}
+
+function PublishModal({
+  post,
+  postReviewAssets,
+  channels,
+  setPosts,
+  close,
+}: {
+  post: EditorialPost;
+  postReviewAssets: PostReviewAsset[];
+  channels: Channel[];
+  setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
+  close: () => void;
+}) {
+  const channelById = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
+  const approvedAssets = postReviewAssets.filter((a) => a.postId === post.id && a.status === "Aprovado");
+
+  const allChannelIds = useMemo(() => {
+    const ids = [post.channelId, ...(post.extraChannels?.map((e) => e.channelId) ?? [])];
+    return [...new Set(ids)];
+  }, [post]);
+
+  const [channelConfigs, setChannelConfigs] = useState<ChannelPublishConfig[]>(() =>
+    allChannelIds.map((id) => {
+      const ch = channelById.get(id);
+      const platform = publishPlatformKey(ch?.name ?? "");
+      const formats = formatsByPlatform[platform] ?? ["Post"];
+      return { channelId: id, enabled: true, format: formats[0], title: post.title, description: post.description ?? "", status: "idle" };
+    })
+  );
+  const [publishMode, setPublishMode] = useState<"now" | "scheduled">("scheduled");
+  const [scheduledDate, setScheduledDate] = useState(post.publishAt?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
+  const [scheduledTime, setScheduledTime] = useState(post.publishAt?.slice(11, 16) ?? "09:00");
+  const [selectedAssetId, setSelectedAssetId] = useState(approvedAssets[0]?.id ?? "");
+
+  const selectedAsset = approvedAssets.find((a) => a.id === selectedAssetId) ?? approvedAssets[0];
+
+  function updateConfig(channelId: string, patch: Partial<ChannelPublishConfig>) {
+    setChannelConfigs((prev) => prev.map((c) => c.channelId === channelId ? { ...c, ...patch } : c));
+  }
+
+  const enabledCount = channelConfigs.filter((c) => c.enabled).length;
+  const isPublishing  = channelConfigs.some((c) => c.status === "publishing");
+  const isDone = channelConfigs.filter((c) => c.enabled).every((c) => c.status === "success" || c.status === "unsupported" || c.status === "error");
+
+  async function handlePublish() {
+    if (!selectedAsset || !supabase) return;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData?.session?.access_token;
+    if (!token) return;
+    const scheduledAt = publishMode === "scheduled" ? `${scheduledDate}T${scheduledTime}:00` : null;
+    setChannelConfigs((prev) => prev.map((c) => c.enabled ? { ...c, status: "publishing" } : c));
+    await Promise.allSettled(
+      channelConfigs.filter((c) => c.enabled).map(async (config) => {
+        const ch = channelById.get(config.channelId);
+        const platform = publishPlatformKey(ch?.name ?? "");
+        if (platform === "youtube") {
+          try {
+            const res = await fetch("/api/google/youtube/publish", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt }),
+            });
+            if (res.ok) {
+              const { videoId } = await res.json() as { videoId: string };
+              updateConfig(config.channelId, { status: "success" });
+              setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishedVideoId: videoId, status: scheduledAt ? "Agendado" : "Publicado" } : p));
+            } else {
+              const data = await res.json() as { error?: string };
+              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar." });
+            }
+          } catch {
+            updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
+          }
+        } else {
+          updateConfig(config.channelId, { status: "unsupported" });
+        }
+      })
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm font-bold text-slate-500">{post.title}</p>
+
+      {/* Arte a publicar */}
+      {approvedAssets.length > 0 && (
+        <section>
+          <p className="mb-2 text-xs font-black uppercase text-slate-500">Arte a publicar</p>
+          {approvedAssets.length === 1 ? (
+            <div className="rounded-2xl border border-slate-200 bg-white p-3">
+              <p className="text-sm font-black text-slate-900">{approvedAssets[0].name}</p>
+            </div>
+          ) : (
+            <select value={selectedAssetId} onChange={(e) => setSelectedAssetId(e.target.value)} className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500">
+              {approvedAssets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          )}
+        </section>
+      )}
+
+      {/* Agendamento */}
+      <section className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
+        <p className="mb-3 text-xs font-black uppercase text-slate-500">Agendamento</p>
+        <div className="mb-3 flex gap-4">
+          {(["scheduled", "now"] as const).map((mode) => (
+            <label key={mode} className="flex cursor-pointer items-center gap-2">
+              <input type="radio" name="publishMode" checked={publishMode === mode} onChange={() => setPublishMode(mode)} className="accent-blue-700" />
+              <span className="text-sm font-black">{mode === "scheduled" ? "Agendar" : "Publicar agora"}</span>
+            </label>
+          ))}
+        </div>
+        {publishMode === "scheduled" && (
+          <div className="flex gap-3">
+            <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
+            <input type="time" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
+          </div>
+        )}
+      </section>
+
+      {/* Seleção de canais */}
+      <section>
+        <p className="mb-3 text-xs font-black uppercase text-slate-500">Canais para publicar</p>
+        <div className="flex flex-wrap gap-2">
+          {channelConfigs.map((config) => {
+            const ch = channelById.get(config.channelId);
+            return (
+              <label key={config.channelId} className={`flex cursor-pointer items-center gap-2 rounded-2xl border px-3 py-2 transition ${config.enabled ? "border-blue-200 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-400"}`}>
+                <input type="checkbox" checked={config.enabled} onChange={(e) => updateConfig(config.channelId, { enabled: e.target.checked })} className="accent-blue-700" />
+                <span className="text-sm font-black">{ch?.name ?? config.channelId}</span>
+              </label>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Cards por canal */}
+      <div className="space-y-3">
+        {channelConfigs.filter((c) => c.enabled).map((config) => {
+          const ch = channelById.get(config.channelId);
+          const name = ch?.name ?? "";
+          const platform = publishPlatformKey(name);
+          const formats = formatsByPlatform[platform] ?? ["Post"];
+          const isYoutube = platform === "youtube";
+          const supported = platform === "youtube";
+          return (
+            <div key={config.channelId} className={`rounded-3xl border p-4 ${config.status === "success" ? "border-emerald-200 bg-emerald-50" : config.status === "error" ? "border-rose-200 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <p className="font-black">{name}</p>
+                <div className="flex items-center gap-2">
+                  {config.status === "success"    && <span className="text-xs font-black text-emerald-700">✓ Publicado</span>}
+                  {config.status === "error"      && <span className="text-xs font-black text-rose-700">✕ Erro</span>}
+                  {config.status === "publishing" && <span className="text-xs font-black text-blue-700">Publicando…</span>}
+                  {supported
+                    ? <span className="rounded-xl bg-emerald-100 px-2 py-0.5 text-xs font-black text-emerald-700">✓ API conectada</span>
+                    : <span className="rounded-xl bg-slate-200 px-2 py-0.5 text-xs font-black text-slate-500">Em breve</span>
+                  }
+                </div>
+              </div>
+              {/* Formato */}
+              <div className="mb-3">
+                <p className="mb-1 text-xs font-black text-slate-500">Formato</p>
+                <div className="flex flex-wrap gap-3">
+                  {formats.map((fmt) => (
+                    <label key={fmt} className="flex cursor-pointer items-center gap-1.5">
+                      <input type="radio" name={`format-${config.channelId}`} checked={config.format === fmt} onChange={() => updateConfig(config.channelId, { format: fmt })} className="accent-blue-700" />
+                      <span className="text-sm font-black">{fmt}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              {/* Título (YouTube only) */}
+              {isYoutube && (
+                <div className="mb-3">
+                  <p className="mb-1 text-xs font-black text-slate-500">Título</p>
+                  <input value={config.title} onChange={(e) => updateConfig(config.channelId, { title: e.target.value })} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
+                </div>
+              )}
+              {/* Descrição / Legenda */}
+              <div>
+                <p className="mb-1 text-xs font-black text-slate-500">{isYoutube ? "Descrição" : "Legenda"}</p>
+                <textarea value={config.description} onChange={(e) => updateConfig(config.channelId, { description: e.target.value })} rows={4} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500" />
+              </div>
+              {config.status === "error" && config.errorMessage && (
+                <p className="mt-2 text-xs font-black text-rose-700">{config.errorMessage}</p>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Botão de ação */}
+      {!isDone ? (
+        <button type="button" disabled={enabledCount === 0 || isPublishing || !selectedAsset} onClick={handlePublish} className="w-full rounded-3xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">
+          {isPublishing
+            ? "Publicando…"
+            : publishMode === "now"
+              ? `Publicar agora em ${enabledCount} canal${enabledCount !== 1 ? "is" : ""}`
+              : `Agendar em ${enabledCount} canal${enabledCount !== 1 ? "is" : ""}`
+          }
+        </button>
+      ) : (
+        <button type="button" onClick={close} className="w-full rounded-3xl bg-emerald-600 px-4 py-3 font-black text-white transition hover:bg-emerald-700">
+          Concluído ✓
+        </button>
+      )}
+    </div>
   );
 }
 
