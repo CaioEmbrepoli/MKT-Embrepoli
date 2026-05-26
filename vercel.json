@@ -11,6 +11,10 @@
     {
       "path": "/api/knowledge-chat/cleanup",
       "schedule": "15 3 * * *"
+    },
+    {
+      "path": "/api/data-retention/cleanup",
+      "schedule": "30 3 * * *"
     }
   ]
 }

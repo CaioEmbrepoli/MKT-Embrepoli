@@ -1223,6 +1223,7 @@ create table if not exists public.comments (
   organization_id text not null references public.organizations(id) on delete cascade,
   source text not null default 'youtube',
   external_id text,
+  import_signature text,
   video_id text,
   video_title text,
   author_name text,
@@ -1233,17 +1234,40 @@ create table if not exists public.comments (
   added_to_bank boolean not null default false,
   bank_question_id text references public.customer_questions(id) on delete set null,
   published_at timestamptz,
+  retention_until timestamptz,
+  processed_at timestamptz,
+  is_relevant boolean,
+  classification_status text,
+  classification_reason text,
   created_at timestamptz not null default now(),
   unique (organization_id, external_id)
 );
 
+alter table public.comments add column if not exists import_signature text;
 alter table public.comments add column if not exists bank_question_id text references public.customer_questions(id) on delete set null;
+alter table public.comments add column if not exists retention_until timestamptz;
+alter table public.comments add column if not exists processed_at timestamptz;
+alter table public.comments add column if not exists is_relevant boolean;
+alter table public.comments add column if not exists classification_status text;
+alter table public.comments add column if not exists classification_reason text;
 alter table public.comments drop constraint if exists comments_source_check;
 alter table public.comments add constraint comments_source_check check (source in ('youtube', 'instagram', 'facebook', 'tiktok'));
 alter table public.comments drop constraint if exists comments_status_check;
 alter table public.comments add constraint comments_status_check check (status in ('novo', 'respondido', 'ignorado'));
+alter table public.comments drop constraint if exists comments_classification_status_check;
+alter table public.comments add constraint comments_classification_status_check check (classification_status is null or classification_status in ('pendente', 'relevante', 'normal', 'erro'));
+update public.comments
+set retention_until = coalesce(retention_until, created_at + interval '90 days')
+where retention_until is null;
 create index if not exists idx_comments_org on public.comments(organization_id);
 create index if not exists idx_comments_bank on public.comments(organization_id, added_to_bank);
+create index if not exists idx_comments_retention on public.comments(organization_id, retention_until) where retention_until is not null;
+create unique index if not exists idx_comments_org_source_external_unique
+on public.comments(organization_id, source, external_id)
+where external_id is not null;
+create unique index if not exists idx_comments_org_signature_unique
+on public.comments(organization_id, import_signature)
+where import_signature is not null;
 
 create table if not exists public.auto_filters (
   id text primary key default gen_random_uuid()::text,

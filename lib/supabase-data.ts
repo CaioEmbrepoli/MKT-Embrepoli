@@ -1145,6 +1145,7 @@ function mapYtComment(row: any): Comment {
     id: row.id,
     source: row.source ?? "youtube",
     externalId: row.external_id ?? undefined,
+    importSignature: row.import_signature ?? undefined,
     videoId: row.video_id ?? undefined,
     videoTitle: row.video_title ?? undefined,
     authorName: row.author_name ?? "",
@@ -1155,28 +1156,88 @@ function mapYtComment(row: any): Comment {
     addedToBank: row.added_to_bank ?? false,
     bankQuestionId: row.bank_question_id ?? undefined,
     publishedAt: row.published_at ?? undefined,
+    retentionUntil: row.retention_until ?? undefined,
+    processedAt: row.processed_at ?? undefined,
+    isRelevant: row.is_relevant ?? undefined,
+    classificationStatus: row.classification_status ?? undefined,
+    classificationReason: row.classification_reason ?? undefined,
     createdAt: row.created_at ?? new Date().toISOString()
+  };
+}
+
+function normalizeCommentText(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function commentImportSignature(comment: Pick<Comment, "source" | "videoId" | "authorName" | "text" | "publishedAt">) {
+  return [
+    comment.source,
+    comment.videoId ?? "",
+    normalizeCommentText(comment.authorName ?? ""),
+    normalizeCommentText(comment.text ?? ""),
+    comment.publishedAt ?? ""
+  ].join("|");
+}
+
+function addDaysIso(dateLike: string | undefined, days: number) {
+  const base = dateLike ? new Date(dateLike) : new Date();
+  if (Number.isNaN(base.getTime())) base.setTime(Date.now());
+  base.setDate(base.getDate() + days);
+  return base.toISOString();
+}
+
+function preserveCommentStatus(existing: any | undefined, incoming: Comment) {
+  if (!existing?.status) return incoming.status;
+  if (existing.status === "respondido" && incoming.status !== "respondido") return existing.status;
+  if (existing.status === "ignorado" && incoming.status === "novo") return existing.status;
+  return incoming.status;
+}
+
+function preserveCommentClassification(existing: any | undefined, incoming: Comment) {
+  const current = existing?.classification_status;
+  if (current && current !== "pendente") return current;
+  return incoming.classificationStatus ?? current ?? null;
+}
+
+function mapCommentForUpsert(comment: Comment, organizationId: string, existing?: any) {
+  const createdAt = existing?.created_at ?? comment.createdAt ?? new Date().toISOString();
+  const addedToBank = Boolean(existing?.added_to_bank || comment.addedToBank);
+  const bankQuestionId = existing?.bank_question_id ?? comment.bankQuestionId ?? null;
+  const classificationStatus = preserveCommentClassification(existing, comment);
+  const isRelevant = existing?.is_relevant ?? comment.isRelevant ?? addedToBank;
+  return {
+    id: existing?.id ?? comment.id,
+    organization_id: organizationId,
+    source: comment.source,
+    external_id: comment.externalId ?? null,
+    import_signature: comment.importSignature ?? commentImportSignature(comment),
+    video_id: comment.videoId ?? null,
+    video_title: comment.videoTitle ?? existing?.video_title ?? null,
+    author_name: comment.authorName,
+    text: comment.text,
+    likes: comment.likes,
+    response: comment.response ?? existing?.response ?? null,
+    status: preserveCommentStatus(existing, comment),
+    added_to_bank: addedToBank,
+    bank_question_id: bankQuestionId,
+    published_at: comment.publishedAt ?? null,
+    retention_until: existing?.retention_until ?? comment.retentionUntil ?? addDaysIso(createdAt, 90),
+    processed_at: existing?.processed_at ?? comment.processedAt ?? null,
+    is_relevant: isRelevant,
+    classification_status: classificationStatus,
+    classification_reason: existing?.classification_reason ?? comment.classificationReason ?? null,
+    created_at: createdAt
   };
 }
 
 export async function saveComment(client: SupabaseClient, comment: Comment) {
   const organizationId = await currentOrganizationId(client);
-  const { error } = await client.from("comments").upsert({
-    id: comment.id,
-    organization_id: organizationId,
-    source: comment.source,
-    external_id: comment.externalId ?? null,
-    video_id: comment.videoId ?? null,
-    video_title: comment.videoTitle ?? null,
-    author_name: comment.authorName,
-    text: comment.text,
-    likes: comment.likes,
-    response: comment.response ?? null,
-    status: comment.status,
-    added_to_bank: comment.addedToBank,
-    bank_question_id: comment.bankQuestionId ?? null,
-    published_at: comment.publishedAt ?? null
-  });
+  const { data: existing } = await client
+    .from("comments")
+    .select("*")
+    .eq("id", comment.id)
+    .maybeSingle();
+  const { error } = await client.from("comments").upsert(mapCommentForUpsert(comment, organizationId, existing));
   if (error) throw new Error(`comments upsert: ${error.message}`);
 }
 
@@ -1188,25 +1249,45 @@ export async function deleteComment(client: SupabaseClient, id: string) {
 export async function insertComments(client: SupabaseClient, items: Comment[]) {
   if (!items.length) return;
   const organizationId = await currentOrganizationId(client);
-  const rows = items.map((c) => ({
-    id: c.id,
-    organization_id: organizationId,
-    source: c.source,
-    external_id: c.externalId ?? null,
-    video_id: c.videoId ?? null,
-    video_title: c.videoTitle ?? null,
-    author_name: c.authorName,
-    text: c.text,
-    likes: c.likes,
-    response: c.response ?? null,
-    status: c.status,
-    added_to_bank: c.addedToBank,
-    bank_question_id: c.bankQuestionId ?? null,
-    published_at: c.publishedAt ?? null
+  const normalized = items.map((comment) => ({
+    ...comment,
+    importSignature: comment.importSignature ?? commentImportSignature(comment)
   }));
-  const { error } = await client
-    .from("comments")
-    .upsert(rows, { onConflict: "organization_id,external_id", ignoreDuplicates: true });
+
+  const externalIds = Array.from(new Set(normalized.map((c) => c.externalId).filter((id): id is string => Boolean(id))));
+  const signatures = Array.from(new Set(normalized.map((c) => c.importSignature).filter((id): id is string => Boolean(id))));
+  const existingRows: any[] = [];
+
+  if (externalIds.length) {
+    const { data, error } = await client
+      .from("comments")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .in("external_id", externalIds);
+    if (error) throw new Error(`comments existing by external_id: ${error.message}`);
+    existingRows.push(...(data ?? []));
+  }
+
+  if (signatures.length) {
+    const { data, error } = await client
+      .from("comments")
+      .select("*")
+      .eq("organization_id", organizationId)
+      .in("import_signature", signatures);
+    if (error) throw new Error(`comments existing by signature: ${error.message}`);
+    existingRows.push(...(data ?? []));
+  }
+
+  const existingByExternal = new Map(existingRows.filter((row) => row.external_id).map((row) => [`${row.source}:${row.external_id}`, row]));
+  const existingBySignature = new Map(existingRows.filter((row) => row.import_signature).map((row) => [`${row.source}:${row.import_signature}`, row]));
+  const rows = normalized.map((comment) => {
+    const existing =
+      (comment.externalId ? existingByExternal.get(`${comment.source}:${comment.externalId}`) : undefined) ??
+      (comment.importSignature ? existingBySignature.get(`${comment.source}:${comment.importSignature}`) : undefined);
+    return mapCommentForUpsert(comment, organizationId, existing);
+  });
+
+  const { error } = await client.from("comments").upsert(rows);
   if (error) throw new Error(`comments insert: ${error.message}`);
 }
 
