@@ -1265,20 +1265,20 @@ alter table public.auto_filters enable row level security;
 drop policy if exists "org members can manage questions" on public.customer_questions;
 create policy "org members can manage questions"
 on public.customer_questions for all
-using (organization_id = public.current_organization_id())
-with check (organization_id = public.current_organization_id());
+using (organization_id::text = public.current_organization_id())
+with check (organization_id::text = public.current_organization_id());
 
 drop policy if exists "org members can manage comments" on public.comments;
 create policy "org members can manage comments"
 on public.comments for all
-using (organization_id = public.current_organization_id())
-with check (organization_id = public.current_organization_id());
+using (organization_id::text = public.current_organization_id())
+with check (organization_id::text = public.current_organization_id());
 
 drop policy if exists "org members can manage auto filters" on public.auto_filters;
 create policy "org members can manage auto filters"
 on public.auto_filters for all
-using (organization_id = public.current_organization_id())
-with check (organization_id = public.current_organization_id());
+using (organization_id::text = public.current_organization_id())
+with check (organization_id::text = public.current_organization_id());
 
 create table if not exists public.knowledge_chat_sessions (
   id text primary key default gen_random_uuid()::text,

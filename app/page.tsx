@@ -1991,34 +1991,49 @@ export default function Home() {
     }
   }
 
-  function addPostReviewExternalAsset(post: EditorialPost, url: string, previewUrlOverride?: string) {
+  function addPostReviewExternalAsset(post: EditorialPost, url: string, previewUrlOverride?: string, mimeType?: string, isCover?: boolean) {
     const isYoutube = Boolean(youtubePreviewUrl(url));
     const previewUrl = previewUrlOverride ?? drivePreviewUrl(url);
     if (!previewUrl) {
       window.alert("Link inválido. Use um link de compartilhamento do Google Drive ou YouTube.");
       return;
     }
+    let type: "arquivo" | "foto" | "video";
+    if (isYoutube) {
+      type = "video";
+    } else if (mimeType) {
+      type = mimeType.startsWith("video/") ? "video" : mimeType.startsWith("image/") ? "foto" : "arquivo";
+    } else {
+      type = "arquivo";
+    }
+    const name = isYoutube ? "Vídeo do YouTube"
+      : type === "video" ? "Vídeo do Drive"
+      : type === "foto" ? "Imagem do Drive"
+      : "Arquivo do Drive";
     const asset: PostReviewAsset = {
       id: crypto.randomUUID(),
       postId: post.id,
-      name: isYoutube ? "Vídeo do YouTube" : "Arquivo do Google Drive",
-      type: isYoutube ? "video" : "arquivo",
+      name,
+      type,
       source: "external",
       url,
       previewUrl,
       originalSize: 0,
       compressedSize: 0,
-      mimeType: "text/html",
+      mimeType: mimeType ?? "text/html",
       status: "Aguardando revisão",
       uploadedBy: currentUser.id,
       reviewedBy: "",
       uploadedAt: new Date().toISOString(),
       reviewedAt: "",
-      comments: []
+      comments: [],
+      isCover: isCover ?? false,
     };
     syncPostReviewAssets((current) => [asset, ...current]);
-    syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
-    createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", asset.id);
+    if (!isCover) {
+      syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
+      createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", asset.id);
+    }
   }
 
   function updatePostReviewAsset(assetId: string, updater: (asset: PostReviewAsset) => PostReviewAsset) {
@@ -8481,7 +8496,7 @@ function EntityModal(props: {
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   postReviewAssets: PostReviewAsset[];
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
-  addPostReviewExternalAsset: (post: EditorialPost, url: string, thumbnailUrl?: string) => void;
+  addPostReviewExternalAsset: (post: EditorialPost, url: string, previewUrl?: string, mimeType?: string, isCover?: boolean) => void;
   deletePostReviewAsset: (assetId: string) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
@@ -8542,7 +8557,7 @@ function EntityModal(props: {
         {modal.kind === "publish" && (() => {
           const publishPost = props.posts.find((p) => p.id === modal.postId);
           if (!publishPost) return null;
-          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} setPosts={props.setPosts} close={close} />;
+          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
         })()}
     </CenteredModal>
   );
@@ -9797,8 +9812,6 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
       : defaultPostFormatForChannel(selectedChannel);
   const [reviewOpen, setReviewOpen] = useState(false);
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
-  const [selectedAssetId, setSelectedAssetId] = useState("");
-  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0];
   const canReview = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
   const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão").length;
   const approvedCount = assets.filter((asset) => asset.status === "Aprovado").length;
@@ -9909,15 +9922,17 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
     <div className={`grid gap-5 ${reviewOpen && editing ? "xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}>
       <div>
         <EntityForm onSubmit={submit} formRef={formRef}>
-          <div className="flex gap-2 rounded-2xl bg-slate-100 p-1 md:col-span-2">
-            {(["zero", "idea", "template"] as const).map((mode) => (
-              <button key={mode} type="button" onClick={() => changeCreationMode(mode)} className={`flex-1 rounded-xl px-3 py-2 text-sm font-black ${creationMode === mode ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"}`}>
-                {mode === "zero" ? "Criar do zero" : mode === "idea" ? "Usar ideia" : "Usar modelo"}
-              </button>
-            ))}
-          </div>
-          {creationMode === "idea" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Ideia de origem<select name="ideaId" value={selectedIdeaId} onChange={(event) => applyIdea(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem ideia vinculada</option>{postIdeas.map((idea) => <option key={idea.id} value={idea.id}>{idea.title}</option>)}</select></label> : <input type="hidden" name="ideaId" value={selectedIdeaId} />}
-          {creationMode === "template" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Usar modelo<select name="templateId" value={selectedTemplateId} onChange={(event) => applyTemplate(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem modelo</option>{postTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label> : <input type="hidden" name="templateId" value={selectedTemplateId} />}
+          {!editing && (
+            <div className="flex gap-2 rounded-2xl bg-slate-100 p-1 md:col-span-2">
+              {(["zero", "idea", "template"] as const).map((mode) => (
+                <button key={mode} type="button" onClick={() => changeCreationMode(mode)} className={`flex-1 rounded-xl px-3 py-2 text-sm font-black ${creationMode === mode ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"}`}>
+                  {mode === "zero" ? "Criar do zero" : mode === "idea" ? "Usar ideia" : "Usar modelo"}
+                </button>
+              ))}
+            </div>
+          )}
+          {!editing && creationMode === "idea" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Ideia de origem<select name="ideaId" value={selectedIdeaId} onChange={(event) => applyIdea(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem ideia vinculada</option>{postIdeas.map((idea) => <option key={idea.id} value={idea.id}>{idea.title}</option>)}</select></label> : <input type="hidden" name="ideaId" value={selectedIdeaId} />}
+          {!editing && creationMode === "template" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Usar modelo<select name="templateId" value={selectedTemplateId} onChange={(event) => applyTemplate(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem modelo</option>{postTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label> : <input type="hidden" name="templateId" value={selectedTemplateId} />}
           <TextInput name="title" label="Título" required defaultValue={editing?.title ?? ideaPrefill?.title} />
           <div className="md:col-span-2">
             <label className="mb-2 block text-sm font-bold text-slate-600">Canais</label>
@@ -10017,8 +10032,6 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
         <PostReviewPanel
           post={editing}
           assets={assets}
-          selectedAsset={selectedAsset}
-          setSelectedAssetId={setSelectedAssetId}
           profileById={profileById}
           canReview={canReview}
           addPostReviewAssets={addPostReviewAssets}
@@ -10027,7 +10040,6 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
           openMediaPreview={openMediaPreview}
           setReviewAssetStatus={setReviewAssetStatus}
           addReviewComment={addReviewComment}
-          onPublish={() => setModal({ kind: "publish", postId: editing.id })}
           close={() => setReviewOpen(false)}
         />
       )}
@@ -10038,8 +10050,6 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
 function PostReviewPanel({
   post,
   assets,
-  selectedAsset,
-  setSelectedAssetId,
   profileById,
   canReview,
   addPostReviewAssets,
@@ -10048,71 +10058,83 @@ function PostReviewPanel({
   openMediaPreview,
   setReviewAssetStatus,
   addReviewComment,
-  onPublish,
   close
 }: {
   post: EditorialPost;
   assets: PostReviewAsset[];
-  selectedAsset?: PostReviewAsset;
-  setSelectedAssetId: (id: string) => void;
   profileById: Map<string, Profile>;
   canReview: boolean;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
-  addPostReviewExternalAsset: (post: EditorialPost, url: string, thumbnailUrl?: string) => void;
+  addPostReviewExternalAsset: (post: EditorialPost, url: string, previewUrl?: string, mimeType?: string, isCover?: boolean) => void;
   deletePostReviewAsset: (assetId: string) => void;
   openMediaPreview: (item: MediaPreviewItem) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
-  onPublish?: () => void;
   close: () => void;
 }) {
-  const approvedCount = assets.filter((a) => a.status === "Aprovado" && !a.isCover).length;
   const mainAsset = assets.find((a) => !a.isCover);
   const coverAsset = assets.find((a) => a.isCover);
   const canUploadMain = !mainAsset;
   const canUploadCover = mainAsset?.type === "video" && !coverAsset;
-  const [adjustmentMessage, setAdjustmentMessage] = useState("");
-  const [showAdjustInput, setShowAdjustInput] = useState(false);
-  const [comment, setComment] = useState("");
-  const [externalUrl, setExternalUrl] = useState("");
-  const [ytOpen, setYtOpen] = useState(false);
-  const [driveOpen, setDriveOpen] = useState(false);
 
-  function submitComment(event: FormEvent<HTMLFormElement>) {
+  // Per-asset state maps
+  const [adjustmentMessages, setAdjustmentMessages] = useState<Record<string, string>>({});
+  const [showAdjustInputs, setShowAdjustInputs] = useState<Record<string, boolean>>({});
+  const [comments, setComments] = useState<Record<string, string>>({});
+
+  const [externalUrl, setExternalUrl] = useState("");
+  const [driveOpen, setDriveOpen] = useState(false);
+  const [replaceTarget, setReplaceTarget] = useState<PostReviewAsset | null>(null);
+
+  function submitComment(assetId: string, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedAsset) return;
-    addReviewComment(selectedAsset.id, comment);
-    setComment("");
+    const msg = comments[assetId] ?? "";
+    if (!msg.trim()) return;
+    addReviewComment(assetId, msg.trim());
+    setComments((prev) => ({ ...prev, [assetId]: "" }));
   }
 
-  function requestAdjustments() {
-    if (!selectedAsset || !adjustmentMessage.trim()) return;
-    setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
-    setAdjustmentMessage("");
-    setShowAdjustInput(false);
+  function requestAdjustments(assetId: string) {
+    const msg = adjustmentMessages[assetId] ?? "";
+    if (!msg.trim()) return;
+    setReviewAssetStatus(assetId, "Ajustes solicitados", msg.trim());
+    setAdjustmentMessages((prev) => ({ ...prev, [assetId]: "" }));
+    setShowAdjustInputs((prev) => ({ ...prev, [assetId]: false }));
   }
 
   function submitExternalAsset(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    addPostReviewExternalAsset(post, externalUrl);
+    const addingCover = Boolean(mainAsset) && mainAsset?.type === "video" && !coverAsset;
+    addPostReviewExternalAsset(post, externalUrl, undefined, undefined, addingCover);
     setExternalUrl("");
   }
 
   function addDriveFileToReview(file: DriveFile) {
-    addPostReviewExternalAsset(post, file.url, file.previewUrl);
+    if (replaceTarget) {
+      const isVideo = replaceTarget.type === "video";
+      const isCoverReplace = replaceTarget.isCover ?? false;
+      const typeOk = isVideo ? file.mimeType.startsWith("video/") : file.mimeType.startsWith("image/");
+      if (!typeOk) {
+        window.alert(isVideo
+          ? "Para trocar um vídeo, selecione outro vídeo do Drive."
+          : "Para trocar a capa, selecione uma imagem do Drive.");
+        setReplaceTarget(null);
+        return;
+      }
+      deletePostReviewAsset(replaceTarget.id);
+      addPostReviewExternalAsset(post, file.url, file.previewUrl, file.mimeType, isCoverReplace);
+      setReplaceTarget(null);
+      return;
+    }
+    const addingCover = Boolean(mainAsset) && mainAsset?.type === "video" && !coverAsset;
+    if (addingCover && !file.mimeType.startsWith("image/")) {
+      window.alert("Para a capa, envie apenas imagens (JPG, PNG, etc.).");
+      return;
+    }
+    addPostReviewExternalAsset(post, file.url, file.previewUrl, file.mimeType, addingCover);
   }
 
-  function addYouTubeToReview(video: YouTubeVideo) {
-    addPostReviewExternalAsset(post, video.url);
-  }
-
-  function removeSelectedAsset() {
-    if (!selectedAsset) return;
-    if (!window.confirm("Excluir este arquivo de revisão?")) return;
-    deletePostReviewAsset(selectedAsset.id);
-    const nextAsset = assets.find((asset) => asset.id !== selectedAsset.id);
-    setSelectedAssetId(nextAsset?.id ?? "");
-  }
+  const driveButtonLabel = canUploadCover ? "Selecionar capa do Drive" : "Selecionar do Drive";
 
   return (
     <aside className="rounded-[28px] border border-slate-200 bg-slate-50 p-4">
@@ -10123,13 +10145,6 @@ function PostReviewPanel({
         </div>
         <button type="button" onClick={close} className="rounded-2xl bg-white p-2"><X size={18} /></button>
       </div>
-
-      {approvedCount > 0 && onPublish && (
-        <button type="button" onClick={onPublish} className="mb-4 flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800">
-          <span>Publicar / Agendar</span>
-          <Badge tone="blue">{approvedCount} aprovada{approvedCount !== 1 ? "s" : ""}</Badge>
-        </button>
-      )}
 
       {canUploadMain && (
         <FileDropZone
@@ -10150,84 +10165,102 @@ function PostReviewPanel({
           onFiles={(files) => addPostReviewAssets(post, files, true)}
         />
       )}
-      <div className="mb-3 flex flex-wrap gap-2">
-        <button type="button" onClick={() => setDriveOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
-          <HardDrive size={15} /> Selecionar do Drive
-        </button>
-        <button type="button" onClick={() => setYtOpen(true)} className="flex items-center gap-2 rounded-2xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100">
-          <Youtube size={15} /> Buscar no YouTube
-        </button>
-      </div>
-      <form onSubmit={submitExternalAsset} className="mb-4 flex gap-2">
-        <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Ou cole um link do Google Drive / YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-        <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar</button>
-      </form>
-      {driveOpen && <DriveExplorerModal onSelect={addDriveFileToReview} onClose={() => setDriveOpen(false)} />}
-      {ytOpen && <YouTubeSearchModal onSelect={addYouTubeToReview} onClose={() => setYtOpen(false)} />}
 
-      {assets.length > 0 && (
-        <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-          {assets.map((asset) => (
-            <button key={asset.id} type="button" onClick={() => setSelectedAssetId(asset.id)} className={`shrink-0 rounded-2xl border px-3 py-2 text-xs font-black ${selectedAsset?.id === asset.id ? "border-blue-600 bg-blue-700 text-white" : "border-slate-200 bg-white text-slate-600"}`}>
-              {asset.name}{asset.isCover && " (capa)"}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {selectedAsset ? (
-        <div className="space-y-4">
-          <div className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
-            <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full">
-              <MediaPreviewContent item={selectedAsset} />
+      {(canUploadMain || canUploadCover) && (
+        <>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button type="button" onClick={() => setDriveOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
+              <HardDrive size={15} /> {driveButtonLabel}
             </button>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={selectedAsset.status === "Aprovado" ? "green" : selectedAsset.status === "Ajustes solicitados" ? "red" : "blue"}>{selectedAsset.status}</Badge>
-            <Badge tone="slate">{selectedAsset.source === "external" ? externalMediaLabel(selectedAsset) : formatBytes(selectedAsset.compressedSize || selectedAsset.originalSize)}</Badge>
-            <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name}</span>
-            <div className="ml-auto flex items-center gap-1">
-              <FileActionButtons item={selectedAsset} />
-              <button type="button" onClick={removeSelectedAsset} className="rounded-2xl bg-rose-100 px-3 py-1.5 text-xs font-black text-rose-700 transition hover:bg-rose-200">
-                Excluir arquivo
-              </button>
-            </div>
-          </div>
-          {canReview && !selectedAsset.isCover && (
-            <div className="rounded-3xl bg-white p-3">
-              {selectedAsset.status === "Aprovado" ? (
-                showAdjustInput ? (
-                  <>
-                    <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="O que precisa ajustar?" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-                    <div className="mt-2 flex gap-2">
-                      <button type="button" onClick={() => { setShowAdjustInput(false); setAdjustmentMessage(""); }} className="flex-1 rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">Cancelar</button>
-                      <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="flex-1 rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Enviar</button>
-                    </div>
-                  </>
-                ) : (
-                  <button type="button" onClick={() => setShowAdjustInput(true)} className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-100">Solicitar ajuste</button>
-                )
-              ) : (
-                <div className="space-y-2">
-                  <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="w-full rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white">Aprovar arte</button>
-                  <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="O que precisa ajustar?" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-                  <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="w-full rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
-                </div>
-              )}
-            </div>
-          )}
-          <form onSubmit={submitComment} className="flex gap-2">
-            <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário sobre esta arte" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-            <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-3 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
+          <form onSubmit={submitExternalAsset} className="mb-4 flex gap-2">
+            <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Ou cole um link do Google Drive" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+            <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar</button>
           </form>
-          <div className="space-y-2">
-            {selectedAsset.comments.map((item) => (
-              <div key={item.id} className="rounded-2xl bg-white p-3">
-                <p className="text-sm font-black">{profileById.get(item.authorId)?.name}</p>
-                <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+        </>
+      )}
+      {driveOpen && <DriveExplorerModal onSelect={addDriveFileToReview} onClose={() => { setDriveOpen(false); setReplaceTarget(null); }} />}
+
+      {assets.length > 0 ? (
+        <div className="space-y-3">
+          {assets.map((asset) => {
+            const adjMsg = adjustmentMessages[asset.id] ?? "";
+            const showAdj = showAdjustInputs[asset.id] ?? false;
+            const commentText = comments[asset.id] ?? "";
+            return (
+              <div key={asset.id} className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
+                <button type="button" onClick={() => openMediaPreview(asset)} className="block w-full">
+                  <MediaPreviewContent item={asset} />
+                </button>
+                <div className="space-y-3 p-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {asset.isCover
+                      ? <Badge tone="slate">Capa / Thumbnail</Badge>
+                      : <Badge tone={asset.status === "Aprovado" ? "green" : asset.status === "Ajustes solicitados" ? "red" : "blue"}>{asset.status}</Badge>
+                    }
+                    <Badge tone="slate">{asset.source === "external" ? externalMediaLabel(asset) : formatBytes(asset.compressedSize || asset.originalSize)}</Badge>
+                    <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(asset.uploadedBy)?.name}</span>
+                    <div className="ml-auto flex items-center gap-1">
+                      <FileActionButtons item={asset} />
+                      <button type="button"
+                        onClick={() => { setReplaceTarget(asset); setDriveOpen(true); }}
+                        className="rounded-2xl bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-200">
+                        Trocar
+                      </button>
+                      <button type="button"
+                        onClick={() => { if (window.confirm("Excluir este arquivo de revisão?")) deletePostReviewAsset(asset.id); }}
+                        className="rounded-2xl bg-rose-100 px-3 py-1.5 text-xs font-black text-rose-700 hover:bg-rose-200">
+                        Excluir
+                      </button>
+                    </div>
+                  </div>
+
+                  {canReview && !asset.isCover && (
+                    <div className="rounded-2xl bg-slate-50 p-3">
+                      {asset.status === "Aprovado" ? (
+                        showAdj ? (
+                          <>
+                            <textarea value={adjMsg} onChange={(e) => setAdjustmentMessages((prev) => ({ ...prev, [asset.id]: e.target.value }))} placeholder="O que precisa ajustar?" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                            <div className="mt-2 flex gap-2">
+                              <button type="button" onClick={() => { setShowAdjustInputs((prev) => ({ ...prev, [asset.id]: false })); setAdjustmentMessages((prev) => ({ ...prev, [asset.id]: "" })); }} className="flex-1 rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">Cancelar</button>
+                              <button type="button" onClick={() => requestAdjustments(asset.id)} disabled={!adjMsg.trim()} className="flex-1 rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Enviar</button>
+                            </div>
+                          </>
+                        ) : (
+                          <button type="button" onClick={() => setShowAdjustInputs((prev) => ({ ...prev, [asset.id]: true }))} className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-100">Solicitar ajuste</button>
+                        )
+                      ) : (
+                        <div className="space-y-2">
+                          <button type="button" onClick={() => setReviewAssetStatus(asset.id, "Aprovado")} className="w-full rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white">Aprovar arte</button>
+                          <textarea value={adjMsg} onChange={(e) => setAdjustmentMessages((prev) => ({ ...prev, [asset.id]: e.target.value }))} placeholder="O que precisa ajustar?" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                          <button type="button" onClick={() => requestAdjustments(asset.id)} disabled={!adjMsg.trim()} className="w-full rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {!asset.isCover && (
+                    <>
+                      <form onSubmit={(e) => submitComment(asset.id, e)} className="flex gap-2">
+                        <input value={commentText} onChange={(event) => setComments((prev) => ({ ...prev, [asset.id]: event.target.value }))} placeholder="Comentário sobre esta arte" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                        <button disabled={!commentText.trim()} className="rounded-2xl bg-blue-700 px-3 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
+                      </form>
+                      {asset.comments.length > 0 && (
+                        <div className="space-y-2">
+                          {asset.comments.map((item) => (
+                            <div key={item.id} className="rounded-2xl bg-slate-50 p-3">
+                              <p className="text-sm font-black">{profileById.get(item.authorId)?.name}</p>
+                              <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
-            ))}
-          </div>
+            );
+          })}
         </div>
       ) : (
         <p className="rounded-3xl bg-white p-5 text-sm font-bold text-slate-500">Adicione uma arte para iniciar a revisão.</p>
@@ -10273,12 +10306,14 @@ function PublishModal({
   postReviewAssets,
   channels,
   setPosts,
+  addPostReviewAssets,
   close,
 }: {
   post: EditorialPost;
   postReviewAssets: PostReviewAsset[];
   channels: Channel[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
   close: () => void;
 }) {
   const channelById = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
@@ -10305,6 +10340,13 @@ function PublishModal({
 
   const selectedAsset = approvedAssets.find((a) => a.id === selectedAssetId) ?? approvedAssets[0];
 
+  const [localThumbnailUrl, setLocalThumbnailUrl] = useState<string | null>(null);
+  const [localThumbnailPreview, setLocalThumbnailPreview] = useState<string | null>(null);
+  const [thumbDriveOpen, setThumbDriveOpen] = useState(false);
+
+  const effectiveThumbnailUrl = coverAsset?.url ?? localThumbnailUrl ?? null;
+  const effectiveThumbnailPreview = coverAsset?.previewUrl ?? localThumbnailPreview ?? null;
+
   function updateConfig(channelId: string, patch: Partial<ChannelPublishConfig>) {
     setChannelConfigs((prev) => prev.map((c) => c.channelId === channelId ? { ...c, ...patch } : c));
   }
@@ -10329,7 +10371,7 @@ function PublishModal({
             const res = await fetch("/api/google/youtube/publish", {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: coverAsset?.url ?? null }),
+              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: effectiveThumbnailUrl }),
             });
             if (res.ok) {
               const { videoId } = await res.json() as { videoId: string };
@@ -10447,13 +10489,41 @@ function PublishModal({
                 </div>
               )}
               {/* Thumbnail (YouTube only) */}
-              {isYoutube && coverAsset && (
-                <div className="mb-3 flex items-center gap-3 rounded-2xl bg-white p-3">
-                  <img src={coverAsset.previewUrl} className="h-14 w-24 shrink-0 rounded-xl object-cover" alt="thumbnail" />
-                  <div>
-                    <p className="text-sm font-black text-slate-700">Thumbnail detectada</p>
-                    <p className="text-xs text-slate-500">{coverAsset.name}</p>
-                  </div>
+              {isYoutube && (
+                <div className="mb-3">
+                  <p className="mb-1 text-xs font-black text-slate-500">Thumbnail</p>
+                  {effectiveThumbnailPreview ? (
+                    <div className="flex items-center gap-3 rounded-2xl bg-white p-3">
+                      <img src={effectiveThumbnailPreview} className="h-14 w-24 shrink-0 rounded-xl object-cover" alt="thumbnail" />
+                      <div className="flex-1">
+                        <p className="text-sm font-black text-slate-700">{coverAsset ? "Capa da revisão" : "Thumbnail selecionada"}</p>
+                        {!coverAsset && (
+                          <button type="button" onClick={() => { setLocalThumbnailUrl(null); setLocalThumbnailPreview(null); }} className="mt-1 text-xs font-bold text-rose-600 hover:text-rose-800">
+                            Remover
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <FileDropZone
+                        icon="image"
+                        title="Enviar thumbnail"
+                        hint="JPG ou PNG"
+                        accept="image/*"
+                        onFiles={(files) => addPostReviewAssets(post, files, true)}
+                      />
+                      <button type="button" onClick={() => setThumbDriveOpen(true)} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-100">
+                        <HardDrive size={15} /> Escolher do Drive
+                      </button>
+                    </div>
+                  )}
+                  {thumbDriveOpen && (
+                    <DriveExplorerModal
+                      onSelect={(file) => { setLocalThumbnailUrl(file.url); setLocalThumbnailPreview(file.previewUrl); setThumbDriveOpen(false); }}
+                      onClose={() => setThumbDriveOpen(false)}
+                    />
+                  )}
                 </div>
               )}
               {/* Descrição / Legenda */}
@@ -11159,7 +11229,20 @@ function FileDropZone({
     event.preventDefault();
     event.stopPropagation();
     setDragging(false);
-    const files = filesFromList(event.dataTransfer.files);
+    let files = filesFromList(event.dataTransfer.files);
+    if (accept) {
+      const acceptedTypes = accept.split(",").map((t) => t.trim());
+      files = files.filter((f) =>
+        acceptedTypes.some((t) => {
+          if (t.endsWith("/*")) return f.type.startsWith(t.replace("/*", "/"));
+          return f.type === t || f.name.toLowerCase().endsWith(t.replace(/^\*?\./, ""));
+        })
+      );
+      if (!files.length) {
+        window.alert("Tipo de arquivo não permitido. Envie apenas: " + accept);
+        return;
+      }
+    }
     if (!files.length) return;
     onFiles(multiple ? files : files.slice(0, 1));
   }
