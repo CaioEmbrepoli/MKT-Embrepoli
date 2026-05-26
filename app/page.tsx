@@ -826,9 +826,9 @@ function commentImportSignature(comment: Pick<Comment, "source" | "videoId" | "a
   ].join("|");
 }
 
-function commentStableKey(comment: Pick<Comment, "source" | "externalId" | "importSignature" | "videoId" | "authorName" | "text" | "publishedAt">) {
+function commentStableKey(comment: Pick<Comment, "source" | "externalId" | "videoId" | "authorName" | "text" | "publishedAt">) {
   if (comment.externalId) return `${comment.source}:external:${comment.externalId}`;
-  return `${comment.source}:signature:${comment.importSignature ?? commentImportSignature(comment)}`;
+  return `${comment.source}:signature:${commentImportSignature(comment)}`;
 }
 
 function mergeImportedComment(existing: Comment | undefined, incoming: Comment): Comment {
