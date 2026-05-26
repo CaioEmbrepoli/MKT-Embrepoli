@@ -8447,6 +8447,7 @@ function EntityModal(props: {
     <CenteredModal
       close={close}
       panelRef={modalContentRef}
+      closeOnOverlay={modal.kind !== "publish"}
     >
         <div className="mb-5 flex items-start justify-between gap-4 rounded-[26px] bg-gradient-to-r from-blue-50 to-slate-50 px-4 py-3">
           <div>

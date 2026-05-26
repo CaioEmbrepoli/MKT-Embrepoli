@@ -66,14 +66,10 @@ export async function POST(request: Request) {
     }
 
     // ── Metadados do vídeo ───────────────────────────────────────────────────
-    const finalTitle = format === "Shorts" && !title.includes("#Shorts")
-      ? `${title} #Shorts`
-      : title;
-    const finalDescription = format === "Shorts" && !description.includes("#Shorts")
-      ? `${description}\n#Shorts`.trim()
-      : description;
-
-    const snippet = { title: finalTitle, description: finalDescription, categoryId: "22" };
+    // `format` é mantido como metadado interno (ex: "Shorts", "Vídeo") para referência futura,
+    // mas NÃO altera o conteúdo enviado ao YouTube — o próprio YouTube detecta Shorts
+    // automaticamente pela duração (≤60s) e aspect ratio do vídeo.
+    const snippet = { title, description, categoryId: "22" };
     const videoStatus = scheduledAt
       ? { privacyStatus: "private", publishAt: new Date(scheduledAt).toISOString() }
       : { privacyStatus: "public" };
