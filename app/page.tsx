@@ -339,6 +339,14 @@ function goalStatusColors(kind: "atingida" | "quase" | "atrasada" | "progresso")
 const weekDays = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 const priorityToneMap: Record<string, BadgeTone> = { Alta: "red", Média: "amber", Baixa: "blue" };
 const progressToneMap: Record<string, BadgeTone> = { Bloqueada: "red", "No prazo": "blue", Atenção: "amber", Finalizando: "green" };
+const postStatusConfig: Record<string, { tone: BadgeTone; label: string }> = {
+  "Ideia":     { tone: "slate",   label: "Ideia" },
+  "Produção":  { tone: "blue",    label: "Produção" },
+  "Revisão":   { tone: "amber",   label: "Revisão" },
+  "Aprovado":  { tone: "purple",  label: "Aprovado" },
+  "Agendado":  { tone: "cyan",    label: "Agendado" },
+  "Publicado": { tone: "green",   label: "Publicado" },
+};
 const roles: Role[] = ["admin", "gestor", "colaborador"];
 const ideaTypes: Idea["type"][] = ["Postagem", "Melhoria", "Sistema", "Outros"];
 const calendarTaskBoardId = "__calendar_posts__";
@@ -796,6 +804,59 @@ const slug = (value: string) =>
   value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
+
+function addDaysIso(dateLike: string | undefined, days: number) {
+  const date = dateLike ? new Date(dateLike) : new Date();
+  if (Number.isNaN(date.getTime())) date.setTime(Date.now());
+  date.setDate(date.getDate() + days);
+  return date.toISOString();
+}
+
+function normalizeCommentPart(value: string | undefined) {
+  return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function commentImportSignature(comment: Pick<Comment, "source" | "videoId" | "authorName" | "text" | "publishedAt">) {
+  return [
+    comment.source,
+    comment.videoId ?? "",
+    normalizeCommentPart(comment.authorName),
+    normalizeCommentPart(comment.text),
+    comment.publishedAt ?? ""
+  ].join("|");
+}
+
+function commentStableKey(comment: Pick<Comment, "source" | "externalId" | "importSignature" | "videoId" | "authorName" | "text" | "publishedAt">) {
+  if (comment.externalId) return `${comment.source}:external:${comment.externalId}`;
+  return `${comment.source}:signature:${comment.importSignature ?? commentImportSignature(comment)}`;
+}
+
+function mergeImportedComment(existing: Comment | undefined, incoming: Comment): Comment {
+  if (!existing) return incoming;
+  const addedToBank = existing.addedToBank || incoming.addedToBank;
+  return {
+    ...existing,
+    source: incoming.source,
+    externalId: existing.externalId ?? incoming.externalId,
+    importSignature: existing.importSignature ?? incoming.importSignature,
+    videoId: incoming.videoId ?? existing.videoId,
+    videoTitle: incoming.videoTitle ?? existing.videoTitle,
+    authorName: incoming.authorName || existing.authorName,
+    text: incoming.text || existing.text,
+    likes: incoming.likes,
+    response: incoming.response ?? existing.response,
+    status: existing.status === "respondido" && incoming.status !== "respondido" ? existing.status : incoming.status,
+    addedToBank,
+    bankQuestionId: existing.bankQuestionId ?? incoming.bankQuestionId,
+    publishedAt: incoming.publishedAt ?? existing.publishedAt,
+    retentionUntil: existing.retentionUntil ?? incoming.retentionUntil,
+    processedAt: existing.processedAt ?? incoming.processedAt,
+    isRelevant: existing.isRelevant ?? incoming.isRelevant ?? addedToBank,
+    classificationStatus: existing.classificationStatus && existing.classificationStatus !== "pendente" ? existing.classificationStatus : incoming.classificationStatus,
+    classificationReason: existing.classificationReason ?? incoming.classificationReason,
+    createdAt: existing.createdAt
+  };
+}
 
 function dateId(value: Date) {
   const pad = (part: number) => String(part).padStart(2, "0");
@@ -6369,7 +6430,10 @@ function DraggablePost({ post, channel, stage, setModal }: { post: EditorialPost
             {new Date(post.publishAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
           </div>
           <p className="mt-1 line-clamp-2 font-black">{post.title}</p>
-          {stage && <span className="mt-1 inline-flex rounded-xl px-2 py-0.5 text-[10px] font-black text-white" style={{ background: stage.color }}>{stage.name.split(" - ")[0]}</span>}
+          <div className="mt-1 flex flex-wrap gap-1">
+            {stage && <span className="inline-flex rounded-xl px-2 py-0.5 text-[10px] font-black text-white" style={{ background: stage.color }}>{stage.name.split(" - ")[0]}</span>}
+            {post.status && postStatusConfig[post.status] && <Badge tone={postStatusConfig[post.status].tone} className="text-[10px]">{postStatusConfig[post.status].label}</Badge>}
+          </div>
         </button>
       </div>
     </div>
@@ -7051,6 +7115,11 @@ function SortableCalendarPostCard({ post, channel, channelById, setModal }: { po
         <span>{new Date(post.publishAt).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</span>
       </div>
       <h4 className="mt-2 line-clamp-2 font-black">{post.title}</h4>
+      {post.status && postStatusConfig[post.status] && (
+        <div className="mt-2">
+          <Badge tone={postStatusConfig[post.status].tone}>{postStatusConfig[post.status].label}</Badge>
+        </div>
+      )}
       <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{post.description || "Clique para editar o post."}</p>
     </article>
   );
@@ -10109,6 +10178,10 @@ function PostReviewPanel({
     setExternalUrl("");
   }
 
+  function driveImagePreview(file: DriveFile): string {
+    return file.thumbnailUrl ?? `https://drive.google.com/thumbnail?id=${file.id}&sz=w400`;
+  }
+
   function addDriveFileToReview(file: DriveFile) {
     if (replaceTarget) {
       const isVideo = replaceTarget.type === "video";
@@ -10122,7 +10195,9 @@ function PostReviewPanel({
         return;
       }
       deletePostReviewAsset(replaceTarget.id);
-      addPostReviewExternalAsset(post, file.url, file.previewUrl, file.mimeType, isCoverReplace);
+      // For covers (images) use thumbnailUrl so preview renders correctly
+      const preview = isCoverReplace ? driveImagePreview(file) : file.previewUrl;
+      addPostReviewExternalAsset(post, file.url, preview, file.mimeType, isCoverReplace);
       setReplaceTarget(null);
       return;
     }
@@ -10131,7 +10206,8 @@ function PostReviewPanel({
       window.alert("Para a capa, envie apenas imagens (JPG, PNG, etc.).");
       return;
     }
-    addPostReviewExternalAsset(post, file.url, file.previewUrl, file.mimeType, addingCover);
+    const preview = addingCover ? driveImagePreview(file) : file.previewUrl;
+    addPostReviewExternalAsset(post, file.url, preview, file.mimeType, addingCover);
   }
 
   const driveButtonLabel = canUploadCover ? "Selecionar capa do Drive" : "Selecionar do Drive";
@@ -10343,9 +10419,22 @@ function PublishModal({
   const [localThumbnailUrl, setLocalThumbnailUrl] = useState<string | null>(null);
   const [localThumbnailPreview, setLocalThumbnailPreview] = useState<string | null>(null);
   const [thumbDriveOpen, setThumbDriveOpen] = useState(false);
+  const [confirmedDuplicate, setConfirmedDuplicate] = useState(false);
+
+  const alreadyPublished = Boolean(post.publishedVideoId) || post.status === "Publicado" || post.status === "Agendado";
 
   const effectiveThumbnailUrl = coverAsset?.url ?? localThumbnailUrl ?? null;
-  const effectiveThumbnailPreview = coverAsset?.previewUrl ?? localThumbnailPreview ?? null;
+
+  function getDriveDisplayUrl(asset: PostReviewAsset): string {
+    if (asset.source === "upload") return asset.previewUrl;
+    const match = asset.url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+    if (match) return `https://drive.google.com/thumbnail?id=${match[1]}&sz=w400`;
+    return asset.previewUrl;
+  }
+
+  const effectiveThumbnailPreview = coverAsset
+    ? getDriveDisplayUrl(coverAsset)
+    : localThumbnailPreview ?? null;
 
   function updateConfig(channelId: string, patch: Partial<ChannelPublishConfig>) {
     setChannelConfigs((prev) => prev.map((c) => c.channelId === channelId ? { ...c, ...patch } : c));
@@ -10374,9 +10463,10 @@ function PublishModal({
               body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: effectiveThumbnailUrl }),
             });
             if (res.ok) {
-              const { videoId } = await res.json() as { videoId: string };
+              const { videoId, privacyStatus } = await res.json() as { videoId: string; privacyStatus?: string };
+              const newStatus = (privacyStatus === "private" && scheduledAt) ? "Agendado" : "Publicado";
               updateConfig(config.channelId, { status: "success" });
-              setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishedVideoId: videoId, status: scheduledAt ? "Agendado" : "Publicado" } : p));
+              setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishedVideoId: videoId, status: newStatus, publishedAt: new Date().toISOString() } : p));
             } else {
               const data = await res.json() as { error?: string };
               updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar." });
@@ -10394,6 +10484,20 @@ function PublishModal({
   return (
     <div className="space-y-5">
       <p className="text-sm font-bold text-slate-500">{post.title}</p>
+
+      {/* Aviso de duplicação */}
+      {alreadyPublished && !confirmedDuplicate && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+          <p className="text-sm font-black text-amber-800">
+            ⚠️ Este post já foi {post.status === "Agendado" ? "agendado" : "publicado"}.
+            Publicar novamente irá criar uma cópia duplicada no canal.
+          </p>
+          <button type="button" onClick={() => setConfirmedDuplicate(true)}
+            className="mt-2 rounded-2xl bg-amber-600 px-3 py-1.5 text-xs font-black text-white hover:bg-amber-700">
+            Entendo, publicar mesmo assim
+          </button>
+        </div>
+      )}
 
       {/* Arte a publicar */}
       {approvedAssets.length > 0 && (
@@ -10520,7 +10624,7 @@ function PublishModal({
                   )}
                   {thumbDriveOpen && (
                     <DriveExplorerModal
-                      onSelect={(file) => { setLocalThumbnailUrl(file.url); setLocalThumbnailPreview(file.previewUrl); setThumbDriveOpen(false); }}
+                      onSelect={(file) => { setLocalThumbnailUrl(file.url); setLocalThumbnailPreview(file.thumbnailUrl ?? `https://drive.google.com/thumbnail?id=${file.id}&sz=w400`); setThumbDriveOpen(false); }}
                       onClose={() => setThumbDriveOpen(false)}
                     />
                   )}
@@ -10541,7 +10645,7 @@ function PublishModal({
 
       {/* Botão de ação */}
       {!isDone ? (
-        <button type="button" disabled={enabledCount === 0 || isPublishing || !selectedAsset} onClick={handlePublish} className="w-full rounded-3xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">
+        <button type="button" disabled={enabledCount === 0 || isPublishing || !selectedAsset || (alreadyPublished && !confirmedDuplicate)} onClick={handlePublish} className="w-full rounded-3xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">
           {isPublishing
             ? "Publicando…"
             : publishMode === "now"
@@ -11163,9 +11267,9 @@ function RoundAdd({ onClick, label }: { onClick: () => void; label: string }) {
   return <button onClick={onClick} aria-label={label} title={label} className="grid h-11 w-11 place-items-center rounded-full bg-blue-700 text-white shadow-lg shadow-blue-700/20 motion-smooth hover:bg-blue-800"><Plus size={22} /></button>;
 }
 
-function Badge({ children, tone }: { children: ReactNode; tone: BadgeTone }) {
+function Badge({ children, tone, className }: { children: ReactNode; tone: BadgeTone; className?: string }) {
   const tones = { blue: "bg-blue-100 text-blue-700", cyan: "bg-cyan-100 text-cyan-700", slate: "bg-slate-100 text-slate-600", red: "bg-rose-100 text-rose-700", green: "bg-emerald-100 text-emerald-700", amber: "bg-amber-100 text-amber-700", purple: "bg-violet-100 text-violet-700" };
-  return <span className={`inline-flex rounded-2xl px-2.5 py-1 text-xs font-black ${tones[tone]}`}>{children}</span>;
+  return <span className={`inline-flex rounded-2xl px-2.5 py-1 text-xs font-black ${tones[tone]}${className ? ` ${className}` : ""}`}>{children}</span>;
 }
 
 function FunnelBadge({ stage }: { stage?: FunnelStage }) {
@@ -12380,12 +12484,22 @@ function ComentariosSection({
       items.filter((i) => i.channelReply).map((i) => [i.commentId, i.channelReply!])
     );
 
+    const existingCommentByKey = new Map(comments.map((comment) => [commentStableKey(comment), comment]));
+    const importStartedAt = new Date().toISOString();
+
     const newComments: Comment[] = items.map((item) => {
       const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
-      return {
+      const incoming: Comment = {
         id: crypto.randomUUID(),
         source: "youtube" as const,
         externalId: item.commentId,
+        importSignature: commentImportSignature({
+          source: "youtube",
+          videoId: item.videoId,
+          authorName: item.authorName,
+          text: item.text,
+          publishedAt: item.publishedAt
+        }),
         videoId: item.videoId,
         videoTitle: item.videoTitle,
         authorName: item.authorName,
@@ -12395,8 +12509,14 @@ function ComentariosSection({
         response: item.channelReply,
         addedToBank: autoAdded,
         publishedAt: item.publishedAt,
-        createdAt: new Date().toISOString(),
+        retentionUntil: addDaysIso(importStartedAt, 90),
+        processedAt: autoAdded ? importStartedAt : undefined,
+        isRelevant: autoAdded,
+        classificationStatus: autoAdded ? "relevante" : "pendente",
+        classificationReason: autoAdded ? "filtro automático" : undefined,
+        createdAt: importStartedAt,
       };
+      return mergeImportedComment(existingCommentByKey.get(commentStableKey(incoming)), incoming);
     });
 
     // Classificação híbrida: regras locais primeiro, Gemini só para os casos incertos
@@ -12405,13 +12525,27 @@ function ComentariosSection({
     // 1ª passagem — classificação local (sem custo, instantânea)
     const uncertainForAi: typeof newComments = [];
     for (const c of newComments) {
-      if (c.addedToBank) continue; // auto-filter já marcou → não reclassificar
+      if (c.classificationStatus && c.classificationStatus !== "pendente") continue; // já classificado antes → não reclassificar
+      if (c.addedToBank) {
+        c.isRelevant = true;
+        c.classificationStatus = "relevante";
+        c.classificationReason = c.classificationReason ?? "filtro automático";
+        continue;
+      }
       const local = classifyLocal(c.text);
       if (local === "duvida") {
         c.addedToBank = true;
-        classifyMap.set(c.id, { confidence: 1, reason: "regra local: pergunta identificada" });
+        c.isRelevant = true;
+        c.processedAt = importStartedAt;
+        c.classificationStatus = "relevante";
+        c.classificationReason = "regra local: pergunta identificada";
+        classifyMap.set(c.id, { confidence: 1, reason: c.classificationReason });
       } else if (local === "normal") {
-        classifyMap.set(c.id, { confidence: 1, reason: "regra local: comentário normal" });
+        c.isRelevant = false;
+        c.processedAt = importStartedAt;
+        c.classificationStatus = "normal";
+        c.classificationReason = "regra local: comentário normal";
+        classifyMap.set(c.id, { confidence: 1, reason: c.classificationReason });
       } else {
         uncertainForAi.push(c); // incerto → vai para Gemini
       }
@@ -12430,22 +12564,38 @@ function ComentariosSection({
             results: Array<{ id: string; tipo: "duvida_relevante" | "normal"; confidence: number; reason: string }>;
           };
           for (const r of results) {
+            const c = uncertainForAi.find((nc) => nc.id === r.id);
             if (r.tipo === "duvida_relevante") {
-              const c = uncertainForAi.find((nc) => nc.id === r.id);
-              if (c) c.addedToBank = true;
+              if (c) {
+                c.addedToBank = true;
+                c.isRelevant = true;
+                c.classificationStatus = "relevante";
+              }
+            } else if (c) {
+              c.isRelevant = false;
+              c.classificationStatus = "normal";
+            }
+            if (c) {
+              c.processedAt = importStartedAt;
+              c.classificationReason = r.reason;
             }
             classifyMap.set(r.id, { confidence: r.confidence, reason: r.reason });
           }
         }
       } catch {
-        // Gemini falhou — comentários incertos ficam fora do banco (seguro)
+        for (const c of uncertainForAi) {
+          c.classificationStatus = "erro";
+          c.classificationReason = "Gemini falhou durante a classificação";
+        }
       }
     }
 
     // Pré-gerar IDs das perguntas para linkar de volta nos comentários
-    const bankItems = newComments.filter(
-      (c) => c.addedToBank && !existingExternalIds.has(c.externalId)
-    );
+    const bankItems = newComments.filter((c) => {
+      if (!c.addedToBank || c.bankQuestionId) return false;
+      if (c.externalId && existingExternalIds.has(c.externalId)) return false;
+      return !questions.some((q) => q.sourceCommentId === c.id || q.fromCommentId === c.id);
+    });
     const questionIdByCommentId = new Map<string, string>(
       bankItems.map((c) => [c.id, crypto.randomUUID()])
     );
@@ -12456,7 +12606,8 @@ function ComentariosSection({
       if (qId) c.bankQuestionId = qId;
     }
 
-    const merged = [...newComments, ...comments];
+    const importedKeys = new Set(newComments.map(commentStableKey));
+    const merged = [...newComments, ...comments.filter((comment) => !importedKeys.has(commentStableKey(comment)))];
     setComments(merged);
     if (supabase) {
       await insertComments(supabase, newComments).catch(() => {});

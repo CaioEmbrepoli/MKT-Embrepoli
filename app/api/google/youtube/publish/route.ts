@@ -161,7 +161,27 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ videoId });
+    // ── Verificação pós-upload (best-effort) ────────────────────────────────
+    let privacyStatus = scheduledAt ? "private" : "public";
+    let uploadStatus = "uploaded";
+    try {
+      const verifyRes = await fetch(
+        `https://www.googleapis.com/youtube/v3/videos?part=status&id=${videoId}`,
+        { headers: { Authorization: `Bearer ${ytToken}` } }
+      );
+      if (verifyRes.ok) {
+        const verifyData = await verifyRes.json() as { items?: { status: { privacyStatus: string; uploadStatus: string } }[] };
+        const item = verifyData.items?.[0];
+        if (item) {
+          privacyStatus = item.status.privacyStatus;
+          uploadStatus = item.status.uploadStatus;
+        }
+      }
+    } catch {
+      // Verificação falhou — mantém defaults
+    }
+
+    return NextResponse.json({ videoId, privacyStatus, uploadStatus });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao publicar no YouTube." },
