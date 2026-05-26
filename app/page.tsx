@@ -207,6 +207,9 @@ import {
   CartesianGrid,
   Cell,
   LabelList,
+  Legend,
+  Line,
+  LineChart,
   Pie,
   PieChart,
   ResponsiveContainer,
@@ -798,6 +801,12 @@ function channelKpiConfig(channelId: string, totals: MetricTotals, count: number
     { label: "Taxa engaj.",   value: formatPercent(totals.reach ? (totals.engagement / totals.reach) * 100 : 0) },
     { label: "Taxa conv.",    value: formatPercent(totals.clicks ? (totals.leads / totals.clicks) * 100 : 0) },
   ];
+}
+
+function deltaPercent(current: number, previous: number): { pct: number; positive: boolean } | null {
+  if (previous === 0) return null;
+  const pct = ((current - previous) / previous) * 100;
+  return { pct: Math.abs(pct), positive: pct >= 0 };
 }
 
 const slug = (value: string) =>
@@ -7486,6 +7495,57 @@ function Metrics({
 
   const activeFilterCount = [lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, privacyFilter].filter((f) => f !== "all").length;
 
+  // Período anterior (mesmas dimensões de filtro, janela deslocada)
+  const prevFilteredMetrics = useMemo(() => {
+    if (period === "all") return [];
+    const days = Number(period);
+    return resolvedMetrics.filter((metric) => {
+      const date = new Date(`${metric.date || todayIso()}T12:00:00`);
+      const diffDays = Math.floor((todayMs - date.getTime()) / 86400000);
+      if (diffDays <= days || diffDays > days * 2) return false;
+      if (activeChannel !== "all" && metric.channelId !== activeChannel) return false;
+      if (!metricMatchesFilter(metric.productLineId, lineFilter)) return false;
+      if (!metricMatchesFilter(metric.vehicleTypeId, vehicleFilter)) return false;
+      if (!metricMatchesFilter(metric.contentTypeId, contentFilter)) return false;
+      if (!metricMatchesFilter(metric.campaignId, campaignFilter)) return false;
+      if (!metricMatchesFilter(metric.funnelStageId, funnelFilter)) return false;
+      if (videoTypeFilter !== "all" && metric.videoType !== videoTypeFilter) return false;
+      if (privacyFilter !== "all" && (metric.privacyStatus ?? "public") !== privacyFilter) return false;
+      return true;
+    });
+  }, [resolvedMetrics, period, activeChannel, lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, privacyFilter, todayMs]);
+
+  const prevTotals = useMemo(() => computeMetricTotals(prevFilteredMetrics), [prevFilteredMetrics]);
+
+  // Exibir layout YouTube quando for canal YouTube ou aba Geral
+  const showYoutubeDesign = isYoutubeChannel || activeChannel === "all";
+
+  // Dados diários de crescimento de inscritos
+  const subscriberDailyData = useMemo(() => Object.values(
+    filteredMetrics.reduce<Record<string, { date: string; net: number }>>((acc, metric) => {
+      const key = metric.date || todayIso();
+      acc[key] = acc[key] ?? { date: key.slice(5), net: 0 };
+      acc[key].net += (metric.subscribersGained ?? 0) - (metric.subscribersLost ?? 0);
+      return acc;
+    }, {})
+  ).sort((a, b) => a.date.localeCompare(b.date)), [filteredMetrics]);
+
+  // Dados diários de impressões & CTR
+  const impressionsDailyData = useMemo(() => Object.values(
+    filteredMetrics.reduce<Record<string, { date: string; impressions: number; ctrSum: number; count: number }>>((acc, metric) => {
+      const key = metric.date || todayIso();
+      acc[key] = acc[key] ?? { date: key.slice(5), impressions: 0, ctrSum: 0, count: 0 };
+      acc[key].impressions += metric.impressions ?? 0;
+      if (metric.impressionClickThroughRate != null) {
+        acc[key].ctrSum += metric.impressionClickThroughRate;
+        acc[key].count += 1;
+      }
+      return acc;
+    }, {})
+  ).sort((a, b) => a.date.localeCompare(b.date))
+    .map((d) => ({ date: d.date, impressions: d.impressions, ctr: d.count ? Number((d.ctrSum / d.count).toFixed(2)) : 0 })),
+  [filteredMetrics]);
+
   const channelCounts = useMemo(() => {
     const map = new Map<string, number>();
     for (const m of resolvedMetrics) {
@@ -7623,77 +7683,226 @@ function Metrics({
         </div>
       </div>
 
-      <div className="grid gap-5">
-        <section>
-          <h3 className="mb-3 font-black">Resumo · {activeChannelName}</h3>
-          <div className={`grid gap-3 md:grid-cols-2 ${kpis.length >= 6 ? "xl:grid-cols-6" : "xl:grid-cols-4"}`}>
-            {kpis.map((kpi) => <MetricSummaryCard key={kpi.label} label={kpi.label} value={kpi.value} />)}
-          </div>
-        </section>
+      {showYoutubeDesign ? (
+        /* ── LAYOUT YOUTUBE ─────────────────────────────────────────── */
+        <div className="grid gap-6">
 
-        <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
-          <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
-            <h3 className="font-black">Evolução do período</h3>
-            <div className="mt-4 h-64">
-              <ResponsiveContainer width="100%" height="100%">
-                {period === "all" ? (
-                  <BarChart data={top5PeriodData} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+          {/* A — KPI Cards com comparação */}
+          <section>
+            <h3 className="mb-3 font-black">Resumo · {activeChannelName}</h3>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <MetricKpiCard label="Visualizações" value={formatNumber(totals.reach)} delta={period !== "all" ? deltaPercent(totals.reach, prevTotals.reach) : undefined} />
+              <MetricKpiCard label="Impressões" value={totals.impressions ? formatNumber(totals.impressions) : "—"} delta={period !== "all" && totals.impressions > 0 ? deltaPercent(totals.impressions, prevTotals.impressions) : undefined} />
+              <MetricKpiCard label="CTR" value={totals.impressionCount ? formatPercent(totals.impressionClickThroughRate / totals.impressionCount) : "—"} delta={period !== "all" && totals.impressionCount > 0 && prevTotals.impressionCount > 0 ? deltaPercent(totals.impressionClickThroughRate / totals.impressionCount, prevTotals.impressionClickThroughRate / prevTotals.impressionCount) : undefined} />
+              <MetricKpiCard label="Vídeos" value={formatNumber(filteredMetrics.length)} delta={period !== "all" ? deltaPercent(filteredMetrics.length, prevFilteredMetrics.length) : undefined} />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <MetricKpiCard label="Inscritos líquidos" value={formatNumber(totals.subscribersGained - totals.subscribersLost)} delta={period !== "all" ? deltaPercent(totals.subscribersGained - totals.subscribersLost, prevTotals.subscribersGained - prevTotals.subscribersLost) : undefined} />
+              <MetricKpiCard label="Média views/vídeo" value={filteredMetrics.length ? formatNumber(Math.round(totals.reach / filteredMetrics.length)) : "—"} delta={period !== "all" && filteredMetrics.length > 0 && prevFilteredMetrics.length > 0 ? deltaPercent(totals.reach / filteredMetrics.length, prevTotals.reach / prevFilteredMetrics.length) : undefined} />
+              <MetricKpiCard label="Retenção média" value={totals.analyticsCount ? formatPercent(totals.averageViewPercentage / totals.analyticsCount) : "—"} delta={period !== "all" && totals.analyticsCount > 0 && prevTotals.analyticsCount > 0 ? deltaPercent(totals.averageViewPercentage / totals.analyticsCount, prevTotals.averageViewPercentage / prevTotals.analyticsCount) : undefined} />
+              <MetricKpiCard label="Taxa curtidas" value={totals.reach ? formatPercent((totals.likes / totals.reach) * 100) : "—"} delta={period !== "all" && totals.reach > 0 && prevTotals.reach > 0 ? deltaPercent((totals.likes / totals.reach) * 100, (prevTotals.likes / prevTotals.reach) * 100) : undefined} />
+            </div>
+          </section>
+
+          {/* B + C — Evolução de views + Crescimento inscritos */}
+          <section className="grid gap-5 xl:grid-cols-2">
+            <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+              <h3 className="font-black">Evolução de Visualizações</h3>
+              <div className="mt-4 h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  {period === "all" ? (
+                    <BarChart data={top5PeriodData} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis type="number" tickFormatter={(v) => formatNumber(Number(v))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis type="category" dataKey="name" width={120} tick={{ fontSize: 10, fontWeight: 700, fill: "#334155" }} />
+                      <Tooltip formatter={(v: number) => [formatNumber(v), "Views"]} />
+                      <Bar dataKey="alcance" fill="#2563eb" radius={[0, 6, 6, 0]} name="Views" />
+                    </BarChart>
+                  ) : (
+                    <AreaChart data={dailyData}>
+                      <defs>
+                        <linearGradient id="viewsGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#2563eb" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} tickFormatter={(v) => formatNumber(Number(v))} />
+                      <Tooltip formatter={(v: number) => [formatNumber(v), "Views"]} />
+                      <Area type="monotone" dataKey="alcance" stroke="#2563eb" fill="url(#viewsGradient)" strokeWidth={2.5} name="Views" dot={false} activeDot={{ r: 5 }} />
+                    </AreaChart>
+                  )}
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+              <h3 className="font-black">Crescimento de Inscritos</h3>
+              <p className="mt-0.5 text-xs font-bold text-slate-400">Líquido por dia (ganhos − perdidos)</p>
+              <div className="mt-3 h-52">
+                {subscriberDailyData.some((d) => d.net !== 0) ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={subscriberDailyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} allowDecimals={false} />
+                      <Tooltip formatter={(v: number) => [v > 0 ? `+${v}` : String(v), "Inscritos"]} />
+                      <Bar dataKey="net" radius={[4, 4, 0, 0]} name="Inscritos">
+                        {subscriberDailyData.map((entry, i) => (
+                          <Cell key={i} fill={entry.net >= 0 ? "#10b981" : "#f43f5e"} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center">
+                    <p className="text-sm font-bold text-slate-400">Dados de inscritos não disponíveis para este período</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* D — Impressões & CTR */}
+          {impressionsDailyData.some((d) => d.impressions > 0) && (
+            <section>
+              <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+                <h3 className="font-black">Impressões & CTR</h3>
+                <p className="mt-0.5 text-xs font-bold text-slate-400">Quantas vezes o thumbnail apareceu e % que clicaram</p>
+                <div className="mt-4 h-52">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={impressionsDailyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis yAxisId="left" tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} tickFormatter={(v) => formatNumber(Number(v))} />
+                      <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11, fontWeight: 700, fill: "#f97316" }} tickFormatter={(v) => `${Number(v).toFixed(1)}%`} />
+                      <Tooltip formatter={(value: number, name: string) => name === "CTR" ? [`${value.toFixed(2)}%`, "CTR"] : [formatNumber(Math.round(value)), "Impressões"]} />
+                      <Legend />
+                      <Line yAxisId="left" type="monotone" dataKey="impressions" stroke="#2563eb" strokeWidth={2} dot={false} name="Impressões" />
+                      <Line yAxisId="right" type="monotone" dataKey="ctr" stroke="#f97316" strokeWidth={2} strokeDasharray="5 3" dot={false} name="CTR" />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {/* E — Cards de vídeo */}
+          <section>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="font-black">Top vídeos · {activeChannelName}</h3>
+              <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
+                Ver todos os {channelMetrics.length} →
+              </button>
+            </div>
+            {top20.length > 0 ? (
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {top20.slice(0, 12).map((metric) => {
+                  const thumb = thumbnailFor(metric);
+                  return (
+                    <button key={metric.id} type="button" onClick={() => setModal({ kind: "metric", id: metric.id })} className="overflow-hidden rounded-3xl bg-white text-left shadow-sm transition hover:shadow-md hover:-translate-y-0.5">
+                      <div className="relative aspect-video bg-slate-100">
+                        {thumb ? (
+                          <img src={thumb} className="h-full w-full object-cover" alt="" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <FileVideo size={28} className="text-slate-300" />
+                          </div>
+                        )}
+                        {metric.privacyStatus === "private" && <span className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-black text-white">🔒 Privado</span>}
+                        {metric.privacyStatus === "unlisted" && <span className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-black text-white">🔗 Não listado</span>}
+                      </div>
+                      <div className="p-3">
+                        <p className="line-clamp-2 text-sm font-black text-slate-800 leading-snug">{metric.postTitle}</p>
+                        {metric.date && <p className="mt-0.5 text-[10px] font-bold text-slate-400">{new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR")}</p>}
+                        <div className="mt-2 grid grid-cols-3 divide-x divide-slate-100 rounded-2xl border border-slate-100 bg-slate-50 text-center">
+                          <div className="py-2">
+                            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Views</p>
+                            <p className="text-sm font-black text-slate-700">{formatNumber(metric.reach)}</p>
+                          </div>
+                          <div className="py-2">
+                            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">CTR</p>
+                            <p className="text-sm font-black text-slate-700">{metric.impressionClickThroughRate ? formatPercent(metric.impressionClickThroughRate) : "—"}</p>
+                          </div>
+                          <div className="py-2">
+                            <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Retenção</p>
+                            <p className="text-sm font-black text-slate-700">{metric.averageViewPercentage ? formatPercent(metric.averageViewPercentage) : "—"}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>
+            )}
+          </section>
+        </div>
+      ) : (
+        /* ── LAYOUT OUTROS CANAIS ───────────────────────────────────── */
+        <div className="grid gap-5">
+          <section>
+            <h3 className="mb-3 font-black">Resumo · {activeChannelName}</h3>
+            <div className={`grid gap-3 md:grid-cols-2 ${kpis.length >= 6 ? "xl:grid-cols-6" : "xl:grid-cols-4"}`}>
+              {kpis.map((kpi) => <MetricSummaryCard key={kpi.label} label={kpi.label} value={kpi.value} />)}
+            </div>
+          </section>
+          <section className="grid gap-5 xl:grid-cols-[1.2fr_0.8fr]">
+            <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+              <h3 className="font-black">Evolução do período</h3>
+              <div className="mt-4 h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  {period === "all" ? (
+                    <BarChart data={top5PeriodData} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis type="number" tickFormatter={(value) => formatNumber(Number(value))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <Tooltip formatter={(value: number) => formatNumber(value)} />
+                      <Bar dataKey="alcance" fill="#2563eb" radius={[0, 6, 6, 0]} />
+                    </BarChart>
+                  ) : (
+                    <AreaChart data={dailyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
+                      <Tooltip />
+                      <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe" />
+                      <Area dataKey="leads" stroke="#0891b2" fill="#cffafe" />
+                    </AreaChart>
+                  )}
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+              <h3 className="font-black">Top 10 mais visualizados</h3>
+              <div className="mt-4 h-80">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={top10Chart} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                     <XAxis type="number" tickFormatter={(value) => formatNumber(Number(value))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
-                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                    <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
                     <Tooltip formatter={(value: number) => formatNumber(value)} />
                     <Bar dataKey="alcance" fill="#2563eb" radius={[0, 6, 6, 0]} />
                   </BarChart>
-                ) : (
-                  <AreaChart data={dailyData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} />
-                    <YAxis tick={{ fontSize: 12, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
-                    <Tooltip />
-                    <Area dataKey="alcance" stroke="#2563eb" fill="#bfdbfe">
-                      <LabelList dataKey="alcance" position="top" formatter={(value: number) => formatNumber(value)} fill="#1d4ed8" fontSize={12} fontWeight={900} />
-                    </Area>
-                    <Area dataKey="leads" stroke="#0891b2" fill="#cffafe">
-                      <LabelList dataKey="leads" position="top" fill="#0e7490" fontSize={12} fontWeight={900} />
-                    </Area>
-                  </AreaChart>
-                )}
-              </ResponsiveContainer>
+                </ResponsiveContainer>
+              </div>
             </div>
-            {period !== "all" && <ChartValueList data={dailyData.slice(-5).map((item) => ({ label: item.date, value: `${formatNumber(item.alcance)} alcance · ${item.leads} leads` }))} />}
-          </div>
-          <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
-            <h3 className="font-black">Top 10 mais visualizados</h3>
-            <div className="mt-4 h-80">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={top10Chart} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis type="number" tickFormatter={(value) => formatNumber(Number(value))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
-                  <YAxis type="category" dataKey="name" width={160} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
-                  <Tooltip formatter={(value: number) => formatNumber(value)} />
-                  <Bar dataKey="alcance" fill="#2563eb" radius={[0, 6, 6, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+          </section>
+          <section className={`grid gap-5 ${metricBreakdowns.length === 3 ? "xl:grid-cols-3" : "xl:grid-cols-2"}`}>
+            {metricBreakdowns.map((breakdown) => (
+              <BreakdownChart key={breakdown.title} title={breakdown.title} data={breakdown.data} unit={breakdown.unit} />
+            ))}
+          </section>
+          <section>
+            <h3 className="mb-3 font-black">Análise</h3>
+            <div className="grid gap-4 lg:grid-cols-3">
+              <RankingCard title="Mais alcance" metrics={topReach} value={(metric) => formatNumber(metric.reach)} />
+              <RankingCard title="Mais leads" metrics={topLeads} value={(metric) => `${metric.leads} leads`} />
+              <RankingCard title="Mais engajamento" metrics={topEngagement} value={(metric) => formatNumber(metricEngagement(metric))} />
             </div>
-          </div>
-        </section>
-
-        <section className={`grid gap-5 ${metricBreakdowns.length === 3 ? "xl:grid-cols-3" : "xl:grid-cols-2"}`}>
-          {metricBreakdowns.map((breakdown) => (
-            <BreakdownChart key={breakdown.title} title={breakdown.title} data={breakdown.data} unit={breakdown.unit} />
-          ))}
-        </section>
-
-        <section>
-          <h3 className="mb-3 font-black">Análise</h3>
-          <div className={`grid gap-4 ${isYoutubeChannel ? "lg:grid-cols-2" : "lg:grid-cols-3"}`}>
-            <RankingCard title="Mais alcance" metrics={topReach} value={(metric) => formatNumber(metric.reach)} />
-            {!isYoutubeChannel && <RankingCard title="Mais leads" metrics={topLeads} value={(metric) => `${metric.leads} leads`} />}
-            <RankingCard title="Mais engajamento" metrics={topEngagement} value={(metric) => formatNumber(metricEngagement(metric))} />
-          </div>
-        </section>
-
-        {!isYoutubeChannel && (
+          </section>
           <section className="grid gap-4 lg:grid-cols-3">
             <ActionList title="Conteúdos vencedores" empty="Nenhum destaque ainda." items={winners} actionLabel="Criar ideia parecida" onAction={createPostIdea} description={(metric) => `${formatPercent(metricEngagementRate(metric))} engajamento · ${metric.leads} leads`} />
             <ActionList title="Precisam de ajuste" empty="Nada crítico no filtro atual." items={weakMetrics} actionLabel="Criar tarefa" onAction={createImprovementTask} description={(metric) => `${formatNumber(metric.reach)} alcance · ${metric.leads} leads`} />
@@ -7710,62 +7919,32 @@ function Metrics({
               </div>
             </div>
           </section>
-        )}
-      </div>
-
-      <section className="mt-6">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h3 className="font-black">Top 10 mais visualizados · {activeChannelName}</h3>
-          <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
-            Ver todos os {channelMetrics.length} vídeos →
-          </button>
-        </div>
-        <div className="grid gap-2">
-          {previewMetrics.map((metric) => {
-            const thumb = thumbnailFor(metric);
-            return (
-              <button key={metric.id} onClick={() => setModal({ kind: "metric", id: metric.id })} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left transition hover:border-blue-200 hover:bg-slate-50">
-                {thumb ? (
-                  <img src={thumb} alt="" className="h-14 w-24 shrink-0 rounded-lg object-cover" />
-                ) : (
-                  <div className="flex h-14 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
-                    <FileVideo size={20} className="text-slate-400" />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="line-clamp-1 font-black">{metric.postTitle}</p>
-                    {metric.privacyStatus === "private" && (
-                      <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-black text-red-700">🔒 Privado</span>
-                    )}
-                    {metric.privacyStatus === "unlisted" && (
-                      <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-700">🔗 Não listado</span>
-                    )}
-                    {(metric.privacyStatus === "public" || metric.privacyStatus == null) && metric.externalId?.startsWith("yt:") && (
-                      <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">🌐 Público</span>
-                    )}
-                  </div>
-                  <p className="text-xs font-bold text-slate-500">
-                    {metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}
-                    {metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}
-                  </p>
-                  <p className="mt-0.5 text-xs font-bold text-slate-700">
-                    {formatNumber(metric.reach)} views · {formatNumber(metric.likes)} curtidas · {formatNumber(metric.comments)} coment.
-                  </p>
-                  {(metric.watchTimeMinutes != null || metric.averageViewPercentage != null || metric.impressions != null) && (
-                    <p className="mt-0.5 text-xs font-bold text-blue-700">
-                      {metric.watchTimeMinutes != null && `${formatNumber(Math.round(metric.watchTimeMinutes))} min assistidos`}
-                      {metric.averageViewPercentage != null && ` · ${formatPercent(metric.averageViewPercentage)} retenção`}
-                      {metric.impressions != null && ` · ${formatNumber(metric.impressions)} impressões`}
-                    </p>
-                  )}
-                </div>
+          <section className="mt-2">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="font-black">Top 10 · {activeChannelName}</h3>
+              <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
+                Ver todos os {channelMetrics.length} vídeos →
               </button>
-            );
-          })}
-          {!previewMetrics.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>}
+            </div>
+            <div className="grid gap-2">
+              {previewMetrics.map((metric) => {
+                const thumb = thumbnailFor(metric);
+                return (
+                  <button key={metric.id} onClick={() => setModal({ kind: "metric", id: metric.id })} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left transition hover:border-blue-200 hover:bg-slate-50">
+                    {thumb ? <img src={thumb} alt="" className="h-14 w-24 shrink-0 rounded-lg object-cover" /> : <div className="flex h-14 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100"><FileVideo size={20} className="text-slate-400" /></div>}
+                    <div className="min-w-0 flex-1">
+                      <p className="line-clamp-1 font-black">{metric.postTitle}</p>
+                      <p className="text-xs font-bold text-slate-500">{metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}{metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}</p>
+                      <p className="mt-0.5 text-xs font-bold text-slate-700">{formatNumber(metric.reach)} alcance · {formatNumber(metric.likes)} curtidas · {formatNumber(metric.comments)} coment.</p>
+                    </div>
+                  </button>
+                );
+              })}
+              {!previewMetrics.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>}
+            </div>
+          </section>
         </div>
-      </section>
+      )}
       {youtubeImportOpen && (
         <YouTubeImportModal
           metrics={metrics}
@@ -7804,6 +7983,25 @@ function FilterSelect({ label, value, options, onChange }: { label: string; valu
 
 function MetricSummaryCard({ label, value }: { label: string; value: string }) {
   return <div className="rounded-[26px] border border-blue-100 bg-gradient-to-br from-blue-50 to-white p-4"><p className="text-xs font-black uppercase text-blue-600">{label}</p><p className="mt-2 text-2xl font-black text-slate-950">{value}</p></div>;
+}
+
+function MetricKpiCard({ label, value, delta }: { label: string; value: string; delta?: { pct: number; positive: boolean } | null }) {
+  return (
+    <div className="rounded-[26px] border border-slate-100 bg-white p-4 shadow-sm">
+      <p className="text-[10px] font-black uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="mt-1.5 text-2xl font-black text-slate-900">{value}</p>
+      {delta !== undefined && (
+        delta ? (
+          <p className={`mt-1 flex items-center gap-1 text-xs font-bold ${delta.positive ? "text-emerald-600" : "text-rose-600"}`}>
+            <span>{delta.positive ? "▲" : "▼"}</span>
+            <span>{delta.pct.toFixed(1)}% vs anterior</span>
+          </p>
+        ) : (
+          <p className="mt-1 text-xs font-bold text-slate-300">— sem dados anteriores</p>
+        )
+      )}
+    </div>
+  );
 }
 
 function ChartValueList({ data }: { data: { label: string; value: string }[] }) {
@@ -10853,17 +11051,130 @@ function CampaignModalV2({ modal, currentUser, profiles, campaignAudiences, prod
   return <><EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{audienceNames.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{normalizeText(audienceChoice) === "outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={audienceNames.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? []} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir campanha" onDelete={() => { setCampaigns((current) => current.filter((campaign) => campaign.id !== editing.id)); close(); }} />}</>;
 }
 
-function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, metrics, setMetrics, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
-  const editing = modal?.kind === "metric" && modal.id ? metrics.find((metric) => metric.id === modal.id) : undefined;
+function thumbnailForModal(metric: PostMetric): string | null {
+  const ext = metric.externalId;
+  if (ext?.startsWith("yt:")) return `https://i.ytimg.com/vi/${ext.slice(3)}/hqdefault.jpg`;
+  return null;
+}
+
+function StatCard({ label, value, color }: { label: string; value: string; color: string }) {
+  const colors: Record<string, string> = {
+    blue: "bg-blue-50 text-blue-700 border-blue-100",
+    slate: "bg-slate-50 text-slate-600 border-slate-100",
+    orange: "bg-orange-50 text-orange-700 border-orange-100",
+    emerald: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    violet: "bg-violet-50 text-violet-700 border-violet-100",
+    green: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    red: "bg-rose-50 text-rose-700 border-rose-100",
+    cyan: "bg-cyan-50 text-cyan-700 border-cyan-100",
+  };
+  return (
+    <div className={`rounded-2xl border p-3 ${colors[color] ?? colors.slate}`}>
+      <p className="text-[10px] font-black uppercase tracking-wide opacity-70">{label}</p>
+      <p className="mt-1 text-xl font-black">{value}</p>
+    </div>
+  );
+}
+
+function EngagementBar({ label, value, pct, color }: { label: string; value: number; pct: number; color: string }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs font-bold text-slate-600">
+        <span>{label}</span>
+        <span>{formatNumber(value)} <span className="text-slate-400">({pct}%)</span></span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
+        <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${Math.max(pct, pct > 0 ? 2 : 0)}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function FunnelBlock({ label, value, pct, colorClass }: { label: string; value: string; pct: number; colorClass: string }) {
+  return (
+    <div className={`rounded-2xl border p-3 text-center ${colorClass}`}>
+      <p className="text-xs font-bold opacity-70 leading-tight">{label}</p>
+      <p className="mt-1 text-lg font-black">{value}</p>
+      <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/10">
+        <div className="h-full rounded-full bg-current opacity-40" style={{ width: `${Math.min(100, Math.max(pct, pct > 0 ? 2 : 0))}%` }} />
+      </div>
+      <p className="mt-1 text-[10px] font-black opacity-60">{pct.toFixed(1)}%</p>
+    </div>
+  );
+}
+
+function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, metrics, setMetrics, setTasks, taskColumns, setIdeas, currentUser, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+  const editing = modal?.kind === "metric" && modal.id ? metrics.find((m) => m.id === modal.id) : undefined;
+  const [editOpen, setEditOpen] = useState(false);
+  const channelByIdLocal = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
+
+  const isYt = Boolean(editing?.externalId?.startsWith("yt:"));
+  const videoId = isYt ? editing!.externalId!.slice(3) : null;
+  const thumbUrl = editing ? thumbnailForModal(editing) : null;
+
+  const engagement = editing ? editing.likes + editing.comments + editing.shares : 0;
+  const engagementBase = engagement || 1;
+  const likePct = editing ? Math.round((editing.likes / engagementBase) * 100) : 0;
+  const commentPct = editing ? Math.round((editing.comments / engagementBase) * 100) : 0;
+  const sharePct = editing ? Math.round((editing.shares / engagementBase) * 100) : 0;
+  const netSubscribers = editing ? (editing.subscribersGained ?? 0) - (editing.subscribersLost ?? 0) : 0;
+  const avgCtr = editing?.impressionClickThroughRate ?? 0;
+  const avgRetention = editing?.averageViewPercentage ?? 0;
+  const watchTime = editing?.watchTimeMinutes ?? 0;
+
+  function createImprovementTask(metric: PostMetric) {
+    const column = taskColumns.slice().sort((a, b) => a.order - b.order)[0];
+    if (!column) return;
+    setTasks((current) => [{
+      id: crypto.randomUUID(),
+      title: `Melhorar resultado: ${metric.postTitle}`,
+      columnId: column.id,
+      order: current.filter((t) => t.columnId === column.id).length + 1,
+      priority: metric.leads === 0 ? "Alta" : "Média",
+      progress: "Atenção",
+      createdBy: currentUser.id,
+      assignedTo: [],
+      relatedTo: "Métricas",
+      funnelStageId: metric.funnelStageId,
+      dueDate: todayIso(),
+      description: `Analisar métrica do post "${metric.postTitle}". Views: ${metric.reach}. Aprendizado: ${metric.learning || "sem aprendizado registrado"}.`,
+      checklist: [
+        { id: crypto.randomUUID(), label: "Identificar hipótese do baixo desempenho", done: false },
+        { id: crypto.randomUUID(), label: "Propor ajuste de conteúdo ou campanha", done: false }
+      ],
+      comments: [],
+      attachments: [],
+      ...defaultTaskResetFields()
+    }, ...current]);
+  }
+
+  function createPostIdea(metric: PostMetric) {
+    setIdeas((current) => [{
+      id: crypto.randomUUID(),
+      title: `Replicar formato: ${metric.postTitle}`,
+      description: `Ideia criada a partir de uma métrica com bom resultado. Aprendizado: ${metric.learning || "sem aprendizado registrado"}.`,
+      productLineId: metric.productLineId,
+      vehicleTypeId: metric.vehicleTypeId,
+      contentTypeId: metric.contentTypeId,
+      type: "Postagem",
+      channelId: metric.channelId,
+      format: defaultPostFormatForChannel(channelByIdLocal.get(metric.channelId)),
+      funnelStageId: metric.funnelStageId,
+      createdBy: currentUser.id,
+      priority: "Alta",
+      order: current.length + 1,
+      attachments: []
+    }, ...current]);
+  }
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const postId = String(form.get("postId") ?? "");
-    const linkedPost = posts.find((post) => post.id === postId);
+    const linkedPost = posts.find((p) => p.id === postId);
     const value: PostMetric = {
+      ...(editing ?? {} as PostMetric),
       id: editing?.id ?? crypto.randomUUID(),
-      externalId: editing?.externalId,
-      videoType: editing?.videoType,
       postId: postId || undefined,
       postTitle: linkedPost?.title || String(form.get("postTitle")) || "Métrica avulsa",
       channelId: linkedPost?.channelId || String(form.get("channelId")) || "",
@@ -10880,18 +11191,199 @@ function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, con
       clicks: Number(form.get("clicks")),
       leads: Number(form.get("leads")),
       notes: String(form.get("notes")),
-      learning: String(form.get("learning"))
+      learning: String(form.get("learning")),
     };
     setMetrics((current) => {
-      if (editing) return current.map((metric) => metric.id === value.id ? value : metric);
-      // Evita duplicar: se já existe métrica com o mesmo postId, atualiza em vez de criar
+      if (editing) return current.map((m) => m.id === value.id ? value : m);
       const samePost = value.postId ? current.find((m) => m.postId === value.postId) : undefined;
       if (samePost) return current.map((m) => m.id === samePost.id ? { ...value, id: samePost.id } : m);
       return [value, ...current];
     });
     close();
   }
-  return <><EntityForm onSubmit={submit}><Select name="postId" label="Post vinculado" defaultValue={editing?.postId ?? ""} options={[["", "Métrica avulsa"], ...posts.map((post) => [post.id, post.title])]} /><TextInput name="postTitle" label="Nome do post/registro" required defaultValue={editing?.postTitle} /><TextInput name="date" label="Data da métrica" type="date" required defaultValue={editing?.date ?? todayIso()} /><Select name="channelId" label="Canal" defaultValue={editing?.channelId} options={channels.map((item) => [item.id, item.name])} /><Select name="campaignId" label="Campanha" defaultValue={editing?.campaignId} options={campaigns.map((item) => [item.id, item.name])} /><Select name="productLineId" label="Linha" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />{["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => <TextInput key={field} name={field} label={field} type="number" required defaultValue={String((editing as unknown as Record<string, number | undefined>)?.[field] ?? "")} />)}<TextArea name="notes" label="Observações do resultado" defaultValue={editing?.notes} /><TextArea name="learning" label="Aprendizado" defaultValue={editing?.learning} /><SubmitButton>Salvar</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir métrica" onDelete={() => { setMetrics((current) => current.filter((metric) => metric.id !== editing.id)); close(); }} />}</>;
+
+  // Novo registro — layout simplificado de formulário
+  if (!editing) {
+    return (
+      <EntityForm onSubmit={submit}>
+        <Select name="postId" label="Post vinculado" defaultValue="" options={[["", "Métrica avulsa"], ...posts.map((p) => [p.id, p.title])]} />
+        <TextInput name="postTitle" label="Nome do registro" required defaultValue="" />
+        <TextInput name="date" label="Data" type="date" required defaultValue={todayIso()} />
+        <Select name="channelId" label="Canal" defaultValue="" options={channels.map((c) => [c.id, c.name])} />
+        <Select name="campaignId" label="Campanha" defaultValue="" options={campaigns.map((c) => [c.id, c.name])} />
+        <Select name="productLineId" label="Linha" defaultValue="" options={[["", "Sem linha"], ...productLines.map((c) => [c.id, c.name])]} />
+        {["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => (
+          <TextInput key={field} name={field} label={field} type="number" required defaultValue="0" />
+        ))}
+        <TextArea name="notes" label="Observações" defaultValue="" />
+        <TextArea name="learning" label="Aprendizado" defaultValue="" />
+        <SubmitButton>Criar métrica</SubmitButton>
+      </EntityForm>
+    );
+  }
+
+  return (
+    <>
+      {/* ── Header com thumbnail ─────────────────────────────── */}
+      {thumbUrl && (
+        <div className="relative mb-5 overflow-hidden rounded-3xl bg-slate-900">
+          <img src={thumbUrl} alt="" className="w-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
+          <div className="absolute bottom-0 left-0 right-0 p-4">
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {editing.videoType === "short" && <span className="rounded-full bg-red-600 px-2.5 py-0.5 text-xs font-black text-white">Shorts</span>}
+              {editing.videoType === "video" && <span className="rounded-full bg-blue-600 px-2.5 py-0.5 text-xs font-black text-white">Vídeo</span>}
+              {editing.privacyStatus === "private" && <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-black text-white">🔒 Privado</span>}
+              {editing.privacyStatus === "unlisted" && <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-black text-white">🔗 Não listado</span>}
+              {editing.date && <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs font-black text-white">{new Date(`${editing.date}T12:00:00`).toLocaleDateString("pt-BR")}</span>}
+            </div>
+            <h3 className="text-lg font-black leading-tight text-white">{editing.postTitle}</h3>
+          </div>
+        </div>
+      )}
+
+      {/* ── KPI Cards ───────────────────────────────────────── */}
+      {isYt ? (
+        <div className="mb-5 grid grid-cols-3 gap-3">
+          <StatCard label="Visualizações" value={formatNumber(editing.reach)} color="blue" />
+          <StatCard label="Impressões" value={editing.impressions ? formatNumber(editing.impressions) : "—"} color="slate" />
+          <StatCard label="CTR" value={avgCtr ? formatPercent(avgCtr) : "—"} color="orange" />
+          <StatCard label="Retenção média" value={avgRetention ? formatPercent(avgRetention) : "—"} color="emerald" />
+          <StatCard label="Watch Time" value={watchTime ? `${formatNumber(Math.round(watchTime))} min` : "—"} color="violet" />
+          <StatCard label="Inscritos líquidos" value={(netSubscribers >= 0 ? "+" : "") + formatNumber(netSubscribers)} color={netSubscribers >= 0 ? "green" : "red"} />
+        </div>
+      ) : (
+        <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StatCard label="Alcance" value={formatNumber(editing.reach)} color="blue" />
+          <StatCard label="Engajamento" value={formatNumber(engagement)} color="violet" />
+          <StatCard label="Cliques" value={formatNumber(editing.clicks)} color="cyan" />
+          <StatCard label="Leads" value={formatNumber(editing.leads)} color="green" />
+        </div>
+      )}
+
+      {/* ── Engajamento barras ──────────────────────────────── */}
+      {engagement > 0 && (
+        <div className="mb-5 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h4 className="font-black text-slate-700">Engajamento</h4>
+            <span className="text-sm font-bold text-slate-500">{formatNumber(engagement)} interações</span>
+          </div>
+          <div className="space-y-2.5">
+            <EngagementBar label="Curtidas" value={editing.likes} pct={likePct} color="bg-rose-400" />
+            <EngagementBar label="Comentários" value={editing.comments} pct={commentPct} color="bg-blue-400" />
+            <EngagementBar label="Compartilhamentos" value={editing.shares} pct={sharePct} color="bg-violet-400" />
+          </div>
+        </div>
+      )}
+
+      {/* ── Funil de impressões ─────────────────────────────── */}
+      {editing.impressions && editing.impressions > 0 && (
+        <div className="mb-5 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+          <h4 className="mb-3 font-black text-slate-700">Funil de Impressões</h4>
+          <div className="grid grid-cols-3 gap-2">
+            <FunnelBlock label="Impressões" value={formatNumber(editing.impressions)} pct={100} colorClass="border-blue-100 bg-blue-50 text-blue-800" />
+            <FunnelBlock
+              label={`Cliques · CTR`}
+              value={formatNumber(Math.round(editing.impressions * avgCtr / 100))}
+              pct={avgCtr}
+              colorClass="border-indigo-100 bg-indigo-50 text-indigo-800"
+            />
+            <FunnelBlock
+              label="Views"
+              value={formatNumber(editing.reach)}
+              pct={Math.min(100, (editing.reach / editing.impressions) * 100)}
+              colorClass="border-violet-100 bg-violet-50 text-violet-800"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ── Aprendizado / notas ─────────────────────────────── */}
+      {(editing.learning || editing.notes) && (
+        <div className="mb-5 space-y-2">
+          {editing.learning && (
+            <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-emerald-600">Aprendizado</p>
+              <p className="mt-1 text-sm font-bold text-emerald-900">{editing.learning}</p>
+            </div>
+          )}
+          {editing.notes && (
+            <div className="rounded-2xl border border-slate-100 bg-slate-50 p-3">
+              <p className="text-[10px] font-black uppercase tracking-wide text-slate-500">Observações</p>
+              <p className="mt-1 text-sm font-bold text-slate-700">{editing.notes}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Editar informações (colapsável) ─────────────────── */}
+      <div className="mb-5 overflow-hidden rounded-3xl border border-slate-100">
+        <button
+          type="button"
+          onClick={() => setEditOpen((v) => !v)}
+          className="flex w-full items-center justify-between px-4 py-3 text-sm font-black text-slate-600 hover:bg-slate-50"
+        >
+          <span>Editar informações</span>
+          <span className="text-slate-400">{editOpen ? "▴" : "▾"}</span>
+        </button>
+        {editOpen && (
+          <div className="border-t border-slate-100 px-4 pb-4 pt-3">
+            <EntityForm onSubmit={submit}>
+              <Select name="postId" label="Post vinculado" defaultValue={editing.postId ?? ""} options={[["", "Métrica avulsa"], ...posts.map((p) => [p.id, p.title])]} />
+              <TextInput name="postTitle" label="Nome do post/registro" required defaultValue={editing.postTitle} />
+              <TextInput name="date" label="Data da métrica" type="date" required defaultValue={editing.date ?? todayIso()} />
+              <Select name="channelId" label="Canal" defaultValue={editing.channelId} options={channels.map((c) => [c.id, c.name])} />
+              <Select name="campaignId" label="Campanha" defaultValue={editing.campaignId} options={campaigns.map((c) => [c.id, c.name])} />
+              <Select name="productLineId" label="Linha" defaultValue={editing.productLineId} options={[["", "Sem linha específica"], ...productLines.map((c) => [c.id, c.name])]} />
+              <Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((c) => [c.id, c.name])]} />
+              <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing.contentTypeId} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((c) => [c.id, c.name])]} />
+              <Select name="funnelStageId" label="Funil" defaultValue={editing.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((c) => [c.id, c.name])]} />
+              {["reach", "likes", "comments", "shares", "clicks", "leads"].map((field) => (
+                <TextInput key={field} name={field} label={field} type="number" required defaultValue={String((editing as unknown as Record<string, number | undefined>)?.[field] ?? "")} />
+              ))}
+              <TextArea name="notes" label="Observações do resultado" defaultValue={editing.notes} />
+              <TextArea name="learning" label="Aprendizado" defaultValue={editing.learning} />
+              <SubmitButton>Salvar alterações</SubmitButton>
+            </EntityForm>
+          </div>
+        )}
+      </div>
+
+      {/* ── Rodapé de ações ─────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-4">
+        {videoId && (
+          <a
+            href={`https://www.youtube.com/watch?v=${videoId}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 rounded-2xl bg-red-50 px-4 py-2 text-sm font-black text-red-700 hover:bg-red-100"
+          >
+            <Youtube size={15} /> Abrir no YouTube
+          </a>
+        )}
+        <button
+          type="button"
+          onClick={() => { createImprovementTask(editing); close(); }}
+          className="rounded-2xl bg-amber-50 px-4 py-2 text-sm font-black text-amber-700 hover:bg-amber-100"
+        >
+          Criar tarefa
+        </button>
+        <button
+          type="button"
+          onClick={() => { createPostIdea(editing); close(); }}
+          className="rounded-2xl bg-blue-50 px-4 py-2 text-sm font-black text-blue-700 hover:bg-blue-100"
+        >
+          Criar ideia similar
+        </button>
+        <div className="ml-auto">
+          <DeleteButton
+            label="Excluir métrica"
+            onDelete={() => { setMetrics((current) => current.filter((m) => m.id !== editing.id)); close(); }}
+          />
+        </div>
+      </div>
+    </>
+  );
 }
 
 function PostModal({ modal, currentUser, profiles, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, posts, setPosts, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
