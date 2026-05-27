@@ -76,6 +76,13 @@ export type TikTokProfile = {
   videoCount: number;
 };
 
+export type TikTokVideoListSummary = {
+  totalFetched: number;
+  pagesFetched: number;
+  hasMore: boolean;
+  stoppedByLimit: boolean;
+};
+
 export async function getTikTokStatus(): Promise<TikTokConnectionStatus> {
   return fetchJson<TikTokConnectionStatus>("/api/tiktok/status");
 }
@@ -89,6 +96,6 @@ export async function disconnectTikTokConnection(): Promise<void> {
   await fetchJson<{ ok: true }>("/api/tiktok/disconnect", { method: "POST" });
 }
 
-export async function listTikTokVideos(): Promise<{ profile: TikTokProfile; videos: TikTokVideo[] }> {
-  return fetchJson<{ profile: TikTokProfile; videos: TikTokVideo[] }>("/api/tiktok/videos", undefined, 45000);
+export async function listTikTokVideos(): Promise<{ profile: TikTokProfile; videos: TikTokVideo[]; importSummary?: TikTokVideoListSummary }> {
+  return fetchJson<{ profile: TikTokProfile; videos: TikTokVideo[]; importSummary?: TikTokVideoListSummary }>("/api/tiktok/videos", undefined, 90000);
 }

@@ -16,6 +16,10 @@ const VIDEO_FIELDS = [
   "share_count"
 ].join(",");
 
+const MAX_TIKTOK_VIDEO_PAGES = 50;
+const MAX_TIKTOK_VIDEOS = 1000;
+const TIKTOK_PAGE_SIZE = 20;
+
 function normalizeVideo(item: any) {
   return {
     id: String(item.id || ""),
@@ -40,8 +44,11 @@ export async function GET(request: Request) {
     const videos: any[] = [];
     let cursor: number | undefined;
     let hasMore = true;
+    let pagesFetched = 0;
+    let stoppedByLimit = false;
+    const seenCursors = new Set<number>();
 
-    for (let page = 0; page < 10 && hasMore; page += 1) {
+    while (hasMore && pagesFetched < MAX_TIKTOK_VIDEO_PAGES && videos.length < MAX_TIKTOK_VIDEOS) {
       const response = await fetch(`https://open.tiktokapis.com/v2/video/list/?fields=${encodeURIComponent(VIDEO_FIELDS)}`, {
         method: "POST",
         headers: {
@@ -49,7 +56,7 @@ export async function GET(request: Request) {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          max_count: 20,
+          max_count: TIKTOK_PAGE_SIZE,
           ...(cursor != null ? { cursor } : {})
         })
       });
@@ -58,9 +65,22 @@ export async function GET(request: Request) {
         throw new Error(data?.error?.message || data?.error?.code || "Nao foi possivel listar videos do TikTok.");
       }
       videos.push(...(data?.data?.videos ?? []));
+      pagesFetched += 1;
       hasMore = Boolean(data?.data?.has_more);
-      cursor = data?.data?.cursor;
-      if (cursor == null) hasMore = false;
+      const nextCursor = data?.data?.cursor;
+      if (nextCursor == null) {
+        hasMore = false;
+      } else if (seenCursors.has(Number(nextCursor))) {
+        stoppedByLimit = true;
+        hasMore = false;
+      } else {
+        cursor = Number(nextCursor);
+        seenCursors.add(cursor);
+      }
+    }
+
+    if (hasMore && (pagesFetched >= MAX_TIKTOK_VIDEO_PAGES || videos.length >= MAX_TIKTOK_VIDEOS)) {
+      stoppedByLimit = true;
     }
 
     return NextResponse.json({
@@ -73,7 +93,13 @@ export async function GET(request: Request) {
         likesCount: Number(userInfo.likes_count || 0),
         videoCount: Number(userInfo.video_count || 0)
       },
-      videos: videos.map(normalizeVideo).filter((item) => item.id)
+      videos: videos.slice(0, MAX_TIKTOK_VIDEOS).map(normalizeVideo).filter((item) => item.id),
+      importSummary: {
+        totalFetched: videos.length,
+        pagesFetched,
+        hasMore,
+        stoppedByLimit
+      }
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Erro ao importar dados do TikTok." }, { status: 401 });

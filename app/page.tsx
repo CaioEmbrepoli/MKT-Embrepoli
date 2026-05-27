@@ -9844,7 +9844,16 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
 }) {
   const [phase, setPhase] = useState<"idle" | "fetching" | "saving" | "done" | "error">("idle");
   const [error, setError] = useState("");
-  const [summary, setSummary] = useState({ created: 0, updated: 0, videos: 0 });
+  const [summary, setSummary] = useState({
+    created: 0,
+    updated: 0,
+    videos: 0,
+    totalFetched: 0,
+    pagesFetched: 0,
+    profileVideoCount: 0,
+    hasMore: false,
+    stoppedByLimit: false
+  });
   const [status, setStatus] = useState<TikTokConnectionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
 
@@ -9875,7 +9884,7 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
     setError("");
     try {
       setPhase("fetching");
-      const { videos } = await listTikTokVideos();
+      const { profile, videos, importSummary } = await listTikTokVideos();
       setPhase("saving");
 
       const tiktokChannelId =
@@ -9938,7 +9947,16 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
         return Array.from(byId.values());
       });
       void reloadData?.();
-      setSummary({ created, updated, videos: videos.length });
+      setSummary({
+        created,
+        updated,
+        videos: videos.length,
+        totalFetched: importSummary?.totalFetched ?? videos.length,
+        pagesFetched: importSummary?.pagesFetched ?? 0,
+        profileVideoCount: profile.videoCount,
+        hasMore: Boolean(importSummary?.hasMore),
+        stoppedByLimit: Boolean(importSummary?.stoppedByLimit)
+      });
       setPhase("done");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro desconhecido ao importar TikTok.");
@@ -10003,6 +10021,15 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
               <p className="mt-1 text-sm font-bold text-green-700">
                 {summary.videos} vídeos encontrados · {summary.created} novos · {summary.updated} atualizados
               </p>
+              <p className="mt-1 text-xs font-bold text-green-700/80">
+                {summary.pagesFetched ? `${summary.pagesFetched} página${summary.pagesFetched === 1 ? "" : "s"} buscada${summary.pagesFetched === 1 ? "" : "s"}` : "Busca concluída"}
+                {summary.profileVideoCount ? ` · Perfil informa ${formatNumber(summary.profileVideoCount)} vídeos` : ""}
+              </p>
+              {summary.stoppedByLimit && (
+                <p className="mt-3 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
+                  A API ainda indicou mais vídeos após o limite de segurança. Reexecute a importação ou aumente o limite técnico se isso continuar acontecendo.
+                </p>
+              )}
             </div>
             <button type="button" onClick={onClose} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
               Fechar
