@@ -680,10 +680,22 @@ const metricEngagementRate = (metric: PostMetric) => metric.reach ? (metricEngag
 const metricConversionRate = (metric: PostMetric) => metric.clicks ? (metric.leads / metric.clicks) * 100 : 0;
 
 function thumbnailFor(metric: PostMetric): string | null {
-  if (metric.thumbnailUrl) return metric.thumbnailUrl;
+  if (metric.thumbnailUrl) return proxiedThumbnailUrl(metric.thumbnailUrl);
   const ext = metric.externalId;
   if (ext?.startsWith("yt:")) return `https://i.ytimg.com/vi/${ext.slice(3)}/mqdefault.jpg`;
   return null;
+}
+
+function proxiedThumbnailUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+    const shouldProxy = ["tiktok", "tiktokcdn", "muscdn", "byteimg"].some((part) => host.includes(part));
+    if (shouldProxy) return `/api/tiktok/thumb?url=${encodeURIComponent(url)}`;
+  } catch {
+    return url;
+  }
+  return url;
 }
 
 function metricMatchesFilter(value: string | undefined, filter: string): boolean {
@@ -7841,13 +7853,7 @@ function Metrics({
                   return (
                     <button key={metric.id} type="button" onClick={() => setModal({ kind: "metric", id: metric.id })} className="overflow-hidden rounded-3xl bg-white text-left shadow-sm transition hover:shadow-md hover:-translate-y-0.5">
                       <div className="relative aspect-video bg-slate-100">
-                        {thumb ? (
-                          <img src={thumb} className="h-full w-full object-cover" alt="" />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center">
-                            <FileVideo size={28} className="text-slate-300" />
-                          </div>
-                        )}
+                        <MetricThumbnail src={thumb} className="h-full w-full object-cover" fallbackClassName="h-full w-full" />
                         {metric.privacyStatus === "private" && <span className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-black text-white">🔒 Privado</span>}
                         {metric.privacyStatus === "unlisted" && <span className="absolute right-2 top-2 rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-black text-white">🔗 Não listado</span>}
                       </div>
@@ -8013,13 +8019,7 @@ function Metrics({
                   return (
                     <button key={metric.id} type="button" onClick={() => setModal({ kind: "metric", id: metric.id })} className="overflow-hidden rounded-3xl bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
                       <div className="relative aspect-[9/12] bg-slate-100">
-                        {thumb ? (
-                          <img src={thumb} className="h-full w-full object-cover" alt="" />
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center">
-                            <FileVideo size={28} className="text-slate-300" />
-                          </div>
-                        )}
+                        <MetricThumbnail src={thumb} className="h-full w-full object-cover" fallbackClassName="h-full w-full" />
                         <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-black text-white">TikTok</span>
                       </div>
                       <div className="p-3">
@@ -8132,7 +8132,7 @@ function Metrics({
                 const thumb = thumbnailFor(metric);
                 return (
                   <button key={metric.id} onClick={() => setModal({ kind: "metric", id: metric.id })} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left transition hover:border-blue-200 hover:bg-slate-50">
-                    {thumb ? <img src={thumb} alt="" className="h-14 w-24 shrink-0 rounded-lg object-cover" /> : <div className="flex h-14 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100"><FileVideo size={20} className="text-slate-400" /></div>}
+                    <MetricThumbnail src={thumb} className="h-14 w-24 shrink-0 rounded-lg object-cover" fallbackClassName="h-14 w-24 shrink-0 rounded-lg" />
                     <div className="min-w-0 flex-1">
                       <p className="line-clamp-1 font-black">{metric.postTitle}</p>
                       <p className="text-xs font-bold text-slate-500">{metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}{metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}</p>
@@ -8212,6 +8212,18 @@ function MetricKpiCard({ label, value, delta }: { label: string; value: string; 
       )}
     </div>
   );
+}
+
+function MetricThumbnail({ src, className, fallbackClassName = "" }: { src: string | null; className: string; fallbackClassName?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!src || failed) {
+    return (
+      <div className={`flex items-center justify-center bg-slate-100 ${fallbackClassName}`}>
+        <FileVideo size={28} className="text-slate-300" />
+      </div>
+    );
+  }
+  return <img src={src} className={className} alt="" loading="lazy" onError={() => setFailed(true)} />;
 }
 
 function ChartValueList({ data }: { data: { label: string; value: string }[] }) {
@@ -9561,13 +9573,7 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
                 const thumb = thumbnailFor(metric);
                 return (
                   <button key={metric.id} onClick={() => onPick(metric.id)} className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3 text-left transition hover:border-blue-200 hover:bg-slate-50">
-                    {thumb ? (
-                      <img src={thumb} alt="" className="h-14 w-24 shrink-0 rounded-lg object-cover" />
-                    ) : (
-                      <div className="flex h-14 w-24 shrink-0 items-center justify-center rounded-lg bg-slate-100">
-                        <FileVideo size={20} className="text-slate-400" />
-                      </div>
-                    )}
+                    <MetricThumbnail src={thumb} className="h-14 w-24 shrink-0 rounded-lg object-cover" fallbackClassName="h-14 w-24 shrink-0 rounded-lg" />
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
                         <p className="line-clamp-1 font-black">{metric.postTitle}</p>
@@ -11551,7 +11557,7 @@ function CampaignModalV2({ modal, currentUser, profiles, campaignAudiences, prod
 }
 
 function thumbnailForModal(metric: PostMetric): string | null {
-  if (metric.thumbnailUrl) return metric.thumbnailUrl;
+  if (metric.thumbnailUrl) return proxiedThumbnailUrl(metric.thumbnailUrl);
   const ext = metric.externalId;
   if (ext?.startsWith("yt:")) return `https://i.ytimg.com/vi/${ext.slice(3)}/hqdefault.jpg`;
   return null;
