@@ -557,8 +557,8 @@ export async function replaceTasks(client: SupabaseClient, tasks: Task[], previo
     funnel_stage_id: nullableText(item.funnelStageId),
     created_by: nullableText(item.createdBy),
     title: item.title,
-    priority: item.priority,
-    progress: item.progress,
+    priority: nullableText(item.priority),
+    progress: nullableText(item.progress),
     related_to: item.relatedTo ?? "",
     description: item.description ?? "",
     due_date: nullableText(item.dueDate),
@@ -909,8 +909,8 @@ function mapTask(row: any, assignees: any[], checklist: any[], comments: any[], 
     title: row.title,
     columnId: row.task_column_id ?? "",
     order: row.sort_order,
-    priority: row.priority,
-    progress: row.progress,
+    priority: row.priority ?? "",
+    progress: row.progress ?? "",
     createdBy: row.created_by ?? "",
     assignedTo: assignees.map((item) => item.profile_id),
     relatedTo: row.related_to ?? "",
@@ -1343,8 +1343,11 @@ function mapSalesClient(row: any): SalesClient {
     lastPurchaseAt: row.last_purchase_at ?? "",
     status: row.status ?? "lead",
     source: row.source ?? "manual",
+    cpf: row.cpf ?? "",
+    cnpj: row.cnpj ?? "",
     assignedTo: row.assigned_to ?? "",
     notes: row.notes ?? "",
+    sourceCustom: row.source_custom ?? "",
     proposals: Array.isArray(row.proposals) ? (row.proposals as SalesProposal[]) : [],
     salesFunnelStage: row.sales_funnel_stage ?? "lead",
     createdAt: row.created_at ?? new Date().toISOString()
@@ -1368,6 +1371,9 @@ export async function saveSalesClient(client: SupabaseClient, item: SalesClient)
     last_purchase_at: item.lastPurchaseAt || null,
     status: item.status,
     source: item.source,
+    source_custom: item.sourceCustom || null,
+    cpf: item.cpf || null,
+    cnpj: item.cnpj || null,
     assigned_to: item.assignedTo || null,
     notes: item.notes,
     proposals: item.proposals,
@@ -1420,6 +1426,7 @@ function mapCallSchedule(row: any): CallSchedule {
     createdBy: row.created_by ?? "",
     active: row.active ?? true,
     archived: row.archived ?? false,
+    manualDate: row.manual_date ?? false,
     notes: row.notes ?? ""
   };
 }
@@ -1440,6 +1447,7 @@ export async function saveCallSchedule(client: SupabaseClient, item: CallSchedul
     created_by: item.createdBy,
     active: item.active,
     archived: item.archived,
+    manual_date: item.manualDate ?? false,
     notes: item.notes
   });
   if (error) throw new Error(`call_schedules upsert: ${error.message}`);
@@ -1449,3 +1457,61 @@ export async function deleteCallSchedule(client: SupabaseClient, id: string) {
   await deleteById(client, "call_schedules", id);
 }
 
+// ── Feedback ──────────────────────────────────────────────────────────────────
+
+export async function saveFeedback(
+  client: SupabaseClient,
+  organizationId: string,
+  item: Pick<import("./types").AppFeedback, "createdBy" | "kind" | "description" | "attachments">
+): Promise<string> {
+  const id = crypto.randomUUID();
+  await client.from("feedback").insert({
+    id,
+    organization_id: organizationId,
+    created_by: item.createdBy,
+    kind: item.kind,
+    description: item.description,
+    attachments: item.attachments,
+  });
+  return id;
+}
+
+export async function loadFeedbacks(client: SupabaseClient): Promise<import("./types").AppFeedback[]> {
+  const organizationId = await currentOrganizationId(client);
+  const { data } = await client
+    .from("feedback")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .order("created_at", { ascending: false });
+  return (data ?? []).map((row) => ({
+    id: row.id as string,
+    organizationId: row.organization_id as string,
+    createdBy: row.created_by as string,
+    kind: row.kind as import("./types").FeedbackKind,
+    description: row.description as string,
+    attachments: (row.attachments ?? []) as import("./types").FileAttachment[],
+    status: row.status as import("./types").FeedbackStatus,
+    createdAt: row.created_at as string,
+    reply: row.reply as string | undefined,
+    repliedBy: row.replied_by as string | undefined,
+    repliedAt: row.replied_at as string | undefined,
+  }));
+}
+
+export async function replyFeedback(
+  client: SupabaseClient,
+  feedbackId: string,
+  reply: string,
+  repliedBy: string
+): Promise<void> {
+  await client.from("feedback").update({
+    reply,
+    replied_by: repliedBy,
+    replied_at: new Date().toISOString(),
+    status: "resolvido",
+  }).eq("id", feedbackId);
+}
+
+export async function deleteFeedback(client: SupabaseClient, id: string): Promise<void> {
+  await client.from("feedback").delete().eq("id", id);
+}

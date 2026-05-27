@@ -480,6 +480,8 @@ export type SalesClient = {
   externalCode: string;
   name: string;
   clientType: string;
+  cpf?: string;
+  cnpj?: string;
   email: string;
   phone: string;
   company: string;
@@ -489,6 +491,7 @@ export type SalesClient = {
   lastPurchaseAt: string;
   status: SalesClientStatus;
   source: SalesClientSource;
+  sourceCustom?: string;
   assignedTo: string;
   notes: string;
   proposals: SalesProposal[];
@@ -521,7 +524,27 @@ export type CallSchedule = {
   active: boolean;
   paused?: boolean;
   archived?: boolean;
+  manualDate?: boolean;
   notes: string;
+};
+
+// ── Feedback ──────────────────────────────────────────────────────────────────
+
+export type FeedbackKind = "duvida" | "problema" | "ideia";
+export type FeedbackStatus = "novo" | "visto" | "resolvido";
+
+export type AppFeedback = {
+  id: string;
+  organizationId: string;
+  createdBy: string;
+  kind: FeedbackKind;
+  description: string;
+  attachments: FileAttachment[];
+  status: FeedbackStatus;
+  createdAt: string;
+  reply?: string;
+  repliedBy?: string;
+  repliedAt?: string;
 };
 
 

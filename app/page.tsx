@@ -22,6 +22,7 @@ import { CSS } from "@dnd-kit/utilities";
 import Image from "next/image";
 import {
   BarChart3,
+  AlertTriangle,
   CalendarDays,
   Camera,
   CheckCircle2,
@@ -146,7 +147,11 @@ import {
   saveTask,
   saveTaskBoard,
   saveTaskColumn,
-  saveVehicleType
+  saveVehicleType,
+  saveFeedback,
+  loadFeedbacks,
+  replyFeedback,
+  deleteFeedback
 } from "@/lib/supabase-data";
 import type {
   AutoFilter,
@@ -198,7 +203,9 @@ import type {
   SalesFunnelStage,
   CallSchedule,
   CallFrequency,
-  CallLog
+  CallLog,
+  FeedbackKind,
+  AppFeedback
 } from "@/lib/types";
 import {
   Area,
@@ -1054,6 +1061,7 @@ export default function Home() {
   const [saveError, setSaveError] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewItem | null>(null);
   const [calendarMode, setCalendarMode] = useState<"Semana" | "Mês" | "Ano">("Mês");
   const [visibleMonth, setVisibleMonth] = useState(new Date());
@@ -2168,12 +2176,12 @@ export default function Home() {
       title: cleanTitle,
       columnId,
       order: tasks.filter((item) => item.columnId === columnId && !item.parentTaskId).length + 1,
-      priority: "Média",
-      progress: "No prazo",
+      priority: "",
+      progress: "",
       createdBy: currentUser.id,
       assignedTo: [],
       relatedTo: "",
-      funnelStageId: funnelStages[0]?.id ?? "",
+      funnelStageId: "",
       dueDate: todayIso(),
       description: "",
       checklist: [],
@@ -2209,8 +2217,8 @@ export default function Home() {
       title: cleanTitle,
       columnId: parentTask.columnId,
       order: tasks.filter((task) => task.parentTaskId === parentTask.id).length + 1,
-      priority: "Média",
-      progress: "No prazo",
+      priority: "",
+      progress: "",
       createdBy: currentUser.id,
       assignedTo: [],
       relatedTo: parentTask.title,
@@ -2342,6 +2350,10 @@ export default function Home() {
             saveError={saveError}
             logout={handleLogout}
             realtimeSyncing={realtimeSyncing}
+            feedbackOpen={feedbackOpen}
+            setFeedbackOpen={setFeedbackOpen}
+            organizationId={currentUser.organizationId}
+            profiles={profiles}
           />
 
           {activeSection === "marketing-painel" && (
@@ -2493,6 +2505,7 @@ export default function Home() {
               callSchedules={callSchedules}
               setCallSchedules={syncCallSchedules}
               profiles={profiles}
+              profileAreas={profileAreas}
               currentUser={currentUser}
               filter={salesClientFilter}
               setFilter={setSalesClientFilter}
@@ -2519,6 +2532,7 @@ export default function Home() {
               callSchedules={callSchedules}
               setCallSchedules={syncCallSchedules}
               profiles={profiles}
+              profileAreas={profileAreas}
               currentUser={currentUser}
             />
           )}
@@ -2859,7 +2873,7 @@ function NoTeamScreen({ onRetry, onLogout }: { onRetry: () => void; onLogout: ()
           Seu cadastro ainda não pertence a nenhuma equipe. Aguarde um Gestor ou Administrador selecionar sua equipe.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
-          <button type="button" onClick={onRetry} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Tentar novamente</button>
+          <button type="button" onClick={() => window.location.reload()} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Recarregar</button>
           <button type="button" onClick={onLogout} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Sair da conta</button>
         </div>
       </section>
@@ -2889,9 +2903,68 @@ function nextCallDate(from: Date, freq: CallFrequency): string {
   const d = new Date(from);
   const days = freq === "daily" ? 1 : freq === "weekly" ? 7 : freq === "biweekly" ? 14 : 30;
   d.setDate(d.getDate() + days);
-  // Ajusta para próximo dia útil (pula sáb/dom)
   while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+// Retorna a segunda-feira da semana que contém 'date'
+function weekStart(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay(); // 0=dom, 1=seg...6=sab
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return d;
+}
+
+// Retorna o início da janela alvo conforme a frequência (semana correta)
+function targetWindowStart(from: Date, freq: CallFrequency): Date {
+  if (freq === "daily") {
+    const d = new Date(from);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() + 1);
+    return d;
+  }
+  const weeksAhead = freq === "weekly" ? 1 : freq === "biweekly" ? 2 : 4;
+  const ws = weekStart(from);
+  ws.setDate(ws.getDate() + weeksAhead * 7);
+  return ws;
+}
+
+// Calcula a próxima data automática respeitando o limite de 20 ligações/dia/vendedor.
+// Datas manuais (manualDate=true) não entram no contador.
+function calculateAutoNextDate(
+  from: Date,
+  freq: CallFrequency,
+  assignedTo: string,
+  allSchedules: CallSchedule[],
+  excludeId?: string
+): string {
+  const LIMIT = 20;
+  const candidate = targetWindowStart(from, freq);
+
+  for (let attempts = 0; attempts < 90; attempts++) {
+    // Pula sábado (6) e domingo (0) — só seg–sex
+    if (candidate.getDay() === 0 || candidate.getDay() === 6) {
+      candidate.setDate(candidate.getDate() + 1);
+      continue;
+    }
+    const dateStr = candidate.toISOString().slice(0, 10);
+    const count = allSchedules.filter(
+      (s) =>
+        s.id !== excludeId &&
+        s.active &&
+        !s.archived &&
+        !s.manualDate &&
+        s.assignedTo === assignedTo &&
+        s.nextCallAt === dateStr
+    ).length;
+    if (count < LIMIT) return dateStr;
+    candidate.setDate(candidate.getDate() + 1);
+  }
+
+  // Fallback sem balanceamento
+  return nextCallDate(from, freq);
 }
 
 function callUrgency(nextCallAt: string): "overdue" | "today" | "upcoming" {
@@ -2944,6 +3017,7 @@ type ImportedSalesClientRow = {
   stateUf: string;
   city: string;
   lastPurchaseAt: string;
+  frequency?: CallFrequency;
 };
 
 type SalesClientImportResult = {
@@ -2952,6 +3026,7 @@ type SalesClientImportResult = {
   updated: number;
   unchanged: number;
   updatedFields: number;
+  schedulesCreated: number;
 };
 
 function cleanImportCell(value: unknown): string {
@@ -2993,6 +3068,15 @@ function formatSalesClientDate(date: string): string {
   return `${day}/${month}/${year}`;
 }
 
+function parseFrequency(value: string): CallFrequency | null {
+  const v = value.trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (v === "diario" || v === "diaria") return "daily";
+  if (v === "semanal") return "weekly";
+  if (v === "quinzenal") return "biweekly";
+  if (v === "mensal") return "monthly";
+  return null;
+}
+
 async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClientRow[]> {
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
     throw new Error("Importe somente arquivo .xlsx no mesmo formato do arquivo de clientes enviado.");
@@ -3011,24 +3095,29 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
     raw: false
   });
   const header = rows[0]?.map(cleanImportCell) ?? [];
-  const hasExactHeaders = CLIENT_IMPORT_HEADERS.length === header.length && CLIENT_IMPORT_HEADERS.every((h, i) => header[i] === h);
-  if (!hasExactHeaders) {
-    throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")}.`);
+  const coreMatch = CLIENT_IMPORT_HEADERS.every((h, i) => header[i] === h);
+  const hasFreqCol = header.length === 8 && header[7] === "Frequência";
+  const validHeaders = coreMatch && (header.length === 7 || hasFreqCol);
+  if (!validHeaders) {
+    throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")} (+ coluna opcional "Frequência").`);
   }
 
+  const maxCols = hasFreqCol ? 8 : 7;
   const seenCodes = new Set<string>();
   const imported: ImportedSalesClientRow[] = [];
   rows.slice(1).forEach((row, index) => {
     const rowNumber = index + 2;
-    const extraValues = row.slice(CLIENT_IMPORT_HEADERS.length).some((cell) => cleanImportCell(cell));
+    const extraValues = (row as unknown[]).slice(maxCols).some((cell) => cleanImportCell(cell));
     if (extraValues) throw new Error(`Linha ${rowNumber}: o arquivo tem colunas extras e foi recusado.`);
-    const values = row.slice(0, CLIENT_IMPORT_HEADERS.length).map(cleanImportCell);
+    const values = (row as unknown[]).slice(0, 7).map(cleanImportCell);
     if (values.every((value) => !value)) return;
     const [externalCode, name, clientType, phone, stateUf, city] = values;
     if (!externalCode) throw new Error(`Linha ${rowNumber}: Código é obrigatório.`);
     if (!name) throw new Error(`Linha ${rowNumber}: Nome Cliente é obrigatório.`);
     if (seenCodes.has(externalCode)) throw new Error(`Código duplicado no arquivo: ${externalCode}.`);
     seenCodes.add(externalCode);
+    const freqRaw = hasFreqCol ? cleanImportCell((row as unknown[])[7]) : "";
+    const frequency = freqRaw ? (parseFrequency(freqRaw) ?? undefined) : undefined;
     imported.push({
       rowNumber,
       externalCode,
@@ -3037,7 +3126,8 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
       phone,
       stateUf: stateUf.toUpperCase(),
       city,
-      lastPurchaseAt: parseClientImportDate(row[6], rowNumber)
+      lastPurchaseAt: parseClientImportDate((row as unknown[])[6], rowNumber),
+      frequency
     });
   });
 
@@ -3081,7 +3171,7 @@ function normalizeSalesClient(client: SalesClient): SalesClient {
 }
 
 function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSalesClientRow[]): { next: SalesClient[]; result: SalesClientImportResult } {
-  const result: SalesClientImportResult = { rows: imported.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0 };
+  const result: SalesClientImportResult = { rows: imported.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0, schedulesCreated: 0 };
   const next = current.map(normalizeSalesClient);
   const indexByKey = new Map(next.map((client, index) => [salesClientImportKey(client), index]));
   const importFields: (keyof Pick<SalesClient, "externalCode" | "name" | "clientType" | "phone" | "stateUf" | "city" | "lastPurchaseAt">)[] = [
@@ -3134,6 +3224,15 @@ const proposalStatusLabel: Record<SalesProposal["status"], string> = {
   ganha: "Ganha",
   perdida: "Perdida",
   expirada: "Expirada"
+};
+
+const proposalStatusColor: Record<SalesProposal["status"], string> = {
+  rascunho:   "bg-slate-100 text-slate-600",
+  enviada:    "bg-blue-100 text-blue-700",
+  negociacao: "bg-amber-100 text-amber-700",
+  ganha:      "bg-emerald-100 text-emerald-700",
+  perdida:    "bg-rose-100 text-rose-600",
+  expirada:   "bg-slate-100 text-slate-500",
 };
 
 // ─── Painel ───────────────────────────────────────────────────────────────────
@@ -3332,12 +3431,13 @@ function PainelVendas({ salesClients, callSchedules, tasks, salesFunnelStages, o
 
 // ─── Clientes ─────────────────────────────────────────────────────────────────
 
-function ClientesSection({ salesClients, setSalesClients, callSchedules, setCallSchedules, profiles, currentUser, filter, setFilter, search, setSearch }: {
+function ClientesSection({ salesClients, setSalesClients, callSchedules, setCallSchedules, profiles, profileAreas, currentUser, filter, setFilter, search, setSearch }: {
   salesClients: SalesClient[];
   setSalesClients: Dispatch<SetStateAction<SalesClient[]>>;
   callSchedules: CallSchedule[];
   setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
   profiles: Profile[];
+  profileAreas: ProfileArea[];
   currentUser: Profile | null;
   filter: "todos" | SalesClientStatus;
   setFilter: Dispatch<SetStateAction<"todos" | SalesClientStatus>>;
@@ -3384,10 +3484,42 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
   }
 
   function importClients(rows: ImportedSalesClientRow[]): SalesClientImportResult {
-    let result: SalesClientImportResult = { rows: rows.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0 };
+    let result: SalesClientImportResult = { rows: rows.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0, schedulesCreated: 0 };
     setSalesClients((prev) => {
       const merged = mergeImportedSalesClients(prev, rows);
-      result = merged.result;
+      result = { ...merged.result, schedulesCreated: 0 };
+
+      // Criar agendas de ligação para linhas com frequência
+      const newSchedules: CallSchedule[] = [];
+      rows.forEach((row) => {
+        if (!row.frequency) return;
+        const client = merged.next.find((c) => c.externalCode === row.externalCode);
+        if (!client) return;
+        const alreadyExists = callSchedules.some((s) => s.clientId === client.id && s.active);
+        if (alreadyExists) return;
+        const schedule: CallSchedule = {
+          id: crypto.randomUUID(),
+          clientId: client.id,
+          clientName: client.name,
+          phone: client.phone,
+          frequency: row.frequency,
+          nextCallAt: calculateAutoNextDate(new Date(), row.frequency, currentUser?.id ?? "", [...callSchedules, ...newSchedules]),
+          callHistory: [],
+          assignedTo: currentUser?.id ?? "",
+          createdBy: currentUser?.id ?? "",
+          active: true,
+          archived: false,
+          manualDate: false,
+          notes: ""
+        };
+        newSchedules.push(schedule);
+      });
+
+      if (newSchedules.length) {
+        setCallSchedules((prev) => [...prev, ...newSchedules]);
+        result.schedulesCreated = newSchedules.length;
+      }
+
       return merged.next;
     });
     return result;
@@ -3510,6 +3642,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
         <ClienteModal
           client={editing}
           profiles={profiles}
+          profileAreas={profileAreas}
           callSchedules={callSchedules}
           onSave={save}
           onClose={() => { setShowModal(false); setEditing(null); }}
@@ -3675,6 +3808,7 @@ function ClienteImportModal({ onImport, onClose }: {
           <p className="font-black">Importação concluída</p>
           <p>{result.rows} linhas processadas · {result.created} novos · {result.updated} atualizados · {result.unchanged} ignorados iguais.</p>
           {result.updatedFields > 0 && <p>{result.updatedFields} campos diferentes foram atualizados.</p>}
+          {result.schedulesCreated > 0 && <p className="text-blue-700">📞 {result.schedulesCreated} agenda{result.schedulesCreated > 1 ? "s" : ""} de ligação criada{result.schedulesCreated > 1 ? "s" : ""} automaticamente.</p>}
         </div>
       )}
 
@@ -3688,9 +3822,10 @@ function ClienteImportModal({ onImport, onClose }: {
   );
 }
 
-function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequestSchedule }: {
+function ClienteModal({ client, profiles, profileAreas, callSchedules, onSave, onClose, onRequestSchedule }: {
   client: SalesClient;
   profiles: Profile[];
+  profileAreas: ProfileArea[];
   callSchedules: CallSchedule[];
   onSave: (c: SalesClient) => void;
   onClose: () => void;
@@ -3698,6 +3833,7 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequ
 }) {
   const [tab, setTab] = useState<"dados" | "propostas">("dados");
   const [form, setForm] = useState(normalizeSalesClient(client));
+  const [expandedProposal, setExpandedProposal] = useState<string | null>(null);
   const hasSchedule = callSchedules.some((s) => s.clientId === client.id && s.active);
   const bestProposal = clientBestProposalValue(form);
   const openProposalTotal = clientOpenProposalTotal(form);
@@ -3709,6 +3845,7 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequ
   function addProposal() {
     const p: SalesProposal = { id: crypto.randomUUID(), title: "", value: 0, status: "rascunho", createdAt: new Date().toISOString(), notes: "" };
     setForm((f) => ({ ...f, proposals: [...f.proposals, p] }));
+    setExpandedProposal(p.id);
   }
 
   function updateProposal(id: string, patch: Partial<SalesProposal>) {
@@ -3717,12 +3854,20 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequ
 
   function removeProposal(id: string) {
     setForm((f) => ({ ...f, proposals: f.proposals.filter((p) => p.id !== id) }));
+    setExpandedProposal(null);
+  }
+
+  function approveProposal(proposalId: string) {
+    const updatedProposals = form.proposals.map((p) =>
+      p.id === proposalId ? { ...p, status: "ganha" as const } : p
+    );
+    onSave({ ...form, proposals: updatedProposals, status: "cliente" });
   }
 
   return (
     <CenteredModal close={onClose} panelClassName="rounded-[32px] border-0">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-black">{form.name || "Novo cliente"}</h2>
+          <h2 className="text-xl font-black">{form.clientType === "PJ" ? (form.company || form.name || "Novo cliente") : (form.name || "Novo cliente")}</h2>
           <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
         </div>
         <div className="flex gap-2 mb-4">
@@ -3756,18 +3901,40 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequ
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-600 mb-1">Tipo</label>
-              <input value={form.clientType} onChange={(e) => setForm((f) => ({ ...f, clientType: e.target.value.toUpperCase() }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="PJ ou PF" />
+              <div className="flex gap-2">
+                {(["PF", "PJ"] as const).map((t) => (
+                  <button key={t} type="button" onClick={() => setForm((f) => ({ ...f, clientType: t }))}
+                    className={`flex-1 rounded-2xl py-2 text-sm font-black transition ${form.clientType === t ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                    {t}
+                  </button>
+                ))}
+              </div>
             </div>
+            {form.clientType === "PF" && (
+              <div>
+                <label className="block text-sm font-bold text-slate-600 mb-1">CPF</label>
+                <input value={form.cpf ?? ""} onChange={(e) => setForm((f) => ({ ...f, cpf: e.target.value }))}
+                  className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="000.000.000-00" />
+              </div>
+            )}
+            {form.clientType === "PJ" && (
+              <>
+                <div>
+                  <label className="block text-sm font-bold text-slate-600 mb-1">Empresa *</label>
+                  <input value={form.company} onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
+                    className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="Nome da empresa / oficina" />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-600 mb-1">CNPJ</label>
+                  <input value={form.cnpj ?? ""} onChange={(e) => setForm((f) => ({ ...f, cnpj: e.target.value }))}
+                    className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="00.000.000/0000-00" />
+                </div>
+              </>
+            )}
             <div className="md:col-span-2">
-              <label className="block text-sm font-bold text-slate-600 mb-1">Nome Cliente *</label>
+              <label className="block text-sm font-bold text-slate-600 mb-1">{form.clientType === "PJ" ? "Nome do contato (opcional)" : "Nome Cliente *"}</label>
               <input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="Nome do contato" />
-            </div>
-            <div>
-              <label className="block text-sm font-bold text-slate-600 mb-1">Empresa</label>
-              <input value={form.company} onChange={(e) => setForm((f) => ({ ...f, company: e.target.value }))}
-                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" placeholder="Nome da empresa / oficina" />
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-600 mb-1">Telefone</label>
@@ -3810,21 +3977,31 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequ
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-600 mb-1">Origem</label>
-              <select value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value as SalesClientSource }))}
+              <select value={form.source} onChange={(e) => setForm((f) => ({ ...f, source: e.target.value as SalesClientSource, sourceCustom: e.target.value !== "outros" ? "" : f.sourceCustom }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
                 {(["instagram", "youtube", "indicacao", "site", "manual", "outros"] as SalesClientSource[]).map((s) => (
                   <option key={s} value={s}>{salesSourceLabel[s]}</option>
                 ))}
               </select>
+              {form.source === "outros" && (
+                <input
+                  value={form.sourceCustom ?? ""}
+                  onChange={(e) => setForm((f) => ({ ...f, sourceCustom: e.target.value }))}
+                  placeholder="Descreva a origem..."
+                  className="mt-2 w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+                />
+              )}
             </div>
             <div>
               <label className="block text-sm font-bold text-slate-600 mb-1">Responsável</label>
               <select value={form.assignedTo} onChange={(e) => setForm((f) => ({ ...f, assignedTo: e.target.value }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
                 <option value="">Sem responsável</option>
-                {profiles.filter((p) => p.active).map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
+                {profiles
+                  .filter((p) => p.active && profileAreas.some((pa) => pa.profileId === p.id && pa.area === "vendas" && pa.active))
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
               </select>
             </div>
             <div className="md:col-span-2">
@@ -3845,34 +4022,74 @@ function ClienteModal({ client, profiles, callSchedules, onSave, onClose, onRequ
           </div>
         )}
         {tab === "propostas" && (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {form.proposals.map((p) => (
-              <div key={p.id} className="rounded-3xl border border-slate-100 bg-slate-50 p-4">
-                <div className="grid gap-2 md:grid-cols-2">
-                  <input value={p.title} onChange={(e) => updateProposal(p.id, { title: e.target.value })}
-                    placeholder="Título da proposta" className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-                  <input type="number" value={p.value || ""} onChange={(e) => updateProposal(p.id, { value: Number(e.target.value) })}
-                    placeholder="Valor (R$)" className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-                  <select value={p.status} onChange={(e) => updateProposal(p.id, { status: e.target.value as SalesProposal["status"] })}
-                    className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
-                    {(Object.keys(proposalStatusLabel) as SalesProposal["status"][]).map((s) => (
-                      <option key={s} value={s}>{proposalStatusLabel[s]}</option>
-                    ))}
-                  </select>
-                  <button type="button" onClick={() => removeProposal(p.id)} className="rounded-2xl bg-rose-50 px-3 py-2 text-sm font-black text-rose-600 hover:bg-rose-100 transition">Remover</button>
-                  <div className="md:col-span-2">
+              <div key={p.id} className="rounded-2xl border border-slate-200 bg-white overflow-hidden">
+                {/* Linha colapsada — sempre visível */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedProposal(expandedProposal === p.id ? null : p.id)}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition"
+                >
+                  <span className="flex-1 truncate text-sm font-black text-slate-800">{p.title || "Sem título"}</span>
+                  <span className="shrink-0 text-sm font-bold text-blue-700">{p.value ? formatCurrency(p.value) : "—"}</span>
+                  <span className={`shrink-0 rounded-xl px-2 py-0.5 text-xs font-black ${proposalStatusColor[p.status]}`}>
+                    {proposalStatusLabel[p.status]}
+                  </span>
+                  <ChevronDown size={16} className={`shrink-0 text-slate-400 transition-transform ${expandedProposal === p.id ? "rotate-180" : ""}`} />
+                </button>
+
+                {/* Painel expansível */}
+                {expandedProposal === p.id && (
+                  <div className="border-t border-slate-100 px-4 py-3 space-y-3">
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <input value={p.title} onChange={(e) => updateProposal(p.id, { title: e.target.value })}
+                        placeholder="Título da proposta" className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+                      <input type="number" value={p.value || ""} onChange={(e) => updateProposal(p.id, { value: Number(e.target.value) })}
+                        placeholder="Valor (R$)" className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+                      <select value={p.status} onChange={(e) => updateProposal(p.id, { status: e.target.value as SalesProposal["status"] })}
+                        className="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white md:col-span-2">
+                        {(["rascunho", "enviada", "negociacao", "expirada"] as SalesProposal["status"][]).map((s) => (
+                          <option key={s} value={s}>{proposalStatusLabel[s]}</option>
+                        ))}
+                      </select>
+                    </div>
                     <textarea value={p.notes} onChange={(e) => updateProposal(p.id, { notes: e.target.value })} rows={2}
                       placeholder="Observações da proposta..." className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 resize-none" />
+                    <div className="flex gap-2 flex-wrap items-center">
+                      <button type="button" onClick={() => approveProposal(p.id)}
+                        className="rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white hover:bg-emerald-700 transition">
+                        ✓ Aprovar
+                      </button>
+                      <button type="button" onClick={() => updateProposal(p.id, { status: "perdida" })}
+                        className="rounded-2xl bg-rose-50 px-3 py-2 text-sm font-black text-rose-600 hover:bg-rose-100 transition">
+                        ✗ Perder
+                      </button>
+                      <button type="button" onClick={() => removeProposal(p.id)}
+                        className="ml-auto rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-500 hover:bg-slate-200 transition">
+                        Excluir proposta
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ))}
-            <button type="button" aria-label="Adicionar proposta" onClick={addProposal} className="flex items-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-black text-slate-500 hover:border-blue-400 hover:text-blue-600 transition w-full justify-center">
+            <button type="button" aria-label="Adicionar proposta" onClick={() => { addProposal(); }}
+              className="flex items-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-black text-slate-500 hover:border-blue-400 hover:text-blue-600 transition w-full justify-center">
               <Plus size={16} /> Adicionar proposta
             </button>
           </div>
         )}
-        <div className="mt-5 flex gap-2 justify-end">
+        <div className="mt-5 flex gap-2 items-center">
+          <button type="button"
+            onClick={() => onSave({ ...form, status: form.status === "lead" ? "cliente" : "lead" })}
+            className={`rounded-2xl px-4 py-2 font-black transition mr-auto ${
+              form.status === "lead"
+                ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                : "bg-amber-100 text-amber-700 hover:bg-amber-200"
+            }`}>
+            {form.status === "lead" ? "→ Converter em Cliente" : "← Mover para Leads"}
+          </button>
           <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
           <button type="button" onClick={() => onSave(form)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Salvar</button>
         </div>
@@ -3992,7 +4209,7 @@ function SalesPipelineColumn({ stage, clients, totalClients, onOpenClient }: {
   return (
     <div
       ref={setNodeRef}
-      className={`w-[214px] min-w-[214px] max-w-[214px] flex-shrink-0 rounded-3xl p-3 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+      className={`min-w-0 rounded-3xl p-3 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
       style={{ backgroundColor: stage.color + "28" }}
     >
       <div className="mb-2">
@@ -4029,7 +4246,7 @@ function CallCard({ schedule, onLog, onOpen, onDragStart }: {
     <div
       draggable
       onDragStart={onDragStart}
-      className="rounded-2xl border border-white/80 bg-white p-3 shadow-sm cursor-grab active:cursor-grabbing transition hover:shadow-md hover:border-blue-200"
+      className="min-w-0 rounded-2xl border border-white/80 bg-white p-3 shadow-sm cursor-grab active:cursor-grabbing transition hover:shadow-md hover:border-blue-200"
       onClick={onOpen}
     >
       <div className="flex items-start gap-2">
@@ -4037,17 +4254,23 @@ function CallCard({ schedule, onLog, onOpen, onDragStart }: {
           {urgency === "overdue" ? "🔴" : urgency === "today" ? "🟡" : "🟢"}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="font-black text-sm truncate">{schedule.clientName}</p>
-          {schedule.phone && <p className="text-xs font-bold text-slate-500">📞 {schedule.phone}</p>}
+          <p className="font-black text-sm truncate" title={schedule.clientName}>{schedule.clientName}</p>
+          {schedule.phone && <p className="truncate text-xs font-bold text-slate-500" title={schedule.phone}>📞 {schedule.phone}</p>}
           <p className={`text-xs font-black mt-1 ${urgency === "overdue" ? "text-rose-600" : urgency === "today" ? "text-amber-600" : "text-slate-500"}`}>
             Próxima: {formatCallDate(schedule.nextCallAt)}
           </p>
           {lastLog ? (
-            <p className="text-xs font-bold text-slate-400 mt-0.5 truncate">
+            <p className="text-xs font-bold text-slate-400 mt-0.5 truncate" title={`${formatCallDate(lastLog.date)} · ${lastLog.outcome}`}>
               Última: {formatCallDate(lastLog.date)} · <span className="text-slate-500">{lastLog.outcome}</span>
             </p>
           ) : (
             <p className="text-xs font-bold text-slate-300 mt-0.5">Nenhuma ligação ainda</p>
+          )}
+          {schedule.notes && (
+            <p className="mt-1 truncate text-xs font-bold text-slate-400" title={schedule.notes}>📝 {schedule.notes}</p>
+          )}
+          {schedule.manualDate && (
+            <p className="text-xs font-bold text-slate-400 mt-0.5 truncate">✏️ data definida manualmente</p>
           )}
         </div>
       </div>
@@ -4064,8 +4287,9 @@ function CallCard({ schedule, onLog, onOpen, onDragStart }: {
   );
 }
 
-function AgendaModal({ schedule, onSave, onArchive, onRemove, onClose }: {
+function AgendaModal({ schedule, allSchedules, onSave, onArchive, onRemove, onClose }: {
   schedule: CallSchedule;
+  allSchedules: CallSchedule[];
   onSave: (s: CallSchedule) => void;
   onArchive: () => void;
   onRemove: () => void;
@@ -4076,10 +4300,11 @@ function AgendaModal({ schedule, onSave, onArchive, onRemove, onClose }: {
   const [phone, setPhone] = useState(schedule.phone);
   const [frequency, setFrequency] = useState<CallFrequency>(schedule.frequency);
   const [nextDate, setNextDate] = useState(schedule.nextCallAt);
+  const [isManual, setIsManual] = useState(schedule.manualDate ?? false);
   const [notes, setNotes] = useState(schedule.notes);
 
   function save() {
-    onSave({ ...schedule, clientName, phone, frequency, nextCallAt: nextDate, notes });
+    onSave({ ...schedule, clientName, phone, frequency, nextCallAt: nextDate, manualDate: isManual, notes });
   }
 
   return (
@@ -4132,8 +4357,23 @@ function AgendaModal({ schedule, onSave, onArchive, onRemove, onClose }: {
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-bold text-slate-600 mb-1">Próxima ligação</label>
-                <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)}
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-sm font-bold text-slate-600">Próxima ligação</label>
+                  {isManual ? (
+                    <button type="button"
+                      onClick={() => {
+                        setNextDate(calculateAutoNextDate(new Date(), frequency, schedule.assignedTo, allSchedules, schedule.id));
+                        setIsManual(false);
+                      }}
+                      className="text-xs font-black text-blue-600 hover:underline">
+                      Calcular automaticamente
+                    </button>
+                  ) : (
+                    <span className="text-xs font-black text-blue-500">Calculado automaticamente</span>
+                  )}
+                </div>
+                <input type="date" value={nextDate}
+                  onChange={(e) => { setNextDate(e.target.value); setIsManual(true); }}
                   className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
               </div>
               <div>
@@ -4202,9 +4442,11 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
   const [logModal, setLogModal] = useState<CallSchedule | null>(null);
   const [agendaModal, setAgendaModal] = useState<CallSchedule | null>(null);
   const [newModal, setNewModal] = useState(false);
+  const [calModal, setCalModal] = useState(false);
   const [archivedOpen, setArchivedOpen] = useState(false);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const [quickFilter, setQuickFilter] = useState<"all" | "today" | "overdue">(initialFilter);
+  const [ligacoesSearch, setLigacoesSearch] = useState("");
 
   useEffect(() => {
     if (initialFilter === "all") return;
@@ -4215,19 +4457,23 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
   }, [initialFilter, onFilterApplied]);
 
   const allActiveSchedules = callSchedules.filter((s) => s.active && !s.archived);
+  const normalizedLigacoesSearch = normalizeText(ligacoesSearch);
   const visibleSchedules = allActiveSchedules.filter((s) => {
     if (ligacoesFilter === "todas") return true;
-    return s.createdBy === currentUser?.id || s.assignedTo === currentUser?.id;
+    return s.assignedTo === currentUser?.id;
   }).filter((s) => {
     if (quickFilter === "today") return urgencyColumnId(s.nextCallAt) === "today";
     if (quickFilter === "overdue") return urgencyColumnId(s.nextCallAt) === "overdue";
     return true;
+  }).filter((s) => {
+    if (!normalizedLigacoesSearch) return true;
+    return [s.clientName, s.phone, s.notes].some((v) => normalizeText(v ?? "").includes(normalizedLigacoesSearch));
   });
   const archivedSchedules = callSchedules.filter((s) => s.active && s.archived);
 
-  function registerCall(schedule: CallSchedule, notes: string, outcome: string, nextDate: string) {
+  function registerCall(schedule: CallSchedule, notes: string, outcome: string, nextDate: string, isManual: boolean) {
     const log: CallLog = { id: crypto.randomUUID(), date: new Date().toISOString().slice(0, 10), notes, outcome };
-    const updated: CallSchedule = { ...schedule, lastCallAt: log.date, nextCallAt: nextDate, callHistory: [log, ...schedule.callHistory] };
+    const updated: CallSchedule = { ...schedule, lastCallAt: log.date, nextCallAt: nextDate, manualDate: isManual, callHistory: [log, ...schedule.callHistory] };
     setCallSchedules((prev) => prev.map((s) => s.id === schedule.id ? updated : s));
     setLogModal(null);
   }
@@ -4331,13 +4577,13 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
   function renderColumns() {
     if (viewMode === "frequency") {
       return (
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <div className="flex gap-5">
           {CALL_COLUMNS.map((col) => {
             const cards = visibleSchedules.filter((s) => s.frequency === col.frequency).sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
             const isOver = dragOverCol === col.id;
             return (
               <div key={col.id} {...dropProps(col.id)}
-                className={`rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+                className={`flex-1 min-w-0 rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
                 style={{ backgroundColor: col.color }}>
                 <div className="mb-3 flex items-center justify-between">
                   <p className="font-black text-slate-700">{col.name}</p>
@@ -4353,13 +4599,13 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
 
     if (viewMode === "urgency") {
       return (
-        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
+        <div className="flex gap-5">
           {URGENCY_COLUMNS.map((col) => {
             const cards = visibleSchedules.filter((s) => urgencyColumnId(s.nextCallAt) === col.id).sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
             const isOver = dragOverCol === col.id;
             return (
               <div key={col.id} {...dropProps(col.id)}
-                className={`rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+                className={`flex-1 min-w-0 rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
                 style={{ backgroundColor: col.color }}>
                 <div className="mb-3 flex items-center justify-between">
                   <p className="font-black text-slate-700">{col.emoji} {col.name}</p>
@@ -4373,18 +4619,17 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
       );
     }
 
-    // outcome — layout horizontal com scroll
     return (
-      <div className="flex gap-4 overflow-x-auto pb-2">
+      <div className="flex gap-5 overflow-x-auto pb-2">
         {OUTCOME_COLUMNS.map((col) => {
           const cards = visibleSchedules.filter((s) => outcomeColumnId(s) === col.id).sort((a, b) => a.nextCallAt.localeCompare(b.nextCallAt));
           const isOver = dragOverCol === col.id;
           return (
             <div key={col.id} {...dropProps(col.id)}
-              className={`min-w-[260px] flex-shrink-0 rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
+              className={`flex-1 min-w-[160px] rounded-3xl p-4 transition-all ${isOver ? "ring-2 ring-blue-400 ring-offset-2 scale-[1.01]" : ""}`}
               style={{ backgroundColor: col.color }}>
               <div className="mb-3 flex items-center justify-between">
-                <p className="font-black text-slate-700">{col.name}</p>
+                <p className="min-w-0 truncate font-black text-slate-700">{col.name}</p>
                 <Badge tone="slate">{cards.length}</Badge>
               </div>
               <div className="space-y-3">{cards.map(renderCard)}{cards.length === 0 && emptyState}</div>
@@ -4415,13 +4660,26 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
             </button>
           ))}
         </div>
+        <div className="relative flex-1 min-w-[180px] max-w-xs">
+          <input
+            type="search"
+            value={ligacoesSearch}
+            onChange={(e) => setLigacoesSearch(e.target.value)}
+            placeholder="Buscar contato, telefone..."
+            className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+          />
+        </div>
         <span className="text-sm font-bold text-slate-400">{visibleSchedules.length} contatos ativos</span>
         {quickFilter !== "all" && (
           <button type="button" onClick={() => setQuickFilter("all")} className="rounded-2xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700 transition hover:bg-blue-100">
             Filtro: {quickFilter === "today" ? "Hoje" : "Atrasadas"} · limpar
           </button>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          <button type="button" onClick={() => setCalModal(true)}
+            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-slate-50">
+            <CalendarDays size={16} /> Calendário
+          </button>
           <button type="button" onClick={() => setNewModal(true)}
             className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
             <Plus size={16} /> Nova agenda
@@ -4463,11 +4721,12 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
 
       {/* Modais */}
       {logModal && (
-        <RegistrarLigacaoModal schedule={logModal} onConfirm={registerCall} onClose={() => setLogModal(null)} />
+        <RegistrarLigacaoModal schedule={logModal} allSchedules={callSchedules} onConfirm={registerCall} onClose={() => setLogModal(null)} />
       )}
       {agendaModal && (
         <AgendaModal
           schedule={agendaModal}
+          allSchedules={callSchedules}
           onSave={saveAgenda}
           onArchive={() => archive(agendaModal.id)}
           onRemove={() => remove(agendaModal.id)}
@@ -4477,18 +4736,25 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
       {newModal && (
         <NovaAgendaModal salesClients={salesClients} currentUser={currentUser} callSchedules={callSchedules} onSave={addNew} onClose={() => setNewModal(false)} />
       )}
+      {calModal && (
+        <CalendarioLigacoesModal callSchedules={callSchedules} onClose={() => setCalModal(false)} />
+      )}
     </Panel>
   );
 }
 
-function RegistrarLigacaoModal({ schedule, onConfirm, onClose }: {
+function RegistrarLigacaoModal({ schedule, allSchedules, onConfirm, onClose }: {
   schedule: CallSchedule;
-  onConfirm: (schedule: CallSchedule, notes: string, outcome: string, nextDate: string) => void;
+  allSchedules: CallSchedule[];
+  onConfirm: (schedule: CallSchedule, notes: string, outcome: string, nextDate: string, isManual: boolean) => void;
   onClose: () => void;
 }) {
   const [notes, setNotes] = useState("");
   const [outcome, setOutcome] = useState("Interessado");
-  const [nextDate, setNextDate] = useState(() => nextCallDate(new Date(), schedule.frequency));
+  const [nextDate, setNextDate] = useState(() =>
+    calculateAutoNextDate(new Date(), schedule.frequency, schedule.assignedTo, allSchedules, schedule.id)
+  );
+  const [isManual, setIsManual] = useState(false);
   const outcomes = ["Interessado", "Vai pensar", "Retornar", "Fechou pedido", "Não atendeu"];
 
   return (
@@ -4513,14 +4779,551 @@ function RegistrarLigacaoModal({ schedule, onConfirm, onClose }: {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-bold text-slate-600 mb-1">Próxima ligação</label>
-            <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)}
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-sm font-bold text-slate-600">Próxima ligação</label>
+              {isManual ? (
+                <button type="button"
+                  onClick={() => {
+                    setNextDate(calculateAutoNextDate(new Date(), schedule.frequency, schedule.assignedTo, allSchedules, schedule.id));
+                    setIsManual(false);
+                  }}
+                  className="text-xs font-black text-blue-600 hover:underline">
+                  Calcular automaticamente
+                </button>
+              ) : (
+                <span className="text-xs font-black text-blue-500">Calculado automaticamente</span>
+              )}
+            </div>
+            <input type="date" value={nextDate}
+              onChange={(e) => { setNextDate(e.target.value); setIsManual(true); }}
               className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
           </div>
         </div>
         <div className="mt-5 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
-          <button type="button" onClick={() => onConfirm(schedule, notes, outcome, nextDate)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Confirmar</button>
+          <button type="button" onClick={() => onConfirm(schedule, notes, outcome, nextDate, isManual)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Confirmar</button>
+        </div>
+    </CenteredModal>
+  );
+}
+
+// ── FeedbackModal ─────────────────────────────────────────────────────────────
+
+function FeedbackModal({
+  currentUser,
+  organizationId,
+  profiles,
+  close,
+}: {
+  currentUser: Profile;
+  organizationId: string;
+  profiles: Profile[];
+  close: () => void;
+}) {
+  const isAdmin = currentUser.role === "admin";
+
+  // ── Enviar ──
+  const [kind, setKind] = useState<FeedbackKind | null>(null);
+  const [description, setDescription] = useState("");
+  const [attachments, setAttachments] = useState<AppFeedback["attachments"]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+
+  // ── Tabs (admin only) ──
+  const [tab, setTab] = useState<"enviar" | "recebidos">(isAdmin ? "recebidos" : "enviar");
+
+  // ── Recebidos (admin) ──
+  const [feedbacks, setFeedbacks] = useState<AppFeedback[]>([]);
+  const [loadingFeedbacks, setLoadingFeedbacks] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [replyTexts, setReplyTexts] = useState<Record<string, string>>({});
+  const [replying, setReplying] = useState<string | null>(null);
+
+  const kindOptions: { kind: FeedbackKind; label: string; icon: LucideIcon; color: string; border: string; bg: string; badge: string }[] = [
+    { kind: "duvida", label: "Dúvida", icon: HelpCircle, color: "text-blue-600", border: "border-blue-500", bg: "bg-blue-50", badge: "bg-blue-100 text-blue-700" },
+    { kind: "problema", label: "Problema", icon: AlertTriangle, color: "text-orange-500", border: "border-orange-400", bg: "bg-orange-50", badge: "bg-orange-100 text-orange-700" },
+    { kind: "ideia", label: "Ideia", icon: Lightbulb, color: "text-yellow-500", border: "border-yellow-400", bg: "bg-yellow-50", badge: "bg-yellow-100 text-yellow-700" },
+  ];
+
+  const placeholders: Record<FeedbackKind, string> = {
+    duvida: "Descreva sua dúvida com detalhes...",
+    problema: "Descreva o problema que encontrou e como reproduzi-lo...",
+    ideia: "Descreva sua ideia ou sugestão de melhoria...",
+  };
+
+  // Carregar feedbacks ao abrir aba recebidos
+  useEffect(() => {
+    if (tab !== "recebidos" || !supabase || !isAdmin) return;
+    setLoadingFeedbacks(true);
+    loadFeedbacks(supabase).then((data) => {
+      setFeedbacks(data);
+      setLoadingFeedbacks(false);
+    });
+  }, [tab]);
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadError("");
+    setUploading(true);
+    try {
+      const prepared = await prepareUploadFile(file);
+      const fileKind = prepared.file.type.startsWith("video/") ? "video" : prepared.file.type.startsWith("image/") ? "foto" : "arquivo";
+      const tempId = crypto.randomUUID();
+      let url = URL.createObjectURL(prepared.file);
+      if (supabase) {
+        const path = `${tempId}/${Date.now()}-${sanitizeFileName(prepared.file.name)}`;
+        const { error } = await supabase.storage.from("feedback-attachments").upload(path, prepared.file);
+        if (error) throw error;
+        url = supabase.storage.from("feedback-attachments").getPublicUrl(path).data.publicUrl;
+      }
+      const att: AppFeedback["attachments"][number] = {
+        id: tempId,
+        name: prepared.file.name,
+        type: fileKind as "arquivo" | "foto" | "video",
+        source: "upload",
+        url,
+        previewUrl: url,
+        originalSize: prepared.originalSize,
+        compressedSize: prepared.compressedSize,
+        mimeType: prepared.file.type,
+      };
+      setAttachments((prev) => [...prev, att]);
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "Erro ao enviar arquivo.");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
+  async function handleSend() {
+    if (!kind || !description.trim()) return;
+    setSending(true);
+    try {
+      const feedbackId = await saveFeedback(supabase!, organizationId, {
+        createdBy: currentUser.id,
+        kind,
+        description: description.trim(),
+        attachments,
+      });
+
+      if (supabase) {
+        const { data: admins } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("role", "admin")
+          .eq("active", true);
+
+        if (admins && admins.length > 0) {
+          const kindLabel = kindOptions.find((o) => o.kind === kind)?.label ?? kind;
+          const now = new Date().toISOString();
+          await supabase.from("notifications").insert(
+            (admins as { id: string }[]).map((admin) => ({
+              id: crypto.randomUUID(),
+              organization_id: organizationId,
+              user_id: admin.id,
+              title: `${kindLabel} de ${currentUser.name}`,
+              description: description.trim().slice(0, 100),
+              created_at: now,
+              read: false,
+              target_kind: "system",
+              target_id: feedbackId,
+            }))
+          );
+        }
+      }
+
+      setSent(true);
+    } catch (err) {
+      console.error("Erro ao enviar feedback:", err);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleReply(fb: AppFeedback) {
+    const replyText = (replyTexts[fb.id] ?? "").trim();
+    if (!replyText || !supabase) return;
+    setReplying(fb.id);
+    try {
+      await replyFeedback(supabase, fb.id, replyText, currentUser.id);
+      // Notificar remetente
+      await supabase.from("notifications").insert({
+        id: crypto.randomUUID(),
+        organization_id: organizationId,
+        user_id: fb.createdBy,
+        title: `Resposta de ${currentUser.name}`,
+        description: replyText.slice(0, 100),
+        created_at: new Date().toISOString(),
+        read: false,
+        target_kind: "system",
+        target_id: fb.id,
+      });
+      setFeedbacks((prev) =>
+        prev.map((f) =>
+          f.id === fb.id
+            ? { ...f, reply: replyText, repliedBy: currentUser.id, status: "resolvido" as const }
+            : f
+        )
+      );
+      setReplyTexts((prev) => ({ ...prev, [fb.id]: "" }));
+    } catch (err) {
+      console.error("Erro ao responder feedback:", err);
+    } finally {
+      setReplying(null);
+    }
+  }
+
+  const modalVariant = isAdmin ? "standard" : "compact";
+
+  return (
+    <CenteredModal close={close} variant={modalVariant} panelClassName="rounded-[32px] border-0 p-0 overflow-hidden flex flex-col">
+      {/* Tela de sucesso (apenas para aba Enviar) */}
+      {sent ? (
+        <div className="flex flex-col items-center gap-4 p-8 text-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+            <CheckCircle2 size={32} className="text-green-600" />
+          </div>
+          <div>
+            <h2 className="text-xl font-black text-slate-900">Recebido!</h2>
+            <p className="mt-1 text-sm font-bold text-slate-500">Obrigado pelo retorno. Os administradores foram notificados.</p>
+          </div>
+          <button onClick={close} className="mt-2 rounded-2xl bg-slate-900 px-6 py-2.5 font-black text-white transition hover:bg-slate-700">
+            Fechar
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col" style={{ maxHeight: "90vh" }}>
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4 shrink-0">
+            <h2 className="text-lg font-black text-slate-900">Fale com a equipe</h2>
+            <button onClick={close} className="rounded-xl p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600">
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* Tabs (admin only) */}
+          {isAdmin && (
+            <div className="flex gap-2 border-b border-slate-100 px-6 py-3 shrink-0">
+              {(["recebidos", "enviar"] as const).map((t) => (
+                <button key={t} type="button" onClick={() => setTab(t)}
+                  className={`rounded-2xl px-4 py-2 text-sm font-black transition ${tab === t ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
+                  {t === "enviar" ? "Enviar" : `Recebidos${feedbacks.length ? ` (${feedbacks.length})` : ""}`}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Aba: Enviar */}
+          {tab === "enviar" && (
+            <>
+              <div className="flex flex-col gap-5 overflow-y-auto p-6">
+                {/* Seleção de tipo */}
+                <div>
+                  <p className="mb-3 text-sm font-black text-slate-700">Sobre o que é?</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    {kindOptions.map((opt) => {
+                      const Icon = opt.icon;
+                      const selected = kind === opt.kind;
+                      return (
+                        <button key={opt.kind} type="button" onClick={() => setKind(opt.kind)}
+                          className={`flex flex-col items-center gap-2 rounded-2xl border-2 p-4 transition ${selected ? `${opt.border} ${opt.bg}` : "border-slate-200 bg-white hover:bg-slate-50"}`}>
+                          <Icon size={24} className={selected ? opt.color : "text-slate-400"} />
+                          <span className={`text-sm font-black ${selected ? opt.color : "text-slate-500"}`}>{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Descrição */}
+                <div>
+                  <p className="mb-2 text-sm font-black text-slate-700">Descrição</p>
+                  <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={5}
+                    placeholder={kind ? placeholders[kind] : "Selecione o tipo acima primeiro..."}
+                    disabled={!kind} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                    className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50" />
+                </div>
+
+                {/* Upload */}
+                <div>
+                  <p className="mb-2 text-sm font-black text-slate-700">Anexos <span className="font-bold text-slate-400">(opcional)</span></p>
+                  <label className={`flex cursor-pointer items-center gap-2 rounded-2xl border-2 border-dashed border-slate-200 px-4 py-3 text-sm font-bold text-slate-500 transition hover:border-blue-400 hover:text-blue-600 ${uploading ? "opacity-50 pointer-events-none" : ""}`}>
+                    <FileUp size={16} />
+                    {uploading ? "Enviando..." : "Adicionar imagem ou vídeo"}
+                    <input type="file" accept="image/*,video/*" className="hidden" onChange={handleFileChange} disabled={uploading} />
+                  </label>
+                  {uploadError && <p className="mt-1 text-xs font-bold text-rose-500">{uploadError}</p>}
+                  {attachments.length > 0 && (
+                    <div className="mt-3 space-y-2">
+                      {attachments.map((att) => (
+                        <div key={att.id} className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                          {att.type === "foto" ? (
+                            <img src={att.previewUrl} alt={att.name} className="h-10 w-10 rounded-xl object-cover" />
+                          ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-200">
+                              <FileVideo size={18} className="text-slate-500" />
+                            </div>
+                          )}
+                          <p className="flex-1 truncate text-xs font-bold text-slate-600">{att.name}</p>
+                          <button type="button" onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== att.id))}
+                            className="rounded-lg p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-500">
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Footer enviar */}
+              <div className="flex items-center justify-end gap-3 border-t border-slate-100 px-6 py-4 shrink-0">
+                <button type="button" onClick={close} className="rounded-2xl border border-slate-200 px-5 py-2.5 text-sm font-black text-slate-600 transition hover:bg-slate-50">
+                  Cancelar
+                </button>
+                <button type="button" onClick={handleSend} disabled={!kind || !description.trim() || sending}
+                  className="flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-2.5 text-sm font-black text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40">
+                  <Send size={15} />
+                  {sending ? "Enviando..." : "Enviar"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Aba: Recebidos (admin only) */}
+          {tab === "recebidos" && (
+            <div className="flex-1 overflow-y-auto p-6">
+              {loadingFeedbacks ? (
+                <p className="text-center text-sm font-bold text-slate-400 py-8">Carregando...</p>
+              ) : feedbacks.length === 0 ? (
+                <p className="rounded-2xl bg-slate-50 p-6 text-center text-sm font-bold text-slate-400">Nenhum feedback recebido ainda.</p>
+              ) : (
+                <div className="space-y-3">
+                  {feedbacks.map((fb) => {
+                    const opt = kindOptions.find((o) => o.kind === fb.kind);
+                    const Icon = opt?.icon ?? HelpCircle;
+                    const senderName = profiles.find((p) => p.id === fb.createdBy)?.name ?? "Usuário";
+                    const isExpanded = expandedId === fb.id;
+                    const isResolved = fb.status === "resolvido";
+                    const replierName = fb.repliedBy ? (profiles.find((p) => p.id === fb.repliedBy)?.name ?? "Admin") : null;
+
+                    return (
+                      <div key={fb.id} className={`rounded-2xl border transition ${isExpanded ? "border-slate-300 bg-white shadow-sm" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+                        {/* Cabeçalho do card */}
+                        <button type="button" onClick={() => setExpandedId(isExpanded ? null : fb.id)}
+                          className="w-full text-left px-4 py-3 flex items-center gap-3">
+                          <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${opt?.bg ?? "bg-slate-100"}`}>
+                            <Icon size={16} className={opt?.color ?? "text-slate-500"} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className={`rounded-lg px-2 py-0.5 text-xs font-black ${opt?.badge ?? "bg-slate-100 text-slate-600"}`}>{opt?.label ?? fb.kind}</span>
+                              <span className="text-sm font-black text-slate-800 truncate">{senderName}</span>
+                              <span className="text-xs font-bold text-slate-400">{formatDate(fb.createdAt)}</span>
+                            </div>
+                            {!isExpanded && (
+                              <p className="mt-0.5 text-xs font-bold text-slate-500 truncate">{fb.description}</p>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {isResolved ? (
+                              <span className="rounded-xl bg-green-100 px-2.5 py-1 text-xs font-black text-green-700">Resolvido</span>
+                            ) : (
+                              <span className="rounded-xl bg-rose-100 px-2.5 py-1 text-xs font-black text-rose-600">Novo</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!window.confirm("Apagar este feedback permanentemente?")) return;
+                                if (supabase) void deleteFeedback(supabase, fb.id);
+                                setFeedbacks((prev) => prev.filter((f) => f.id !== fb.id));
+                              }}
+                              className="rounded-xl p-1.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-500"
+                              title="Apagar feedback"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </button>
+
+                        {/* Conteúdo expandido */}
+                        {isExpanded && (
+                          <div className="border-t border-slate-100 px-4 pb-4 pt-3 space-y-4">
+                            <p className="text-sm font-bold text-slate-700 whitespace-pre-wrap">{fb.description}</p>
+
+                            {/* Anexos */}
+                            {fb.attachments.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {fb.attachments.map((att) => (
+                                  att.type === "foto" ? (
+                                    <a key={att.id} href={att.url} target="_blank" rel="noopener noreferrer">
+                                      <img src={att.previewUrl} alt={att.name} className="h-20 w-20 rounded-xl object-cover border border-slate-200 hover:opacity-80 transition" />
+                                    </a>
+                                  ) : (
+                                    <a key={att.id} href={att.url} target="_blank" rel="noopener noreferrer"
+                                      className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 transition">
+                                      <FileVideo size={14} />
+                                      {att.name}
+                                    </a>
+                                  )
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Resposta existente */}
+                            {fb.reply ? (
+                              <div className="rounded-2xl bg-slate-100 px-4 py-3">
+                                <p className="mb-1 text-xs font-black text-slate-500">Resposta de {replierName}</p>
+                                <p className="text-sm font-bold text-slate-700 whitespace-pre-wrap">{fb.reply}</p>
+                              </div>
+                            ) : (
+                              /* Campo de resposta */
+                              <div className="space-y-2">
+                                <textarea
+                                  value={replyTexts[fb.id] ?? ""}
+                                  onChange={(e) => setReplyTexts((prev) => ({ ...prev, [fb.id]: e.target.value }))}
+                                  rows={3}
+                                  placeholder="Escreva uma resposta..."
+                                  lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+                                  className="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                                />
+                                <div className="flex justify-end">
+                                  <button type="button" onClick={() => handleReply(fb)}
+                                    disabled={!(replyTexts[fb.id] ?? "").trim() || replying === fb.id}
+                                    className="flex items-center gap-2 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-black text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-40">
+                                    <Send size={13} />
+                                    {replying === fb.id ? "Enviando..." : "Responder"}
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </CenteredModal>
+  );
+}
+
+function CalendarioLigacoesModal({ callSchedules, onClose }: {
+  callSchedules: CallSchedule[];
+  onClose: () => void;
+}) {
+  const [visibleMonth, setVisibleMonth] = useState(new Date());
+  const today = new Date().toISOString().slice(0, 10);
+
+  const monthLabel = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(visibleMonth);
+  const days = makeMonth(visibleMonth);
+
+  function moveMes(dir: -1 | 1) {
+    setVisibleMonth((prev) => {
+      const next = new Date(prev);
+      next.setMonth(next.getMonth() + dir);
+      return next;
+    });
+  }
+
+  return (
+    <CenteredModal
+      close={onClose}
+      maxWidth="max-w-6xl w-full"
+      panelClassName="rounded-[32px] border-0 p-0 overflow-hidden flex flex-col max-h-[90vh]"
+    >
+        {/* Header */}
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-slate-100 flex-shrink-0">
+          <button type="button" onClick={() => moveMes(-1)}
+            className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 transition font-black text-lg leading-none">‹</button>
+          <span className="w-44 text-center text-base font-black text-slate-800 capitalize">{monthLabel}</span>
+          <button type="button" onClick={() => moveMes(1)}
+            className="rounded-xl p-2 text-slate-400 hover:bg-slate-100 transition font-black text-lg leading-none">›</button>
+          <button type="button" onClick={() => setVisibleMonth(new Date())}
+            className="rounded-xl border border-slate-200 px-3 py-1.5 text-sm font-black text-slate-600 hover:bg-slate-50 transition">
+            Hoje
+          </button>
+          <div className="ml-auto flex items-center gap-3 text-xs font-black">
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-full bg-rose-200"></span>Atrasada</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-full bg-amber-200"></span>Hoje</span>
+            <span className="flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-full bg-green-200"></span>Futura</span>
+            <button type="button" onClick={onClose}
+              className="ml-2 rounded-xl p-2 text-slate-400 hover:bg-slate-100 transition">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Corpo */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {/* Cabeçalho dias da semana */}
+          <div className="mb-2 grid grid-cols-7 gap-2 text-center text-xs font-black uppercase text-slate-400">
+            {["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map((d) => (
+              <span key={d}>{d}</span>
+            ))}
+          </div>
+
+          {/* Grid de dias */}
+          <div className="grid grid-cols-7 gap-2">
+            {days.map((day, idx) => {
+              const dateStr = day.toISOString().slice(0, 10);
+              const isCurrentMonth = day.getMonth() === visibleMonth.getMonth();
+              const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+              const isToday = dateStr === today;
+              const isPast = dateStr < today;
+              const daySchedules = callSchedules.filter(
+                (s) => s.active && !s.archived && s.nextCallAt === dateStr
+              );
+              const count = daySchedules.length;
+              const names = daySchedules.map((s) => s.clientName);
+
+              let borderClass = "border-slate-100 bg-slate-50";
+              let badgeClass = "";
+              if (count > 0) {
+                if (isPast)        { borderClass = "border-rose-200 bg-rose-50";   badgeClass = "bg-rose-100 text-rose-700"; }
+                else if (isToday)  { borderClass = "border-amber-200 bg-amber-50"; badgeClass = "bg-amber-100 text-amber-700"; }
+                else               { borderClass = "border-green-200 bg-green-50"; badgeClass = "bg-green-100 text-green-700"; }
+              }
+
+              return (
+                <div key={idx}
+                  className={`min-h-28 rounded-3xl border p-2 transition ${borderClass} ${!isCurrentMonth || isWeekend ? "opacity-40" : ""}`}>
+                  {/* Número do dia */}
+                  <p className={`inline-grid h-7 min-w-7 place-items-center rounded-full px-1 text-sm font-black
+                    ${isToday ? "bg-blue-700 text-white" : "text-slate-700"}`}>
+                    {day.getDate()}
+                  </p>
+
+                  {/* Badge de contagem */}
+                  {count > 0 && (
+                    <div className={`mt-2 rounded-2xl px-2 py-1 text-xs font-black text-center ${badgeClass}`}>
+                      {count} ligação{count !== 1 ? "ões" : ""}
+                    </div>
+                  )}
+
+                  {/* Nomes */}
+                  <div className="mt-1 space-y-0.5">
+                    {names.slice(0, 3).map((name, i) => (
+                      <p key={i} className="text-[10px] font-bold text-slate-500 truncate">{name}</p>
+                    ))}
+                    {names.length > 3 && (
+                      <p className="text-[10px] font-bold text-slate-400">+{names.length - 3} mais</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
     </CenteredModal>
   );
@@ -4755,7 +5558,7 @@ function SalesFunnelStageRow({ stage, index, total, count, value, isHalf, onRemo
   );
 }
 
-function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStages, setSalesFunnelStages, callSchedules, setCallSchedules, profiles, currentUser }: {
+function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStages, setSalesFunnelStages, callSchedules, setCallSchedules, profiles, profileAreas, currentUser }: {
   salesClients: SalesClient[];
   setSalesClients: Dispatch<SetStateAction<SalesClient[]>>;
   salesFunnelStages: SalesFunnelStage[];
@@ -4763,6 +5566,7 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
   callSchedules: CallSchedule[];
   setCallSchedules: Dispatch<SetStateAction<CallSchedule[]>>;
   profiles: Profile[];
+  profileAreas: ProfileArea[];
   currentUser: Profile | null;
 }) {
   const [editingClient, setEditingClient] = useState<SalesClient | null>(null);
@@ -4902,19 +5706,24 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
             <span className="text-sm font-bold text-slate-400">{visiblePipelineClients.length} de {activeClients.length} clientes visíveis</span>
           </div>
           <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={handlePipelineDragEnd}>
-            <div className="flex gap-4 overflow-x-auto pb-2">
-              {sortedStages.map((stage) => {
-                const clients = visiblePipelineClients.filter((client) => clientFunnelStage(client) === stage.id);
-                return (
-                  <SalesPipelineColumn
-                    key={stage.id}
-                    stage={stage}
-                    clients={clients}
-                    totalClients={activeClients.filter((client) => clientFunnelStage(client) === stage.id).length}
-                    onOpenClient={setEditingClient}
-                  />
-                );
-              })}
+            <div className="overflow-x-auto pb-2">
+              <div
+                className="grid min-w-full gap-4"
+                style={{ gridTemplateColumns: `repeat(${Math.max(sortedStages.length, 1)}, minmax(180px, 1fr))` }}
+              >
+                {sortedStages.map((stage) => {
+                  const clients = visiblePipelineClients.filter((client) => clientFunnelStage(client) === stage.id);
+                  return (
+                    <SalesPipelineColumn
+                      key={stage.id}
+                      stage={stage}
+                      clients={clients}
+                      totalClients={activeClients.filter((client) => clientFunnelStage(client) === stage.id).length}
+                      onOpenClient={setEditingClient}
+                    />
+                  );
+                })}
+              </div>
             </div>
           </DndContext>
         </>
@@ -5043,6 +5852,7 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
         <ClienteModal
           client={editingClient}
           profiles={profiles}
+          profileAreas={profileAreas}
           callSchedules={callSchedules}
           onSave={(updated) => {
             setSalesClients((prev) => prev.map((c) => c.id === updated.id ? updated : c));
@@ -5092,8 +5902,8 @@ function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModa
       title: newGoalTitle.trim(),
       columnId: colId,
       order: tasks.filter((t) => t.columnId === colId).length + 1,
-      priority: "Média",
-      progress: "No prazo",
+      priority: "",
+      progress: "",
       createdBy: currentUser?.id ?? "",
       assignedTo: newGoalScope === "individual" ? (currentUser ? [currentUser.id] : []) : [],
       relatedTo: "",
@@ -5670,7 +6480,11 @@ function Header({
   saveStatus,
   saveError,
   logout,
-  realtimeSyncing
+  realtimeSyncing,
+  feedbackOpen,
+  setFeedbackOpen,
+  organizationId,
+  profiles,
 }: {
   activeSection: string;
   activeArea: AppArea;
@@ -5691,6 +6505,10 @@ function Header({
   saveError: string;
   logout: () => void;
   realtimeSyncing?: boolean;
+  feedbackOpen: boolean;
+  setFeedbackOpen: Dispatch<SetStateAction<boolean>>;
+  organizationId: string;
+  profiles: Profile[];
 }) {
   const title = menu.find((item) => item.sectionId === activeSection)?.label ?? "Painel";
   const areaLabel = appAreas.find((area) => area.id === activeArea)?.label ?? "Marketing";
@@ -5783,6 +6601,17 @@ function Header({
             <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
             Sincronizando…
           </div>
+        )}
+        <button onClick={() => setFeedbackOpen(true)} className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm" title="Dúvida, problema ou ideia">
+          <HelpCircle size={20} className="text-slate-600" />
+        </button>
+        {feedbackOpen && (
+          <FeedbackModal
+            currentUser={currentUser}
+            organizationId={organizationId}
+            profiles={profiles}
+            close={() => setFeedbackOpen(false)}
+          />
         )}
         <div className="relative">
           <button onClick={() => setNotificationsOpen((value) => !value)} className="relative rounded-3xl border border-slate-200 bg-white p-3 shadow-sm" title="Notificações">
@@ -10277,7 +11106,16 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           if (added.length) createNotifications(added, "Tarefa atribuída", task.title, "task", task.id);
           updateTask(task.id, (current) => ({ ...current, assignedTo: values }));
         }} /></DetailRow>
-        <DetailRow label="Data de conclusão"><input value={task.dueDate} type="date" onChange={(event) => updateTask(task.id, (current) => ({ ...current, dueDate: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /></DetailRow>
+        <DetailRow label="Data de conclusão">
+          <div className="flex items-center gap-2">
+            <input value={task.dueDate} type="date" onChange={(event) => updateTask(task.id, (current) => ({ ...current, dueDate: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" />
+            {task.dueDate && (
+              <button type="button" onClick={() => updateTask(task.id, (current) => ({ ...current, dueDate: "" }))} className="rounded-xl p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition" title="Remover data">
+                <X size={16} />
+              </button>
+            )}
+          </div>
+        </DetailRow>
         <DetailRow label="Funil"><SelectControlled label="" value={task.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((stage) => [stage.id, stage.name])]} onChange={(value) => updateTask(task.id, (current) => ({ ...current, funnelStageId: value }))} /></DetailRow>
         {task.columnId.startsWith("vendas-atividades") && (
           <DetailRow label="Visibilidade">
@@ -10293,11 +11131,6 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
           </DetailRow>
         )}
       </div>
-
-      <section className="space-y-2">
-        <h3 className="font-black">Descrição</h3>
-        <textarea value={task.description} rows={7} placeholder="Do que se trata esta tarefa?" onChange={(event) => updateTask(task.id, (current) => ({ ...current, description: event.target.value }))} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-blue-500" />
-      </section>
 
       {isGoalTask && (
         <section className="space-y-3 border-t border-slate-200 pt-4">
@@ -10449,6 +11282,11 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         <form onSubmit={addChecklist} className="flex gap-2"><input name="label" required placeholder="Novo item" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 outline-none focus:border-blue-500" /><button className="rounded-2xl bg-blue-700 px-3 text-white"><Plus size={17} /></button></form>
       </section>
 
+      <section className="space-y-2 border-t border-slate-200 pt-4">
+        <h3 className="font-black">Descrição</h3>
+        <textarea value={task.description} rows={7} placeholder="Do que se trata esta tarefa?" onChange={(event) => updateTask(task.id, (current) => ({ ...current, description: event.target.value }))} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full resize-none rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-blue-500" />
+      </section>
+
       <section className="space-y-3 border-t border-slate-200 pt-4">
         <h3 className="font-black">Anexos</h3>
         <FileDropZone
@@ -10513,7 +11351,7 @@ function InlineTagSelect({ label, value, options, tone, toneForOption, onChange 
     <div className="relative">
       <button type="button" onClick={() => setOpen((current) => !current)} className={`inline-flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-black transition hover:shadow-sm ${tones[tone]}`}>
         <span className="text-[11px] uppercase opacity-70">{label}</span>
-        {value}
+        {value || <span className="opacity-40">—</span>}
         <ChevronDown size={15} />
       </button>
       {open && (
