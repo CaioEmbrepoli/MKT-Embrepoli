@@ -85,6 +85,7 @@ import {
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
+import { disconnectTikTokConnection, getTikTokStatus, listTikTokVideos, startTikTokConnection, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import {
   type AppData,
   deleteCampaign,
@@ -7387,6 +7388,7 @@ function Metrics({
 }) {
   const [period, setPeriod] = useState("all");
   const [youtubeImportOpen, setYoutubeImportOpen] = useState(false);
+  const [tiktokImportOpen, setTiktokImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
   const [allVideosOpen, setAllVideosOpen] = useState(false);
   const [lineFilter, setLineFilter] = useState("all");
@@ -7627,6 +7629,9 @@ function Metrics({
       <div className="flex items-center gap-2">
         <button type="button" onClick={() => setYoutubeImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100">
           <Youtube size={15} /> Importar do YouTube
+        </button>
+        <button type="button" onClick={() => setTiktokImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-slate-950 px-3 py-2 text-sm font-black text-white hover:bg-slate-700">
+          <Play size={15} /> Trazer dados do TikTok
         </button>
         <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
       </div>
@@ -7954,6 +7959,15 @@ function Metrics({
           productLines={productLines}
           funnelStages={funnelStages}
           onClose={() => setYoutubeImportOpen(false)}
+          reloadData={reloadData}
+        />
+      )}
+      {tiktokImportOpen && (
+        <TikTokImportModal
+          metrics={metrics}
+          setMetrics={setMetrics}
+          channels={channels}
+          onClose={() => setTiktokImportOpen(false)}
           reloadData={reloadData}
         />
       )}
@@ -8600,6 +8614,10 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
   const [googleLoading, setGoogleLoading] = useState(true);
   const [googleBusy, setGoogleBusy] = useState<GoogleService | null>(null);
   const [googleError, setGoogleError] = useState("");
+  const [tiktokStatus, setTikTokStatus] = useState<TikTokConnectionStatus | null>(null);
+  const [tiktokLoading, setTikTokLoading] = useState(true);
+  const [tiktokBusy, setTikTokBusy] = useState(false);
+  const [tiktokError, setTikTokError] = useState("");
 
   async function loadGoogleStatus() {
     setGoogleLoading(true);
@@ -8613,8 +8631,21 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     }
   }
 
+  async function loadTikTokStatus() {
+    setTikTokLoading(true);
+    setTikTokError("");
+    try {
+      setTikTokStatus(await getTikTokStatus());
+    } catch (error) {
+      setTikTokError(error instanceof Error ? error.message : "Erro ao carregar integracao TikTok.");
+    } finally {
+      setTikTokLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadGoogleStatus();
+    loadTikTokStatus();
   }, []);
 
   async function connectGoogle(service: GoogleService) {
@@ -8641,6 +8672,32 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
       setGoogleError(error instanceof Error ? error.message : "Erro ao desconectar Google.");
     } finally {
       setGoogleBusy(null);
+    }
+  }
+
+  async function connectTikTok() {
+    setTikTokBusy(true);
+    setTikTokError("");
+    try {
+      const url = await startTikTokConnection();
+      window.location.href = url;
+    } catch (error) {
+      setTikTokError(error instanceof Error ? error.message : "Erro ao iniciar conexao TikTok.");
+      setTikTokBusy(false);
+    }
+  }
+
+  async function disconnectTikTok() {
+    if (!window.confirm("Desconectar TikTok Sandbox para toda a equipe?")) return;
+    setTikTokBusy(true);
+    setTikTokError("");
+    try {
+      await disconnectTikTokConnection();
+      await loadTikTokStatus();
+    } catch (error) {
+      setTikTokError(error instanceof Error ? error.message : "Erro ao desconectar TikTok.");
+    } finally {
+      setTikTokBusy(false);
     }
   }
 
@@ -8736,6 +8793,57 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                 </div>
               );
             })}
+          </div>
+          <div className="mt-4 rounded-[26px] border border-slate-100 bg-slate-50 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-black">TikTok Sandbox</p>
+                <p className="mt-1 text-sm font-bold text-slate-500">
+                  Conexão OAuth em sandbox para ler perfil, estatísticas básicas e vídeos públicos.
+                </p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-black ${tiktokStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+                {tiktokLoading ? "Verificando" : tiktokStatus?.connected ? "Conectado" : "Desconectado"}
+              </span>
+            </div>
+            {tiktokError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{tiktokError}</p>}
+            <div className="mt-3 rounded-2xl border border-slate-100 bg-white px-3 py-2">
+              <p className="text-xs font-black uppercase text-slate-400">Status</p>
+              <div className="mt-1 flex items-center gap-3">
+                {tiktokStatus?.avatarUrl && <img src={tiktokStatus.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />}
+                <div>
+                  <p className="break-all text-sm font-black text-slate-800">
+                    {tiktokLoading
+                      ? "Verificando conexao..."
+                      : tiktokStatus?.connected
+                        ? `Conectado como ${tiktokStatus.displayName || tiktokStatus.openId || "conta TikTok"}`
+                        : "Nenhuma conta TikTok conectada"}
+                  </p>
+                  <p className="text-xs font-bold text-slate-400">
+                    Ambiente: {tiktokStatus?.environment === "production" ? "Produção" : "Sandbox"}
+                  </p>
+                </div>
+              </div>
+            </div>
+            {tiktokStatus?.connectedAt && (
+              <p className="mt-1 text-xs font-bold text-slate-400">
+                Conectado em {new Date(tiktokStatus.connectedAt).toLocaleString("pt-BR")}
+              </p>
+            )}
+            {canManageIntegrations ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" disabled={tiktokBusy || tiktokLoading} onClick={connectTikTok} className="rounded-2xl bg-slate-950 px-4 py-2 text-sm font-black text-white transition hover:bg-slate-700 disabled:bg-slate-200 disabled:text-slate-400">
+                  {tiktokBusy ? "Abrindo..." : tiktokStatus?.connected ? "Reconectar" : "Conectar TikTok Sandbox"}
+                </button>
+                {tiktokStatus?.connected && (
+                  <button type="button" disabled={tiktokBusy || tiktokLoading} onClick={disconnectTikTok} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                    Desconectar
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar TikTok.</p>
+            )}
           </div>
         </div>
       </div>
@@ -9513,6 +9621,198 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
             </div>
             <div className="flex gap-2">
               <button type="button" onClick={() => { ran.current = false; run(); ran.current = true; }} className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+                Tentar novamente
+              </button>
+              <button type="button" onClick={onClose} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
+    </CenteredModal>
+  );
+}
+
+function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData }: {
+  metrics: PostMetric[];
+  setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
+  channels: Channel[];
+  onClose: () => void;
+  reloadData?: () => Promise<void>;
+}) {
+  const [phase, setPhase] = useState<"idle" | "fetching" | "saving" | "done" | "error">("idle");
+  const [error, setError] = useState("");
+  const [summary, setSummary] = useState({ created: 0, updated: 0, videos: 0 });
+  const [status, setStatus] = useState<TikTokConnectionStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatusLoading(true);
+    getTikTokStatus()
+      .then((nextStatus) => {
+        if (!cancelled) setStatus(nextStatus);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Erro ao consultar conexao TikTok.");
+      })
+      .finally(() => {
+        if (!cancelled) setStatusLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function videoDate(createTime: number) {
+    if (!createTime) return todayIso();
+    return new Date(createTime * 1000).toISOString().slice(0, 10);
+  }
+
+  async function run() {
+    setError("");
+    try {
+      setPhase("fetching");
+      const { videos } = await listTikTokVideos();
+      setPhase("saving");
+
+      const tiktokChannelId =
+        channels.find((channel) => channel.id === "tiktok")?.id ??
+        channels.find((channel) => channel.name.toLowerCase().includes("tiktok"))?.id ??
+        "tiktok";
+      const byExt = new Map(metrics.filter((metric) => metric.externalId).map((metric) => [metric.externalId!, metric] as const));
+
+      let created = 0;
+      let updated = 0;
+      const importedRows: PostMetric[] = videos.map((video) => {
+        const externalId = `tiktok:${video.id}`;
+        const existing = byExt.get(externalId);
+        if (existing) updated += 1;
+        else created += 1;
+        return {
+          id: existing?.id ?? crypto.randomUUID(),
+          externalId,
+          postId: existing?.postId,
+          postTitle: video.title || video.description || "Video TikTok",
+          channelId: tiktokChannelId,
+          campaignId: existing?.campaignId ?? "",
+          productLineId: existing?.productLineId ?? "",
+          vehicleTypeId: existing?.vehicleTypeId ?? "",
+          contentTypeId: existing?.contentTypeId ?? "",
+          funnelStageId: existing?.funnelStageId ?? "",
+          date: videoDate(video.createTime),
+          reach: video.viewCount,
+          likes: video.likeCount,
+          comments: video.commentCount,
+          shares: video.shareCount,
+          clicks: existing?.clicks ?? 0,
+          leads: existing?.leads ?? 0,
+          notes: existing?.notes ?? "Importado do TikTok Sandbox.",
+          learning: existing?.learning ?? "",
+          videoType: "video",
+          privacyStatus: "public",
+          watchTimeMinutes: existing?.watchTimeMinutes,
+          averageViewDurationSeconds: existing?.averageViewDurationSeconds,
+          averageViewPercentage: existing?.averageViewPercentage,
+          subscribersGained: existing?.subscribersGained,
+          subscribersLost: existing?.subscribersLost,
+          impressions: existing?.impressions,
+          impressionClickThroughRate: existing?.impressionClickThroughRate
+        };
+      });
+
+      const previousRows = importedRows
+        .map((row) => metrics.find((metric) => metric.id === row.id))
+        .filter((row): row is PostMetric => Boolean(row));
+      if (supabase && importedRows.length) {
+        await replaceMetrics(supabase, importedRows, previousRows);
+      }
+      setMetrics((current) => {
+        const byId = new Map(current.map((metric) => [metric.id, metric] as const));
+        importedRows.forEach((metric) => byId.set(metric.id, metric));
+        return Array.from(byId.values());
+      });
+      void reloadData?.();
+      setSummary({ created, updated, videos: videos.length });
+      setPhase("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar TikTok.");
+      setPhase("error");
+    }
+  }
+
+  return (
+    <CenteredModal close={onClose} closeOnOverlay={phase !== "fetching" && phase !== "saving"} zClass="z-[120]" variant="compact" className="bg-slate-950/75" panelClassName="rounded-[28px] border-0">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Play size={22} className="text-slate-950" />
+            <h2 className="font-black">Trazer dados do TikTok</h2>
+          </div>
+          {(phase === "idle" || phase === "done" || phase === "error") && (
+            <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200">
+              <X size={18} />
+            </button>
+          )}
+        </div>
+
+        {phase === "idle" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-slate-50 p-4">
+              <p className="text-sm font-black text-slate-800">Importação Sandbox</p>
+              <p className="mt-1 text-sm font-bold text-slate-500">
+                O sistema vai buscar perfil, estatísticas básicas e vídeos públicos da conta conectada no TikTok Sandbox.
+              </p>
+              <div className="mt-3 rounded-2xl border border-slate-100 bg-white px-3 py-2">
+                <p className="text-xs font-black uppercase text-slate-400">Conexão</p>
+                <p className={`mt-1 text-sm font-black ${status?.connected ? "text-emerald-700" : "text-slate-500"}`}>
+                  {statusLoading
+                    ? "Verificando conexão..."
+                    : status?.connected
+                      ? `Conectado como ${status.displayName || status.openId || "conta TikTok"}`
+                      : "TikTok Sandbox não conectado"}
+                </p>
+              </div>
+              {error && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
+            </div>
+            <button type="button" disabled={statusLoading || !status?.connected} onClick={run} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400">
+              {status?.connected ? "Importar dados do TikTok" : "Conecte o TikTok em Conta e Permissões"}
+            </button>
+          </div>
+        )}
+
+        {(phase === "fetching" || phase === "saving") && (
+          <div className="space-y-3">
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full animate-pulse rounded-full bg-slate-950" style={{ width: "100%" }} />
+            </div>
+            <p className="text-sm font-bold text-slate-600">
+              {phase === "fetching" ? "Buscando dados no TikTok Sandbox..." : "Salvando métricas no sistema..."}
+            </p>
+          </div>
+        )}
+
+        {phase === "done" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-green-50 p-4">
+              <p className="text-sm font-black text-green-800">Importação concluída!</p>
+              <p className="mt-1 text-sm font-bold text-green-700">
+                {summary.videos} vídeos encontrados · {summary.created} novos · {summary.updated} atualizados
+              </p>
+            </div>
+            <button type="button" onClick={onClose} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+              Fechar
+            </button>
+          </div>
+        )}
+
+        {phase === "error" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-rose-50 p-4">
+              <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
+              <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={run} className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
                 Tentar novamente
               </button>
               <button type="button" onClick={onClose} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
@@ -12945,7 +13245,7 @@ function ComentariosSection({
   setQuestions: (next: CustomerQuestion[]) => void;
   currentUser: Profile;
 }) {
-  const [statusFilter, setStatusFilter] = useState<CommentStatus | "todos">("todos");
+  const [statusFilter, setStatusFilter] = useState<CommentStatus | "todos">("novo");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [newKeyword, setNewKeyword] = useState("");

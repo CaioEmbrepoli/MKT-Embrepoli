@@ -438,6 +438,27 @@ end $$;
 create unique index if not exists google_connections_organization_service_idx
 on public.google_connections (organization_id, service);
 
+create table if not exists public.tiktok_connections (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  environment text not null default 'sandbox',
+  tiktok_open_id text not null default '',
+  display_name text not null default '',
+  avatar_url text not null default '',
+  scopes text[] not null default '{}'::text[],
+  access_token text not null default '',
+  refresh_token text not null default '',
+  expires_at timestamptz,
+  refresh_expires_at timestamptz,
+  connected_by text references public.profiles(id) on delete set null,
+  connected_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint tiktok_connections_environment_check check (environment in ('sandbox', 'production'))
+);
+
+create unique index if not exists tiktok_connections_organization_environment_idx
+on public.tiktok_connections (organization_id, environment);
+
 alter table public.profiles add column if not exists notification_sound boolean not null default true;
 alter table public.campaigns add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;
 alter table public.posts add column if not exists sort_order integer not null default 1;
@@ -680,6 +701,7 @@ alter table public.task_reset_history enable row level security;
 alter table public.post_metrics enable row level security;
 alter table public.notifications enable row level security;
 alter table public.google_connections enable row level security;
+alter table public.tiktok_connections enable row level security;
 
 drop policy if exists "members can read own organization" on public.organizations;
 create policy "members can read own organization"
@@ -848,6 +870,15 @@ using (organization_id = public.current_organization_id());
 
 drop policy if exists "admins and managers manage google connection" on public.google_connections;
 create policy "admins and managers manage google connection" on public.google_connections for all
+using (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'))
+with check (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'));
+
+drop policy if exists "members read tiktok connection status" on public.tiktok_connections;
+create policy "members read tiktok connection status" on public.tiktok_connections for select
+using (organization_id = public.current_organization_id());
+
+drop policy if exists "admins and managers manage tiktok connection" on public.tiktok_connections;
+create policy "admins and managers manage tiktok connection" on public.tiktok_connections for all
 using (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'))
 with check (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'));
 
@@ -1531,6 +1562,7 @@ alter publication supabase_realtime add table
   public.post_metrics,
   public.notifications,
   public.google_connections,
+  public.tiktok_connections,
   public.customer_questions,
   public.comments,
   public.auto_filters,
