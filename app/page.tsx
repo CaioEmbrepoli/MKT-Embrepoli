@@ -680,6 +680,7 @@ const metricEngagementRate = (metric: PostMetric) => metric.reach ? (metricEngag
 const metricConversionRate = (metric: PostMetric) => metric.clicks ? (metric.leads / metric.clicks) * 100 : 0;
 
 function thumbnailFor(metric: PostMetric): string | null {
+  if (metric.thumbnailUrl) return metric.thumbnailUrl;
   const ext = metric.externalId;
   if (ext?.startsWith("yt:")) return `https://i.ytimg.com/vi/${ext.slice(3)}/mqdefault.jpg`;
   return null;
@@ -7417,6 +7418,9 @@ function Metrics({
   const isYoutubeChannel = useMemo(() =>
     activeChannel !== "all" && (activeChannel === "youtube" || channelById.get(activeChannel)?.name.toLowerCase().includes("youtube")),
   [activeChannel, channelById]);
+  const isTikTokChannel = useMemo(() =>
+    activeChannel !== "all" && (activeChannel === "tiktok" || channelById.get(activeChannel)?.name.toLowerCase().includes("tiktok")),
+  [activeChannel, channelById]);
 
   const resolvedMetrics = useMemo(() => metrics.map((metric) => {
     const post = metric.postId ? postById.get(metric.postId) : undefined;
@@ -7521,6 +7525,35 @@ function Metrics({
 
   // Exibir layout YouTube quando for canal YouTube ou aba Geral
   const showYoutubeDesign = isYoutubeChannel || activeChannel === "all";
+  const showTikTokDesign = isTikTokChannel;
+
+  const tiktokEngagementRate = totals.reach ? (totals.engagement / totals.reach) * 100 : 0;
+  const tiktokAverageViews = filteredMetrics.length ? Math.round(totals.reach / filteredMetrics.length) : 0;
+
+  const tiktokDailyData = useMemo(() => Object.values(
+    filteredMetrics.reduce<Record<string, { date: string; views: number; engagement: number; likes: number; comments: number; shares: number }>>((acc, metric) => {
+      const key = metric.date || todayIso();
+      acc[key] = acc[key] ?? { date: key.slice(5), views: 0, engagement: 0, likes: 0, comments: 0, shares: 0 };
+      acc[key].views += metric.reach;
+      acc[key].engagement += metricEngagement(metric);
+      acc[key].likes += metric.likes;
+      acc[key].comments += metric.comments;
+      acc[key].shares += metric.shares;
+      return acc;
+    }, {})
+  ).sort((a, b) => a.date.localeCompare(b.date)), [filteredMetrics]);
+
+  const tiktokTopEngagement = useMemo(() =>
+    filteredMetrics.slice().sort((a, b) => metricEngagement(b) - metricEngagement(a)).slice(0, 8),
+  [filteredMetrics]);
+  const tiktokTopRates = useMemo(() =>
+    filteredMetrics.slice().filter((metric) => metric.reach > 0).sort((a, b) => metricEngagementRate(b) - metricEngagementRate(a)).slice(0, 6),
+  [filteredMetrics]);
+  const tiktokEngagementMix = useMemo(() => ([
+    { id: "likes", name: "Curtidas", value: totals.likes, color: "#ec4899" },
+    { id: "comments", name: "Comentários", value: totals.comments, color: "#8b5cf6" },
+    { id: "shares", name: "Compartilhamentos", value: totals.shares, color: "#06b6d4" }
+  ]).filter((item) => item.value > 0), [totals.likes, totals.comments, totals.shares]);
 
   // Dados diários de crescimento de inscritos
   const subscriberDailyData = useMemo(() => Object.values(
@@ -7842,6 +7875,169 @@ function Metrics({
               </div>
             ) : (
               <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>
+            )}
+          </section>
+        </div>
+      ) : showTikTokDesign ? (
+        /* ── LAYOUT TIKTOK ─────────────────────────────────────────── */
+        <div className="grid gap-6">
+          <section>
+            <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <h3 className="font-black">Resumo · TikTok</h3>
+                <p className="mt-1 text-sm font-bold text-slate-400">Dados reais do Sandbox agora, métricas avançadas preparadas para produção.</p>
+              </div>
+              <button type="button" onClick={() => setTiktokImportOpen(true)} className="rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
+                Atualizar TikTok
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <MetricKpiCard label="Visualizações" value={formatNumber(totals.reach)} delta={period !== "all" ? deltaPercent(totals.reach, prevTotals.reach) : undefined} />
+              <MetricKpiCard label="Engajamento" value={formatNumber(totals.engagement)} delta={period !== "all" ? deltaPercent(totals.engagement, prevTotals.engagement) : undefined} />
+              <MetricKpiCard label="Taxa engaj." value={formatPercent(tiktokEngagementRate)} delta={period !== "all" && prevTotals.reach > 0 ? deltaPercent(tiktokEngagementRate, (prevTotals.engagement / prevTotals.reach) * 100) : undefined} />
+              <MetricKpiCard label="Vídeos" value={formatNumber(filteredMetrics.length)} delta={period !== "all" ? deltaPercent(filteredMetrics.length, prevFilteredMetrics.length) : undefined} />
+              <MetricKpiCard label="Curtidas" value={formatNumber(totals.likes)} delta={period !== "all" ? deltaPercent(totals.likes, prevTotals.likes) : undefined} />
+              <MetricKpiCard label="Comentários" value={formatNumber(totals.comments)} delta={period !== "all" ? deltaPercent(totals.comments, prevTotals.comments) : undefined} />
+              <MetricKpiCard label="Compartilhamentos" value={formatNumber(totals.shares)} delta={period !== "all" ? deltaPercent(totals.shares, prevTotals.shares) : undefined} />
+              <MetricKpiCard label="Média views/vídeo" value={tiktokAverageViews ? formatNumber(tiktokAverageViews) : "—"} delta={period !== "all" && prevFilteredMetrics.length > 0 ? deltaPercent(tiktokAverageViews, Math.round(prevTotals.reach / prevFilteredMetrics.length)) : undefined} />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+              <MetricKpiCard label="Tempo assistido" value={totals.watchTimeMinutes ? `${formatNumber(Math.round(totals.watchTimeMinutes))} min` : "—"} />
+              <MetricKpiCard label="Retenção média" value={totals.analyticsCount ? formatPercent(totals.averageViewPercentage / totals.analyticsCount) : "—"} />
+              <MetricKpiCard label="Impressões" value={totals.impressions ? formatNumber(totals.impressions) : "—"} />
+              <MetricKpiCard label="CTR" value={totals.impressionCount ? formatPercent(totals.impressionClickThroughRate / totals.impressionCount) : "—"} />
+            </div>
+            <p className="mt-2 rounded-2xl bg-slate-50 px-4 py-2 text-xs font-bold text-slate-500">
+              Tempo assistido, retenção, impressões e CTR aparecem automaticamente quando a conexão TikTok em produção retornar esses dados.
+            </p>
+          </section>
+
+          <section className="grid gap-5 xl:grid-cols-2">
+            <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+              <h3 className="font-black">Evolução de visualizações e engajamento</h3>
+              <p className="mt-0.5 text-xs font-bold text-slate-400">Views e interações por dia</p>
+              <div className="mt-4 h-64">
+                {tiktokDailyData.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={tiktokDailyData}>
+                      <defs>
+                        <linearGradient id="tiktokViewsGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#111827" stopOpacity={0.25} />
+                          <stop offset="95%" stopColor="#111827" stopOpacity={0} />
+                        </linearGradient>
+                        <linearGradient id="tiktokEngagementGradient" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="5%" stopColor="#ec4899" stopOpacity={0.22} />
+                          <stop offset="95%" stopColor="#ec4899" stopOpacity={0} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="date" tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} tickFormatter={(v) => formatNumber(Number(v))} />
+                      <Tooltip formatter={(value: number, name: string) => [formatNumber(Number(value)), name === "views" ? "Visualizações" : "Engajamento"]} />
+                      <Area type="monotone" dataKey="views" stroke="#111827" fill="url(#tiktokViewsGradient)" strokeWidth={2.5} name="Visualizações" dot={false} />
+                      <Area type="monotone" dataKey="engagement" stroke="#ec4899" fill="url(#tiktokEngagementGradient)" strokeWidth={2.5} name="Engajamento" dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm font-bold text-slate-400">Importe vídeos do TikTok para montar a evolução.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+              <h3 className="font-black">Top vídeos por engajamento</h3>
+              <p className="mt-0.5 text-xs font-bold text-slate-400">Curtidas + comentários + compartilhamentos</p>
+              <div className="mt-4 h-64">
+                {tiktokTopEngagement.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={tiktokTopEngagement.map((metric) => ({ name: metric.postTitle.length > 26 ? `${metric.postTitle.slice(0, 26)}…` : metric.postTitle, engagement: metricEngagement(metric) }))} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis type="number" tickFormatter={(value) => formatNumber(Number(value))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                      <Tooltip formatter={(value: number) => [formatNumber(value), "Engajamento"]} />
+                      <Bar dataKey="engagement" fill="#ec4899" radius={[0, 6, 6, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="flex h-full items-center justify-center text-sm font-bold text-slate-400">Sem engajamento importado no período.</div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]">
+            {tiktokEngagementMix.length ? (
+              <BreakdownChart title="Distribuição do engajamento" data={tiktokEngagementMix} unit="interações" />
+            ) : (
+              <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+                <h3 className="font-black">Distribuição do engajamento</h3>
+                <div className="mt-3 flex h-44 items-center justify-center rounded-3xl bg-slate-50 text-sm font-bold text-slate-400">Sem curtidas, comentários ou compartilhamentos.</div>
+              </div>
+            )}
+            <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+              <h3 className="font-black">Taxas mais fortes por vídeo</h3>
+              <p className="mt-0.5 text-xs font-bold text-slate-400">Taxa de engajamento, compartilhamento e comentário</p>
+              <div className="mt-3 grid gap-2">
+                {tiktokTopRates.map((metric) => (
+                  <button key={metric.id} type="button" onClick={() => setModal({ kind: "metric", id: metric.id })} className="grid gap-2 rounded-2xl border border-slate-100 bg-slate-50 p-3 text-left transition hover:border-pink-200 hover:bg-white md:grid-cols-[1fr_auto]">
+                    <div className="min-w-0">
+                      <p className="line-clamp-1 text-sm font-black text-slate-800">{metric.postTitle}</p>
+                      <p className="mt-0.5 text-xs font-bold text-slate-400">{formatNumber(metric.reach)} views · {formatNumber(metricEngagement(metric))} interações</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs font-black">
+                      <span className="rounded-full bg-pink-100 px-2 py-1 text-pink-700">{formatPercent(metricEngagementRate(metric))} engaj.</span>
+                      <span className="rounded-full bg-cyan-100 px-2 py-1 text-cyan-700">{formatPercent(metric.reach ? (metric.shares / metric.reach) * 100 : 0)} compart.</span>
+                      <span className="rounded-full bg-violet-100 px-2 py-1 text-violet-700">{formatPercent(metric.reach ? (metric.comments / metric.reach) * 100 : 0)} coment.</span>
+                    </div>
+                  </button>
+                ))}
+                {!tiktokTopRates.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Ainda não há vídeos com visualizações para calcular taxas.</p>}
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-black">Top vídeos · TikTok</h3>
+                <p className="text-xs font-bold text-slate-400">Ordenado por visualizações</p>
+              </div>
+              <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
+                Ver todos os {channelMetrics.length} →
+              </button>
+            </div>
+            {top20.length > 0 ? (
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {top20.slice(0, 12).map((metric) => {
+                  const thumb = thumbnailFor(metric);
+                  return (
+                    <button key={metric.id} type="button" onClick={() => setModal({ kind: "metric", id: metric.id })} className="overflow-hidden rounded-3xl bg-white text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                      <div className="relative aspect-[9/12] bg-slate-100">
+                        {thumb ? (
+                          <img src={thumb} className="h-full w-full object-cover" alt="" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <FileVideo size={28} className="text-slate-300" />
+                          </div>
+                        )}
+                        <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-black text-white">TikTok</span>
+                      </div>
+                      <div className="p-3">
+                        <p className="line-clamp-2 text-sm font-black leading-snug text-slate-800">{metric.postTitle}</p>
+                        {metric.date && <p className="mt-0.5 text-[10px] font-bold text-slate-400">{new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR")}</p>}
+                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs font-black">
+                          <span className="rounded-2xl bg-slate-50 px-2 py-1 text-slate-700">{formatNumber(metric.reach)} views</span>
+                          <span className="rounded-2xl bg-pink-50 px-2 py-1 text-pink-700">{formatNumber(metricEngagement(metric))} engaj.</span>
+                          <span className="rounded-2xl bg-violet-50 px-2 py-1 text-violet-700">{formatNumber(metric.comments)} coment.</span>
+                          <span className="rounded-2xl bg-cyan-50 px-2 py-1 text-cyan-700">{formatNumber(metric.shares)} compart.</span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica do TikTok encontrada com os filtros atuais.</p>
             )}
           </section>
         </div>
@@ -9717,7 +9913,10 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
           subscribersGained: existing?.subscribersGained,
           subscribersLost: existing?.subscribersLost,
           impressions: existing?.impressions,
-          impressionClickThroughRate: existing?.impressionClickThroughRate
+          impressionClickThroughRate: existing?.impressionClickThroughRate,
+          thumbnailUrl: video.coverImageUrl || existing?.thumbnailUrl,
+          sourceUrl: video.shareUrl || existing?.sourceUrl,
+          embedUrl: video.embedLink || existing?.embedUrl
         };
       });
 
@@ -11352,6 +11551,7 @@ function CampaignModalV2({ modal, currentUser, profiles, campaignAudiences, prod
 }
 
 function thumbnailForModal(metric: PostMetric): string | null {
+  if (metric.thumbnailUrl) return metric.thumbnailUrl;
   const ext = metric.externalId;
   if (ext?.startsWith("yt:")) return `https://i.ytimg.com/vi/${ext.slice(3)}/hqdefault.jpg`;
   return null;

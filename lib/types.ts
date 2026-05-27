@@ -327,6 +327,9 @@ export type PostMetric = {
   subscribersLost?: number;
   impressions?: number;
   impressionClickThroughRate?: number;
+  thumbnailUrl?: string;
+  sourceUrl?: string;
+  embedUrl?: string;
 };
 
 export type PostMetricSnapshot = {

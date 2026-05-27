@@ -620,7 +620,10 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
     subscribers_gained: item.subscribersGained ?? null,
     subscribers_lost: item.subscribersLost ?? null,
     impressions: item.impressions ?? null,
-    impression_click_through_rate: item.impressionClickThroughRate ?? null
+    impression_click_through_rate: item.impressionClickThroughRate ?? null,
+    thumbnail_url: item.thumbnailUrl ?? null,
+    source_url: item.sourceUrl ?? null,
+    embed_url: item.embedUrl ?? null
   }));
 }
 
@@ -962,7 +965,10 @@ function mapMetric(row: any): PostMetric {
     subscribersGained: row.subscribers_gained != null ? Number(row.subscribers_gained) : undefined,
     subscribersLost: row.subscribers_lost != null ? Number(row.subscribers_lost) : undefined,
     impressions: row.impressions != null ? Number(row.impressions) : undefined,
-    impressionClickThroughRate: row.impression_click_through_rate != null ? Number(row.impression_click_through_rate) : undefined
+    impressionClickThroughRate: row.impression_click_through_rate != null ? Number(row.impression_click_through_rate) : undefined,
+    thumbnailUrl: row.thumbnail_url ?? undefined,
+    sourceUrl: row.source_url ?? undefined,
+    embedUrl: row.embed_url ?? undefined
   };
 }
 

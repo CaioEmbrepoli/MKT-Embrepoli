@@ -8,6 +8,9 @@ alter table public.post_metrics add column if not exists subscribers_gained inte
 alter table public.post_metrics add column if not exists subscribers_lost integer;
 alter table public.post_metrics add column if not exists impressions integer;
 alter table public.post_metrics add column if not exists impression_click_through_rate numeric;
+alter table public.post_metrics add column if not exists thumbnail_url text;
+alter table public.post_metrics add column if not exists source_url text;
+alter table public.post_metrics add column if not exists embed_url text;
 
 create unique index if not exists post_metrics_external_id_idx
 on public.post_metrics (external_id);
