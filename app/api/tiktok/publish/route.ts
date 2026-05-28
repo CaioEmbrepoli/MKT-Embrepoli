@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getTikTokAccessToken, tiktokRequestContext } from "@/lib/tiktok-server";
+import { getGoogleAccessToken } from "@/lib/google-server";
 
 /** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
@@ -39,19 +40,13 @@ export async function POST(request: Request) {
     const driveFileId = extractDriveFileId(assetUrl);
 
     if (driveFileId) {
-      // Arquivo do Google Drive — busca token via service client do contexto TikTok
-      const { data: conn } = await context.service
-        .from("google_connections")
-        .select("access_token")
-        .eq("organization_id", context.organizationId)
-        .eq("service", "drive")
-        .maybeSingle();
-
-      if (!conn?.access_token) {
-        return NextResponse.json({ error: "Google Drive não conectado. Conecte o Google Drive nas configurações." }, { status: 400 });
+      // Arquivo do Google Drive — usa getGoogleAccessToken para refresh automático
+      let driveToken: string;
+      try {
+        driveToken = await getGoogleAccessToken(context, "drive");
+      } catch (e) {
+        return NextResponse.json({ error: e instanceof Error ? e.message : "Google Drive não conectado. Conecte o Google Drive nas configurações." }, { status: 400 });
       }
-
-      const driveToken = conn.access_token as string;
 
       const metaRes = await fetch(
         `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=size,mimeType`,
