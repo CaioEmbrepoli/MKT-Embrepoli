@@ -489,6 +489,7 @@ export type SalesClient = {
   stateUf: string;
   city: string;
   lastPurchaseAt: string;
+  lastPurchaseValue?: number;
   status: SalesClientStatus;
   source: SalesClientSource;
   sourceCustom?: string;

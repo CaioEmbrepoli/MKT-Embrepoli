@@ -33,6 +33,8 @@ import {
   File,
   FileImage,
   FileUp,
+  FileDown,
+  FileSpreadsheet,
   FileText,
   FileVideo,
   Download,
@@ -1120,7 +1122,7 @@ export default function Home() {
   const canReviewAssets = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
   const canManageTeam = hasModulePermission(currentUser, activeArea, "configuracoes", "manage", profileAreas, profileModulePermissions);
   const userHasNoTeam = loggedIn && currentUser.active && currentUser.role !== "admin" && allowedAreas.length === 0;
-  const pendingReviewAssets = postReviewAssets.filter((asset) => asset.status === "Aguardando revisão");
+  const pendingReviewAssets = postReviewAssets.filter((asset) => asset.status === "Aguardando revisão" && !asset.isCover);
   const pendingApprovalsCount = canManageTeam ? profiles.filter((p) => !p.active).length : 0;
 
   const visiblePosts = posts.filter((post) => canSeeItem(currentUser, post.createdBy, post.assignedTo));
@@ -3017,6 +3019,7 @@ type ImportedSalesClientRow = {
   stateUf: string;
   city: string;
   lastPurchaseAt: string;
+  lastPurchaseValue?: number;
   frequency?: CallFrequency;
 };
 
@@ -3096,13 +3099,20 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
   });
   const header = rows[0]?.map(cleanImportCell) ?? [];
   const coreMatch = CLIENT_IMPORT_HEADERS.every((h, i) => header[i] === h);
-  const hasFreqCol = header.length === 8 && header[7] === "Frequência";
-  const validHeaders = coreMatch && (header.length === 7 || hasFreqCol);
+  const hasValueCol = header[7] === "Valor Ultima Compra";
+  const hasFreqCol =
+    (header.length === 8 && header[7] === "Frequência") ||
+    (header.length === 9 && hasValueCol && header[8] === "Frequência");
+  const validHeaders = coreMatch && (
+    header.length === 7 ||
+    (header.length === 8 && (hasValueCol || header[7] === "Frequência")) ||
+    (header.length === 9 && hasValueCol && header[8] === "Frequência")
+  );
   if (!validHeaders) {
-    throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")} (+ coluna opcional "Frequência").`);
+    throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")} (+ colunas opcionais "Valor Ultima Compra" e/ou "Frequência").`);
   }
 
-  const maxCols = hasFreqCol ? 8 : 7;
+  const maxCols = hasFreqCol ? (hasValueCol ? 9 : 8) : (hasValueCol ? 8 : 7);
   const seenCodes = new Set<string>();
   const imported: ImportedSalesClientRow[] = [];
   rows.slice(1).forEach((row, index) => {
@@ -3116,7 +3126,12 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
     if (!name) throw new Error(`Linha ${rowNumber}: Nome Cliente é obrigatório.`);
     if (seenCodes.has(externalCode)) throw new Error(`Código duplicado no arquivo: ${externalCode}.`);
     seenCodes.add(externalCode);
-    const freqRaw = hasFreqCol ? cleanImportCell((row as unknown[])[7]) : "";
+    const valueRaw = hasValueCol ? cleanImportCell((row as unknown[])[7]) : "";
+    const lastPurchaseValue = valueRaw
+      ? parseFloat(valueRaw.replace(/[^\d,.]/g, "").replace(",", ".")) || undefined
+      : undefined;
+    const freqColIndex = hasValueCol ? 8 : 7;
+    const freqRaw = hasFreqCol ? cleanImportCell((row as unknown[])[freqColIndex]) : "";
     const frequency = freqRaw ? (parseFrequency(freqRaw) ?? undefined) : undefined;
     imported.push({
       rowNumber,
@@ -3127,12 +3142,20 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
       stateUf: stateUf.toUpperCase(),
       city,
       lastPurchaseAt: parseClientImportDate((row as unknown[])[6], rowNumber),
+      lastPurchaseValue,
       frequency
     });
   });
 
   if (!imported.length) throw new Error("Nenhum cliente encontrado no arquivo.");
   return imported;
+}
+
+function exportClientTemplate() {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([[...CLIENT_IMPORT_HEADERS, "Valor Ultima Compra", "Frequência"]]);
+  XLSX.utils.book_append_sheet(wb, ws, CLIENT_IMPORT_SHEET);
+  XLSX.writeFile(wb, "modelo-clientes.xlsx");
 }
 
 function importedRowToSalesClient(row: ImportedSalesClientRow): SalesClient {
@@ -3148,7 +3171,8 @@ function importedRowToSalesClient(row: ImportedSalesClientRow): SalesClient {
     stateUf: row.stateUf,
     city: row.city,
     lastPurchaseAt: row.lastPurchaseAt,
-    status: "lead",
+    lastPurchaseValue: row.lastPurchaseValue,
+    status: row.lastPurchaseAt ? "cliente" : "lead",
     source: "manual",
     assignedTo: "",
     notes: "",
@@ -3166,6 +3190,7 @@ function normalizeSalesClient(client: SalesClient): SalesClient {
     stateUf: client.stateUf ?? "",
     city: client.city ?? "",
     lastPurchaseAt: client.lastPurchaseAt ?? "",
+    lastPurchaseValue: client.lastPurchaseValue,
     salesFunnelStage: client.salesFunnelStage ?? "lead"
   };
 }
@@ -3174,14 +3199,15 @@ function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSal
   const result: SalesClientImportResult = { rows: imported.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0, schedulesCreated: 0 };
   const next = current.map(normalizeSalesClient);
   const indexByKey = new Map(next.map((client, index) => [salesClientImportKey(client), index]));
-  const importFields: (keyof Pick<SalesClient, "externalCode" | "name" | "clientType" | "phone" | "stateUf" | "city" | "lastPurchaseAt">)[] = [
+  const importFields: (keyof Pick<SalesClient, "externalCode" | "name" | "clientType" | "phone" | "stateUf" | "city" | "lastPurchaseAt" | "lastPurchaseValue">)[] = [
     "externalCode",
     "name",
     "clientType",
     "phone",
     "stateUf",
     "city",
-    "lastPurchaseAt"
+    "lastPurchaseAt",
+    "lastPurchaseValue"
   ];
 
   imported.forEach((row) => {
@@ -3198,10 +3224,15 @@ function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSal
     const existing = next[existingIndex];
     const patch: Partial<SalesClient> = {};
     importFields.forEach((field) => {
-      if (cleanImportCell(existing[field]) !== cleanImportCell(importedClient[field])) {
+      if (String(existing[field] ?? "") !== String(importedClient[field] ?? "")) {
         patch[field] = importedClient[field] as never;
       }
     });
+
+    // Se a linha importada tem data de compra e o cliente existente é lead → promover para cliente
+    if (row.lastPurchaseAt && existing.status === "lead") {
+      patch.status = "cliente";
+    }
 
     const changedFields = Object.keys(patch).length;
     if (!changedFields) {
@@ -3300,6 +3331,10 @@ function PainelVendas({ salesClients, callSchedules, tasks, salesFunnelStages, o
     if (!best || item.clients.length > best.clients.length) return item;
     return best;
   }, null);
+  const wonProposals = salesClients.flatMap((c) => c.proposals ?? []).filter((p) => p.status === "ganha");
+  const ticketMedio = wonProposals.length
+    ? wonProposals.reduce((s, p) => s + (p.value ?? 0), 0) / wonProposals.length
+    : null;
 
   const summaryCards = [
     { label: "Clientes ativos", value: clientesAtivos, helper: `${salesClients.length} clientes no total`, color: "emerald", onClick: () => openClients("cliente") },
@@ -3399,25 +3434,70 @@ function PainelVendas({ salesClients, callSchedules, tasks, salesFunnelStages, o
             </div>
           </div>
           {sortedStages.length ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between rounded-2xl bg-white p-3">
-                <span className="text-sm font-bold text-slate-500">Etapa com mais clientes</span>
-                <span className="text-sm font-black text-slate-900">{topStage ? `${topStage.stage.name} · ${topStage.clients.length}` : "Sem clientes"}</span>
-              </div>
-              <div className="space-y-2">
-                {stageSummaries.slice(0, 5).map(({ stage, clients, total }) => (
-                  <div key={stage.id}>
-                    <div className="mb-1 flex items-center justify-between text-xs font-black text-slate-500">
-                      <span>{stage.emoji} {stage.name}</span>
-                      <span>{clients.length} · {brl(total)}</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-white">
-                      <div className="h-full rounded-full" style={{ width: `${activeClients.length ? Math.max(8, (clients.length / activeClients.length) * 100) : 0}%`, background: stage.color }} />
-                    </div>
+            (() => {
+              type FRow = SalesFunnelStage | SalesFunnelStage[];
+              const rows: FRow[] = [];
+              let fi = 0;
+              while (fi < sortedStages.length) {
+                if (sortedStages[fi].halfWidth) {
+                  const group: SalesFunnelStage[] = [sortedStages[fi]];
+                  while (fi + 1 < sortedStages.length && sortedStages[fi + 1].halfWidth) { fi++; group.push(sortedStages[fi]); }
+                  rows.push(group);
+                } else {
+                  rows.push(sortedStages[fi]);
+                }
+                fi++;
+              }
+              return (
+                <>
+                  <div className="space-y-2 mb-3">
+                    {rows.map((row, rowIndex) => {
+                      const widthPct = 100 - rowIndex * (40 / Math.max(sortedStages.length - 1, 1));
+                      if (Array.isArray(row)) {
+                        return (
+                          <div key={row.map((s) => s.id).join("-")} className="mx-auto flex gap-2" style={{ width: `${widthPct}%` }}>
+                            {row.map((stage) => {
+                              const count = activeClients.filter((c) => clientFunnelStage(c) === stage.id).length;
+                              const value = activeClients.filter((c) => clientFunnelStage(c) === stage.id).reduce((acc, c) => acc + clientBestProposalValue(c), 0);
+                              return (
+                                <div key={stage.id} className="flex flex-1 items-center gap-2 rounded-3xl px-3 py-2.5 text-white shadow" style={{ backgroundColor: stage.color }}>
+                                  <span className="flex-1 truncate text-sm font-black">{stage.emoji} {stage.name}</span>
+                                  <span className="shrink-0 text-xs font-black">{count} {count === 1 ? "cliente" : "clientes"}</span>
+                                  {value > 0 && <span className="shrink-0 text-xs font-bold opacity-90">{brl(value)}</span>}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      }
+                      const count = activeClients.filter((c) => clientFunnelStage(c) === row.id).length;
+                      const value = activeClients.filter((c) => clientFunnelStage(c) === row.id).reduce((acc, c) => acc + clientBestProposalValue(c), 0);
+                      return (
+                        <div key={row.id} className="mx-auto flex items-center gap-3 rounded-3xl px-4 py-3 text-white shadow"
+                          style={{ width: `${widthPct}%`, backgroundColor: row.color }}>
+                          <span className="flex-1 truncate text-sm font-black">{row.emoji} {row.name}</span>
+                          <span className="shrink-0 text-sm font-black">{count} {count === 1 ? "cliente" : "clientes"}</span>
+                          {value > 0 && <span className="shrink-0 text-xs font-bold opacity-90">{brl(value)}</span>}
+                        </div>
+                      );
+                    })}
                   </div>
-                ))}
-              </div>
-            </div>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    {[
+                      { label: "Pipeline total",   value: brl(pipelineTotal),                               sub: `${pipelineClients.length} no pipeline` },
+                      { label: "Propostas ganhas", value: String(wonProposals.length),                       sub: "propostas ganhas" },
+                      { label: "Ticket médio",     value: ticketMedio !== null ? brl(ticketMedio) : "—",    sub: "por proposta ganha" },
+                    ].map((m) => (
+                      <div key={m.label} className="rounded-2xl bg-white px-3 py-2.5 shadow-sm">
+                        <p className="text-sm font-black text-slate-800 leading-tight">{m.value}</p>
+                        <p className="text-xs font-black text-slate-500 mt-0.5">{m.label}</p>
+                        <p className="text-xs font-bold text-slate-400">{m.sub}</p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+            })()
           ) : (
             <p className="rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-center text-sm font-bold text-slate-400">
               Nenhuma etapa do funil comercial cadastrada ainda.
@@ -3529,6 +3609,11 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
     setSalesClients((prev) => prev.filter((c) => c.id !== id));
   }
 
+  function convertStatus(client: SalesClient) {
+    const updated = normalizeSalesClient({ ...client, status: client.status === "lead" ? "cliente" : "lead" });
+    setSalesClients((prev) => prev.map((c) => c.id === updated.id ? updated : c));
+  }
+
   function addToCallSchedule(client: SalesClient, freq: CallFrequency) {
     const already = callSchedules.find((s) => s.clientId === client.id && s.active);
     if (already) return;
@@ -3578,11 +3663,11 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
           onChange={(e) => setSearch(e.target.value)}
           className="ml-auto rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
         />
-        <button type="button" aria-label="Importar clientes XLSX" onClick={() => setShowImportModal(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-blue-50 hover:text-blue-700">
-          <FileUp size={16} /> Importar XLSX
+        <button type="button" onClick={() => setShowImportModal(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 transition hover:bg-blue-50 hover:text-blue-700">
+          <FileSpreadsheet size={16} /> Planilha
         </button>
         <button type="button" aria-label="Novo cliente" onClick={openNew} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
-          <Plus size={16} /> Novo
+          <Plus size={16} />
         </button>
       </div>
       <div className="grid gap-3">
@@ -3608,7 +3693,12 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
                   {client.phone && <span className="mr-3">📞 {client.phone}</span>}
                   {client.email && <span className="mr-3">✉️ {client.email}</span>}
                   {(client.city || client.stateUf) && <span className="mr-3">{[client.city, client.stateUf].filter(Boolean).join(" / ")}</span>}
-                  {client.lastPurchaseAt && <span className="mr-3">Última compra: {formatSalesClientDate(client.lastPurchaseAt)}</span>}
+                  {client.lastPurchaseAt && (
+                    <span className="mr-3">
+                      Última compra: {formatSalesClientDate(client.lastPurchaseAt)}
+                      {client.lastPurchaseValue ? ` · ${formatCurrency(client.lastPurchaseValue)}` : ""}
+                    </span>
+                  )}
                   {client.segment && <span>{client.segment}</span>}
                   {client.source !== "manual" && <span className="ml-3 opacity-70">via {salesSourceLabel[client.source]}</span>}
                 </p>
@@ -3626,8 +3716,14 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
                   </div>
                 )}
                 {hasSchedule && <span className="rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-600">✓ Na agenda</span>}
-                <button type="button" aria-label={`Editar cliente ${client.name}`} onClick={() => openEdit(client)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">editar</button>
-                <button type="button" aria-label={`Excluir cliente ${client.name}`} onClick={() => remove(client.id)} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600">excluir</button>
+                <button type="button" aria-label={`Editar cliente ${client.name}`} title="Editar" onClick={() => openEdit(client)} className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Settings size={16} /></button>
+                {client.status !== "inativo" && (
+                  <button type="button" onClick={() => convertStatus(client)}
+                    className={`rounded-2xl px-3 py-2 text-sm font-black transition ${client.status === "lead" ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200" : "bg-amber-100 text-amber-700 hover:bg-amber-200"}`}>
+                    {client.status === "lead" ? "→ Cliente" : "← Lead"}
+                  </button>
+                )}
+                <button type="button" aria-label={`Excluir cliente ${client.name}`} title="Excluir" onClick={() => remove(client.id)} className="rounded-2xl bg-slate-100 p-2 text-slate-600"><Trash2 size={16} /></button>
               </div>
             </div>
           );
@@ -3659,7 +3755,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
         />
       )}
       {showImportModal && (
-        <ClienteImportModal
+        <PlanilhaModal
           onImport={importClients}
           onClose={() => setShowImportModal(false)}
         />
@@ -3746,7 +3842,7 @@ function QuickScheduleModal({ client, currentUser, profiles, onSave, onClose }: 
   );
 }
 
-function ClienteImportModal({ onImport, onClose }: {
+function PlanilhaModal({ onImport, onClose }: {
   onImport: (rows: ImportedSalesClientRow[]) => SalesClientImportResult;
   onClose: () => void;
 }) {
@@ -3778,45 +3874,64 @@ function ClienteImportModal({ onImport, onClose }: {
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-black uppercase tracking-wide text-blue-700">Vendas · Clientes</p>
-          <h2 className="text-xl font-black">Importar clientes XLSX</h2>
-          <p className="mt-1 text-sm font-bold text-slate-500">
-            Aceita somente a planilha com aba Page1 e os cabeçalhos exatamente iguais ao arquivo enviado.
-          </p>
+          <h2 className="text-xl font-black">Planilha de Clientes</h2>
+          <p className="mt-1 text-sm font-bold text-slate-500">Exporte o modelo ou importe uma planilha preenchida.</p>
         </div>
         <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
       </div>
 
-      <label className="mt-5 flex cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed border-blue-200 bg-blue-50/60 px-6 py-8 text-center transition hover:border-blue-500 hover:bg-blue-50">
-        <FileUp className="mb-2 text-blue-700" size={28} />
-        <span className="text-sm font-black text-blue-800">{file ? file.name : "Selecionar arquivo .xlsx"}</span>
-        <span className="mt-1 text-xs font-bold text-slate-500">Page1 · Código, Nome Cliente, Tipo, Telefone, UF, Municipio, Ultima Compra</span>
-        <input
-          type="file"
-          accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          className="hidden"
-          onChange={(e) => {
-            setFile(e.target.files?.[0] ?? null);
-            setError("");
-            setResult(null);
-          }}
-        />
-      </label>
-
-      {error && <p className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{error}</p>}
-      {result && (
-        <div className="mt-4 rounded-3xl bg-emerald-50 p-4 text-sm font-bold text-emerald-800">
-          <p className="font-black">Importação concluída</p>
-          <p>{result.rows} linhas processadas · {result.created} novos · {result.updated} atualizados · {result.unchanged} ignorados iguais.</p>
-          {result.updatedFields > 0 && <p>{result.updatedFields} campos diferentes foram atualizados.</p>}
-          {result.schedulesCreated > 0 && <p className="text-blue-700">📞 {result.schedulesCreated} agenda{result.schedulesCreated > 1 ? "s" : ""} de ligação criada{result.schedulesCreated > 1 ? "s" : ""} automaticamente.</p>}
+      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+        {/* Painel esquerdo — Exportar modelo */}
+        <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-100 bg-slate-50 p-5 text-center">
+          <FileDown size={32} className="text-blue-700" />
+          <div>
+            <p className="font-black text-slate-900">Exportar Modelo</p>
+            <p className="mt-1 text-sm font-bold text-slate-500">Baixe a planilha template vazia com os cabeçalhos corretos para preenchimento.</p>
+          </div>
+          <button type="button" onClick={exportClientTemplate}
+            className="mt-auto w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">
+            Baixar modelo .xlsx
+          </button>
         </div>
-      )}
 
-      <div className="mt-5 flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
-        <button type="button" disabled={loading} onClick={runImport} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-60">
-          {loading ? "Importando..." : "Importar"}
-        </button>
+        {/* Painel direito — Importar planilha */}
+        <div className="flex flex-col gap-3 rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="text-center">
+            <p className="font-black text-slate-900">Importar Planilha</p>
+            <p className="mt-1 text-sm font-bold text-slate-500">Aba Page1 com os cabeçalhos do modelo.</p>
+          </div>
+          <label className="flex flex-1 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-blue-200 bg-white px-4 py-6 text-center transition hover:border-blue-500 hover:bg-blue-50">
+            <FileUp className="mb-2 text-blue-700" size={24} />
+            <span className="text-sm font-black text-blue-800">{file ? file.name : "Selecionar arquivo .xlsx"}</span>
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="hidden"
+              onChange={(e) => {
+                setFile(e.target.files?.[0] ?? null);
+                setError("");
+                setResult(null);
+              }}
+            />
+          </label>
+          {error && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{error}</p>}
+          {result && (
+            <div className="rounded-2xl bg-emerald-50 p-3 text-xs font-bold text-emerald-800">
+              <p className="font-black">Importação concluída ✓</p>
+              <p>{result.rows} linhas · {result.created} novos · {result.updated} atualizados · {result.unchanged} ignorados.</p>
+              {result.updatedFields > 0 && <p>{result.updatedFields} campos atualizados.</p>}
+              {result.schedulesCreated > 0 && <p className="text-blue-700">📞 {result.schedulesCreated} agenda{result.schedulesCreated > 1 ? "s" : ""} criada{result.schedulesCreated > 1 ? "s" : ""}.</p>}
+            </div>
+          )}
+          <button type="button" disabled={loading} onClick={runImport}
+            className="w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-60">
+            {loading ? "Importando..." : "Importar"}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-5 flex justify-end">
+        <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Fechar</button>
       </div>
     </CenteredModal>
   );
@@ -3967,6 +4082,14 @@ function ClienteModal({ client, profiles, profileAreas, callSchedules, onSave, o
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
             </div>
             <div>
+              <label className="block text-sm font-bold text-slate-600 mb-1">Valor da Última Compra</label>
+              <input type="number" min="0" step="0.01"
+                value={form.lastPurchaseValue ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, lastPurchaseValue: e.target.value ? parseFloat(e.target.value) : undefined }))}
+                className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500"
+                placeholder="0,00" />
+            </div>
+            <div>
               <label className="block text-sm font-bold text-slate-600 mb-1">Status</label>
               <select value={form.status} onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as SalesClientStatus }))}
                 className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 bg-white">
@@ -4076,20 +4199,11 @@ function ClienteModal({ client, profiles, profileAreas, callSchedules, onSave, o
             ))}
             <button type="button" aria-label="Adicionar proposta" onClick={() => { addProposal(); }}
               className="flex items-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-black text-slate-500 hover:border-blue-400 hover:text-blue-600 transition w-full justify-center">
-              <Plus size={16} /> Adicionar proposta
+              <Plus size={16} />
             </button>
           </div>
         )}
-        <div className="mt-5 flex gap-2 items-center">
-          <button type="button"
-            onClick={() => onSave({ ...form, status: form.status === "lead" ? "cliente" : "lead" })}
-            className={`rounded-2xl px-4 py-2 font-black transition mr-auto ${
-              form.status === "lead"
-                ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                : "bg-amber-100 text-amber-700 hover:bg-amber-200"
-            }`}>
-            {form.status === "lead" ? "→ Converter em Cliente" : "← Mover para Leads"}
-          </button>
+        <div className="mt-5 flex gap-2 justify-end">
           <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 px-4 py-2 font-black text-slate-600 transition hover:bg-slate-200">Cancelar</button>
           <button type="button" onClick={() => onSave(form)} className="rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">Salvar</button>
         </div>
@@ -4322,7 +4436,7 @@ function AgendaModal({ schedule, allSchedules, onSave, onArchive, onRemove, onCl
           <div className="flex gap-1 mt-4 border-b border-slate-100">
             <button type="button" onClick={() => setTab("config")}
               className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-black transition border-b-2 -mb-px ${tab === "config" ? "border-blue-700 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
-              <Pencil size={14} /> Configurações
+              <Settings size={14} />
             </button>
             <button type="button" onClick={() => setTab("history")}
               className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-black transition border-b-2 -mb-px ${tab === "history" ? "border-blue-700 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-700"}`}>
@@ -4416,7 +4530,7 @@ function AgendaModal({ schedule, allSchedules, onSave, onArchive, onRemove, onCl
           <button type="button"
             onClick={() => { if (window.confirm("Excluir esta agenda permanentemente?")) { onRemove(); onClose(); } }}
             className="flex items-center gap-1.5 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-black text-rose-700 transition hover:bg-rose-100">
-            <Trash2 size={14} /> Excluir
+            <Trash2 size={14} />
           </button>
           {tab === "config" && (
             <button type="button" disabled={!clientName.trim()} onClick={() => { save(); onClose(); }}
@@ -4682,7 +4796,7 @@ function LigacoesSection({ callSchedules, setCallSchedules, salesClients, curren
           </button>
           <button type="button" onClick={() => setNewModal(true)}
             className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800">
-            <Plus size={16} /> Nova agenda
+            <Plus size={16} />
           </button>
         </div>
       </div>
@@ -5736,7 +5850,7 @@ function FunilComercialSection({ salesClients, setSalesClients, salesFunnelStage
           <div className="mb-5 flex flex-wrap items-center gap-3">
             <button type="button" onClick={() => setAddingStage((v) => !v)}
               className="flex items-center gap-1.5 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white hover:bg-blue-800 transition">
-              <Plus size={16} /> Nova etapa
+              <Plus size={16} />
             </button>
             <div className="rounded-2xl bg-blue-50 border border-blue-100 px-4 py-2 text-sm font-bold text-blue-700">
               💡 Arraste as barras para reordenar. No Pipeline, arraste os clientes entre colunas.
@@ -5954,7 +6068,7 @@ function VendasMetasSection({ tasks, setTasks, currentUser, profileById, setModa
                   onClick={() => openAddGoal(col.id, col.frequency)}
                   className="mt-1 w-full rounded-2xl border border-dashed border-slate-300 bg-white/60 py-2 text-sm font-black text-slate-500 hover:border-blue-400 hover:bg-white hover:text-blue-600 transition"
                 >
-                  <Plus size={14} className="inline mr-1" />Nova meta
+                  <Plus size={14} />
                 </button>
               </div>
             );
@@ -6186,7 +6300,7 @@ function ReviewDetailPanel({
         </div>
         <div className="flex flex-wrap gap-2">
           {selectedPost && <button type="button" onClick={() => setModal({ kind: "post", id: selectedPost.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Abrir post</button>}
-          <button type="button" onClick={removeAsset} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700">Excluir</button>
+          <button type="button" onClick={removeAsset} title="Excluir" className="rounded-2xl bg-rose-100 p-2 text-rose-700"><Trash2 size={16} /></button>
         </div>
       </div>
       <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
@@ -6271,7 +6385,7 @@ function ReviewsPage({
   const days = makeWeek(weekStart);
 
   const filteredAssets = assets
-    .filter((asset) => viewMode === "Todos" || asset.status === viewMode)
+    .filter((asset) => !asset.isCover && (viewMode === "Todos" || asset.status === viewMode))
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
 
   const selectedAsset =
@@ -6294,7 +6408,7 @@ function ReviewsPage({
 
   return (
     <div className="space-y-5 animate-task-switch">
-      <Panel title="Revisões" action={<Badge tone="amber">{assets.filter((a) => a.status === "Aguardando revisão").length} {assets.filter((a) => a.status === "Aguardando revisão").length === 1 ? "pendente" : "pendentes"}</Badge>}>
+      <Panel title="Revisões" action={<Badge tone="amber">{assets.filter((a) => a.status === "Aguardando revisão" && !a.isCover).length} {assets.filter((a) => a.status === "Aguardando revisão" && !a.isCover).length === 1 ? "pendente" : "pendentes"}</Badge>}>
         {/* Abas */}
         <div className="mb-5 flex flex-wrap gap-2">
           {tabs.map((tab) => (
@@ -6719,7 +6833,7 @@ function Dashboard({
   // ── Cards de resumo ────────────────────────────────────────────────────────
   const publishedPosts = posts.filter((p) => p.status === "Publicado").length;
   const inProductionPosts = posts.filter((p) => ["Produção", "Revisão", "Aprovado", "Agendado"].includes(p.status)).length;
-  const pendingReviews = postReviewAssets.filter((a) => a.status === "Aguardando revisão").length;
+  const pendingReviews = postReviewAssets.filter((a) => a.status === "Aguardando revisão" && !a.isCover).length;
   const activeCampaigns = campaigns.filter((c) => c.status === "Ativa").length;
   const totalReach = metrics.reduce((s, m) => s + m.reach, 0);
   const totalLeads = metrics.reduce((s, m) => s + m.leads, 0);
@@ -6728,7 +6842,14 @@ function Dashboard({
   const tasksOverdue = mktTasks.filter((t) => t.dueDate && t.dueDate < today && !t.columnId.endsWith("-done")).length;
 
   // ── Widget Métricas ────────────────────────────────────────────────────────
-  const filteredMetrics = selectedChannelId === "all" ? metrics : metrics.filter((m) => m.channelId === selectedChannelId);
+  // Período selecionado (calculado antes de filteredMetrics para ser usado no filtro)
+  const periodStart = new Date(); periodStart.setDate(periodStart.getDate() - comparisonPeriod);
+  const prevStart = new Date(periodStart); prevStart.setDate(prevStart.getDate() - comparisonPeriod);
+  const periodStartStr = periodStart.toISOString().slice(0, 10);
+  const prevStartStr = prevStart.toISOString().slice(0, 10);
+
+  const filteredMetrics = (selectedChannelId === "all" ? metrics : metrics.filter((m) => m.channelId === selectedChannelId))
+    .filter((m) => m.date >= periodStartStr);
   const filteredReach = filteredMetrics.reduce((s, m) => s + m.reach, 0);
   const filteredLeads = filteredMetrics.reduce((s, m) => s + m.leads, 0);
   const filteredEngagement = filteredMetrics.length
@@ -6736,10 +6857,6 @@ function Dashboard({
     : 0;
 
   // Comparação de postagens por período
-  const periodStart = new Date(); periodStart.setDate(periodStart.getDate() - comparisonPeriod);
-  const prevStart = new Date(periodStart); prevStart.setDate(prevStart.getDate() - comparisonPeriod);
-  const periodStartStr = periodStart.toISOString().slice(0, 10);
-  const prevStartStr = prevStart.toISOString().slice(0, 10);
   const postsThisPeriod = posts.filter((p) => p.publishAt && p.publishAt.slice(0, 10) >= periodStartStr && p.publishAt.slice(0, 10) <= today).length;
   const postsLastPeriod = posts.filter((p) => p.publishAt && p.publishAt.slice(0, 10) >= prevStartStr && p.publishAt.slice(0, 10) < periodStartStr).length;
   const postsDelta = postsLastPeriod === 0 ? null : Math.round(((postsThisPeriod - postsLastPeriod) / postsLastPeriod) * 100);
@@ -6861,6 +6978,18 @@ function Dashboard({
                 <option value="all">Todos os canais</option>
                 {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
+              <div className="flex gap-1">
+                {([7, 14, 30] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setComparisonPeriod(d)}
+                    className={`rounded-xl px-2 py-1 text-xs font-black transition ${comparisonPeriod === d ? "bg-blue-700 text-white" : "text-slate-500 hover:bg-slate-100"}`}
+                  >
+                    {d}d
+                  </button>
+                ))}
+              </div>
               {shortcutButton("Ver métricas", "marketing-metricas")}
             </div>
           </div>
@@ -6874,18 +7003,6 @@ function Dashboard({
           <div className="mt-3 rounded-2xl bg-white p-3">
             <div className="mb-2 flex items-center justify-between">
               <p className="text-xs font-black text-slate-700">Postagens</p>
-              <div className="flex gap-1">
-                {([7, 14, 30] as const).map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setComparisonPeriod(d)}
-                    className={`rounded-xl px-2 py-1 text-xs font-black transition ${comparisonPeriod === d ? "bg-blue-700 text-white" : "text-slate-500 hover:bg-slate-100"}`}
-                  >
-                    {d}d
-                  </button>
-                ))}
-              </div>
             </div>
             <div className="h-20">
               <ResponsiveContainer width="100%" height="100%">
@@ -7764,9 +7881,9 @@ function SortableTaskCard({ task, profileById, funnelById, setModal, openTaskMen
 function TaskQuickMenu({ task, columns, x, y, close, setModal, setTasks }: { task: Task; columns: TaskColumn[]; x: number; y: number; close: () => void; setModal: Dispatch<SetStateAction<ModalState>>; setTasks: Dispatch<SetStateAction<Task[]>> }) {
   return (
     <div className="fixed z-[70] w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-2xl" style={{ left: x, top: y }} onMouseLeave={close}>
-      <button type="button" onClick={() => { setModal({ kind: "task", id: task.id }); close(); }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black hover:bg-blue-50">Editar</button>
+      <button type="button" onClick={() => { setModal({ kind: "task", id: task.id }); close(); }} title="Editar" className="flex items-center justify-center w-full rounded-xl p-2 font-black hover:bg-blue-50"><Settings size={16} /></button>
       {!task.fixedGoalKey && (
-        <button type="button" onClick={() => { setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id)); close(); }} className="block w-full rounded-xl px-3 py-2 text-left text-sm font-black text-rose-700 hover:bg-rose-50">Excluir</button>
+        <button type="button" onClick={() => { setTasks((current) => current.filter((item) => item.id !== task.id && item.parentTaskId !== task.id)); close(); }} title="Excluir" className="flex items-center justify-center w-full rounded-xl p-2 font-black text-rose-700 hover:bg-rose-50"><Trash2 size={16} /></button>
       )}
       <div className="my-1 border-t border-slate-100" />
       <p className="px-3 py-1 text-[11px] font-black uppercase text-slate-400">Mover para</p>
@@ -9340,8 +9457,8 @@ function TeamSettings({ profiles, profileAreas, profileModulePermissions, setPro
                 >
                   {resettingProfileId === profile.id ? "Enviando..." : "Redefinir senha"}
                 </button>
-                <button onClick={() => setModal({ kind: "teamMember", id: profile.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">editar</button>
-                <button onClick={() => setProfiles((current) => current.filter((item) => item.id !== profile.id))} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600">excluir</button>
+                <button onClick={() => setModal({ kind: "teamMember", id: profile.id })} title="Editar" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Settings size={16} /></button>
+                <button onClick={() => setProfiles((current) => current.filter((item) => item.id !== profile.id))} title="Excluir" className="rounded-2xl bg-slate-100 p-2 text-slate-600"><Trash2 size={16} /></button>
               </div>
             )}
           </div>
@@ -9377,7 +9494,7 @@ function FunnelSettings({ funnelStages, setFunnelStages }: { funnelStages: Funne
       <form onSubmit={addStage} className="mb-5 grid gap-3 md:grid-cols-[1fr_90px_auto] md:items-end">
         <TextInput name="name" label="Nova etapa" required />
         <label className="block text-sm font-bold text-slate-600">Cor<input name="color" type="color" defaultValue="#2563eb" className="mt-1 h-10 w-full rounded-2xl border border-slate-200 bg-white p-1" /></label>
-        <SubmitButton>Adicionar</SubmitButton>
+        <SubmitButton><Plus size={16} /></SubmitButton>
       </form>
       <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={reorder}>
         <SortableContext items={sorted.map((stage) => stage.id)} strategy={verticalListSortingStrategy}>
@@ -9430,7 +9547,7 @@ function ChannelsLinesSettings({
   return (
     <div className="grid gap-5 xl:grid-cols-2">
       <Panel title="Canais">
-        <button onClick={() => { const name = window.prompt("Novo canal"); if (name) setChannels((current) => [...current, { id: slug(name), name, color: "#2563eb" }]); }} className="mb-4 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white">Adicionar canal</button>
+        <button onClick={() => { const name = window.prompt("Novo canal"); if (name) setChannels((current) => [...current, { id: slug(name), name, color: "#2563eb" }]); }} title="Adicionar canal" className="mb-4 rounded-2xl bg-blue-700 p-2 text-white"><Plus size={16} /></button>
         <div className="space-y-2">{channels.map((channel) => <div key={channel.id} className="flex items-center justify-between rounded-2xl bg-slate-50 p-3 font-black"><span>{channel.name}</span><button onClick={() => window.confirm("Excluir canal?") && setChannels((current) => current.filter((item) => item.id !== channel.id))} className="text-rose-600"><Trash2 size={16} /></button></div>)}</div>
       </Panel>
       <SimpleConfigPanel title="Públicos" addLabel="Adicionar público" promptLabel="Novo público" deleteLabel="Excluir público?" items={campaignAudiences} setItems={setCampaignAudiences} />
@@ -9482,7 +9599,7 @@ function PostTemplateSettings({ templates, setTemplates, channels, contentTypes,
               <Badge tone="slate">{funnelStages.find((stage) => stage.id === template.funnelStageId)?.name ?? "Sem funil"}</Badge>
             </div>
             <div className="mt-4 flex gap-2">
-              <button type="button" onClick={() => setEditingTemplate(template)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Editar</button>
+              <button type="button" onClick={() => setEditingTemplate(template)} title="Editar" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Settings size={16} /></button>
               <button type="button" onClick={() => window.confirm("Excluir este modelo?") && setTemplates((current) => current.filter((item) => item.id !== template.id))} className="rounded-2xl bg-rose-100 px-3 py-2 text-rose-700"><Trash2 size={16} /></button>
             </div>
           </div>
@@ -9561,7 +9678,7 @@ function ListEditor({ title, items, setItems }: { title: string; items: string[]
           <button type="button" onClick={() => setItems((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
         </div>
       ))}
-      <button type="button" onClick={() => setItems((current) => [...current, ""])} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Adicionar item</button>
+      <button type="button" onClick={() => setItems((current) => [...current, ""])} title="Adicionar item" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Plus size={16} /></button>
     </div>
   );
 }
@@ -9577,7 +9694,7 @@ function ChecklistEditor({ title, items, setItems }: { title: string; items: Che
           <button type="button" onClick={() => setItems((current) => current.filter((value) => value.id !== item.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700"><Trash2 size={15} /></button>
         </div>
       ))}
-      <button type="button" onClick={() => setItems((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Adicionar item</button>
+      <button type="button" onClick={() => setItems((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} title="Adicionar item" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Plus size={16} /></button>
     </div>
   );
 }
@@ -9600,7 +9717,7 @@ function CalendarDateSettings({ calendarDates, setCalendarDates }: { calendarDat
             </div>
             <div className="flex items-center gap-2">
               <span className="h-4 w-4 rounded-full" style={{ backgroundColor: item.color }} />
-              <button type="button" onClick={() => setEditingDate(item)} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Editar</button>
+              <button type="button" onClick={() => setEditingDate(item)} title="Editar" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Settings size={16} /></button>
               <button type="button" onClick={() => window.confirm("Excluir esta data?") && setCalendarDates((current) => current.filter((date) => date.id !== item.id))} className="rounded-2xl bg-rose-100 px-3 py-2 text-rose-700"><Trash2 size={16} /></button>
             </div>
           </div>
@@ -11305,7 +11422,7 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         </div>
         <form onSubmit={addExternalAttachment} className="flex gap-2">
           <input name="externalUrl" required placeholder="Ou cole um link do Google Drive / YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-          <button className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white">Adicionar</button>
+          <button title="Adicionar" className="rounded-2xl bg-slate-950 p-2 text-white"><Plus size={16} /></button>
         </form>
         {driveOpen && <DriveExplorerModal onSelect={addDriveFileToTask} onClose={() => setDriveOpen(false)} />}
         {ytOpen && <YouTubeSearchModal onSelect={addYouTubeToTask} onClose={() => setYtOpen(false)} />}
@@ -11450,7 +11567,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
   const [reviewOpen, setReviewOpen] = useState(false);
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
   const canReview = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
-  const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão").length;
+  const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão" && !asset.isCover).length;
   const approvedCount = assets.filter((asset) => asset.status === "Aprovado").length;
   const reviewSummary = !assets.length ? "Nenhuma arte enviada" : `${assets.length} arquivo(s) · ${approvedCount} aprovado(s) · ${pendingCount} pendente(s)`;
 
@@ -11617,7 +11734,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                 const newCh = firstUnused ?? channels[0];
                 setChannelEntries((prev) => [...prev, { channelId: newCh?.id ?? "", format: defaultPostFormatForChannel(newCh) }]);
               }} className="flex items-center gap-1.5 text-sm font-black text-blue-600 hover:text-blue-800">
-                <Plus size={14} /> Adicionar canal
+                <Plus size={14} />
               </button>
             </div>
           </div>
@@ -11643,7 +11760,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                 </div>
               ))}
             </div>
-            <button type="button" onClick={() => setProductionChecklist((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Adicionar item</button>
+            <button type="button" onClick={() => setProductionChecklist((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} title="Adicionar item" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Plus size={16} /></button>
           </section>
           {editing && (
             <button type="button" onClick={() => setReviewOpen(true)} className="rounded-3xl border border-blue-100 bg-blue-50 p-4 text-left transition hover:border-blue-300 md:col-span-2">
@@ -11824,7 +11941,7 @@ function PostReviewPanel({
           </div>
           <form onSubmit={submitExternalAsset} className="mb-4 flex gap-2">
             <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Ou cole um link do Google Drive" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-            <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-3 text-sm font-black text-white disabled:bg-slate-200">Adicionar</button>
+            <button disabled={!externalUrl.trim()} title="Adicionar" className="rounded-2xl bg-slate-950 p-2 text-white disabled:bg-slate-200 disabled:text-slate-400"><Plus size={16} /></button>
           </form>
         </>
       )}
@@ -12373,7 +12490,7 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
           </div>
           <form onSubmit={addDraftLink} className="mt-3 flex gap-2">
             <input value={externalUrl} onChange={(event) => setExternalUrl(event.target.value)} placeholder="Ou cole um link do Google Drive / YouTube" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-            <button disabled={!externalUrl.trim()} className="rounded-2xl bg-slate-950 px-4 text-sm font-black text-white disabled:bg-slate-200">Adicionar</button>
+            <button disabled={!externalUrl.trim()} title="Adicionar" className="rounded-2xl bg-slate-950 p-2 text-white disabled:bg-slate-200 disabled:text-slate-400"><Plus size={16} /></button>
           </form>
           {driveOpen && <DriveExplorerModal onSelect={addDriveFileToIdea} onClose={() => setDriveOpen(false)} />}
           {ytOpen && <YouTubeSearchModal onSelect={addYouTubeToIdea} onClose={() => setYtOpen(false)} />}
@@ -14004,7 +14121,7 @@ function BancoDeDuvidas({
             onClick={() => setShowNewForm((v) => !v)}
             className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white hover:bg-slate-950"
           >
-            <Plus size={16} /> Nova pergunta
+            <Plus size={16} />
           </button>
         )}
       </div>
@@ -14135,7 +14252,7 @@ function BancoDeDuvidas({
                 className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 outline-none focus:border-blue-500"
               />
               <div className="mt-2 flex gap-2">
-                <button type="submit" disabled={!newText.trim()} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Adicionar</button>
+                <button type="submit" disabled={!newText.trim()} title="Adicionar" className="rounded-2xl bg-blue-700 p-2 text-white disabled:bg-slate-200 disabled:text-slate-400"><Plus size={16} /></button>
                 <button type="button" onClick={() => setShowNewForm(false)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600">Cancelar</button>
               </div>
             </form>
@@ -14285,7 +14402,7 @@ function BancoDeDuvidas({
                       <button onClick={deleteQuestion} className="rounded-xl bg-rose-600 px-2 py-1 text-xs font-black text-white hover:bg-rose-700">Confirmar</button>
                     </div>
                   ) : (
-                    <button onClick={() => setDeleteConfirm(true)} className="rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">Excluir</button>
+                    <button onClick={() => setDeleteConfirm(true)} title="Excluir" className="rounded-2xl bg-rose-100 p-2 text-rose-700 hover:bg-rose-200"><Trash2 size={16} /></button>
                   )}
                 </div>
               </div>
@@ -14651,7 +14768,7 @@ function ComentariosSection({
             onClick={() => setShowFilters(!showFilters)}
             className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
           >
-            <Settings size={14} /> Filtros automáticos
+            <Settings size={14} />
           </button>
           <button
             onClick={() => setImportModal(true)}
