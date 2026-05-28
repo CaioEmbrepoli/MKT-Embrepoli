@@ -6447,6 +6447,7 @@ function ReviewsPage({
                   {/* Células com thumbnails */}
                   {days.map((day) => {
                     const dayAssets = assets.filter((asset) => {
+                      if (asset.isCover) return false;
                       const post = posts.find((p) => p.id === asset.postId);
                       return post?.publishAt && sameDay(new Date(post.publishAt), day);
                     });
@@ -6484,6 +6485,7 @@ function ReviewsPage({
               {/* Assets sem data */}
               {(() => {
                 const undated = assets.filter((a) => {
+                  if (a.isCover) return false;
                   const post = posts.find((p) => p.id === a.postId);
                   return !post?.publishAt;
                 });
