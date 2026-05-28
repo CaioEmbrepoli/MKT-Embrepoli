@@ -167,6 +167,7 @@ async function graphGet<T>(pathOrUrl: string, accessToken: string, params: Recor
 }
 
 export async function fetchInstagramAccount(accessToken: string): Promise<InstagramAccountInfo> {
+  type MeResponse = { id?: string; username?: string; name?: string; profile_picture_url?: string };
   type PageResponse = {
     data?: Array<{
       id?: string;
@@ -175,26 +176,50 @@ export async function fetchInstagramAccount(accessToken: string): Promise<Instag
     }>;
   };
 
-  const pages = await graphGet<PageResponse>("/me/accounts", accessToken, {
-    fields: "id,name,instagram_business_account{id,username,profile_picture_url}"
-  });
-  const page = pages.data?.find((item) => item.instagram_business_account?.id);
-  if (page?.instagram_business_account?.id) {
-    const account = page.instagram_business_account;
+  // Tokens IGAA são Instagram Graph API tokens — chamam /me diretamente.
+  // Tokens de usuário do Facebook (EAA...) usam /me/accounts para achar a conta IG vinculada.
+  const isInstagramToken = accessToken.startsWith("IGAA") || accessToken.startsWith("IGQV") || accessToken.startsWith("IGQ");
+
+  if (isInstagramToken) {
+    const me = await graphGet<MeResponse>("/me", accessToken, {
+      fields: "id,username,name,profile_picture_url"
+    });
+    if (!me.id) throw new Error("Token inválido ou sem permissão para acessar a conta Instagram.");
     return {
-      instagramAccountId: String(account.id),
-      pageId: String(page.id || ""),
-      username: String(account.username || ""),
-      displayName: String(page.name || account.username || "Instagram"),
-      avatarUrl: String(account.profile_picture_url || "")
+      instagramAccountId: String(me.id),
+      pageId: "",
+      username: String(me.username || me.name || ""),
+      displayName: String(me.name || me.username || "Instagram"),
+      avatarUrl: String(me.profile_picture_url || "")
     };
   }
 
-  const me = await graphGet<{ id?: string; username?: string; name?: string; profile_picture_url?: string }>("/me", accessToken, {
+  // Fluxo Facebook User Token → busca Pages → Instagram Business Account vinculado
+  try {
+    const pages = await graphGet<PageResponse>("/me/accounts", accessToken, {
+      fields: "id,name,instagram_business_account{id,username,profile_picture_url}"
+    });
+    const page = pages.data?.find((item) => item.instagram_business_account?.id);
+    if (page?.instagram_business_account?.id) {
+      const account = page.instagram_business_account;
+      return {
+        instagramAccountId: String(account.id),
+        pageId: String(page.id || ""),
+        username: String(account.username || ""),
+        displayName: String(page.name || account.username || "Instagram"),
+        avatarUrl: String(account.profile_picture_url || "")
+      };
+    }
+  } catch {
+    // Fallback: tenta /me direto
+  }
+
+  const me = await graphGet<MeResponse>("/me", accessToken, {
     fields: "id,username,name,profile_picture_url"
   });
+  if (!me.id) throw new Error("Token inválido ou sem permissão para acessar a conta Instagram.");
   return {
-    instagramAccountId: String(me.id || ""),
+    instagramAccountId: String(me.id),
     pageId: "",
     username: String(me.username || me.name || ""),
     displayName: String(me.name || me.username || "Instagram"),
