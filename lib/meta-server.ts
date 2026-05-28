@@ -244,10 +244,21 @@ export async function fetchInstagramAccount(accessToken: string): Promise<Instag
   };
 }
 
+/** Remove lone surrogates que o PostgreSQL rejeita como JSON inválido.
+ *  Chrome serializa \uD800 como JSON válido, mas o PostgreSQL não aceita ao parsear o request body. */
+function sanitizeText(s: string): string {
+  // [...s] divide por code points — pares válidos viram 1 elemento com cp > 0xFFFF,
+  // lone surrogates ficam como 1 elemento com cp entre 0xD800–0xDFFF e são removidos.
+  return [...s].filter((c) => {
+    const cp = c.codePointAt(0) ?? 0;
+    return cp < 0xD800 || cp > 0xDFFF;
+  }).join("");
+}
+
 function normalizeMedia(item: any): InstagramMediaItem {
   return {
     id: String(item.id || ""),
-    caption: String(item.caption || ""),
+    caption: sanitizeText(String(item.caption || "")),
     mediaType: String(item.media_type || ""),
     mediaUrl: String(item.media_url || ""),
     thumbnailUrl: String(item.thumbnail_url || item.media_url || ""),
@@ -281,13 +292,13 @@ export async function fetchInstagramCommentsForMedia(accessToken: string, media:
     const data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
     for (const item of data.data ?? []) {
       const replies = Array.isArray(item.replies?.data) ? item.replies.data : [];
-      const channelReply = replies.map((reply: any) => String(reply.text || "")).filter(Boolean).join("\n\n") || undefined;
+      const channelReply = replies.map((reply: any) => sanitizeText(String(reply.text || ""))).filter(Boolean).join("\n\n") || undefined;
       comments.push({
         commentId: `instagram:${String(item.id || "")}`,
         videoId: media.id,
-        videoTitle,
-        authorName: String(item.username || "Instagram"),
-        text: String(item.text || ""),
+        videoTitle: sanitizeText(videoTitle),
+        authorName: sanitizeText(String(item.username || "Instagram")),
+        text: sanitizeText(String(item.text || "")),
         likes: Number(item.like_count || 0),
         publishedAt: String(item.timestamp || media.timestamp || new Date().toISOString()),
         channelReply
