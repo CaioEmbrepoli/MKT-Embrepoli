@@ -1260,6 +1260,20 @@ export default function Home() {
     initialLandingAppliedFor.current = landingKey;
   }, [loggedIn, userHasNoTeam, currentUser, allowedAreas, profileAreas, profileModulePermissions]);
 
+  // Lê ?tiktok=connected|error após retorno do OAuth e navega para Configurações
+  useEffect(() => {
+    if (!loggedIn) return;
+    const params = new URLSearchParams(window.location.search);
+    const tiktokParam = params.get("tiktok");
+    if (!tiktokParam) return;
+    // Limpa a URL sem recarregar
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, "", cleanUrl);
+    // Navega para Configurações para o usuário ver o status
+    setActiveArea("marketing");
+    setActiveSection("marketing-configuracoes");
+  }, [loggedIn]);
+
   useEffect(() => {
     const unreadIds = currentNotifications.filter((item) => !item.read).map((item) => item.id);
     const fresh = unreadIds.some((id) => !seenNotificationIds.current.has(id));

@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { TIKTOK_SCOPES, fetchTikTokUserInfo, tiktokClientKey, tiktokClientSecret, tiktokEnvironment, tiktokRedirectUri, verifyTikTokState, type TikTokEnvironment } from "@/lib/tiktok-server";
+import { getTikTokScopes, fetchTikTokUserInfo, tiktokClientKey, tiktokClientSecret, tiktokEnvironment, tiktokRedirectUri, verifyTikTokState, type TikTokEnvironment } from "@/lib/tiktok-server";
 
 type TikTokState = {
   userId: string;
@@ -76,7 +76,7 @@ export async function GET(request: Request) {
       tiktok_open_id: String(tokenData.open_id || userInfo.open_id || ""),
       display_name: String(userInfo.display_name || "Conta TikTok conectada"),
       avatar_url: String(userInfo.avatar_url || ""),
-      scopes: TIKTOK_SCOPES,
+      scopes: getTikTokScopes(),
       access_token: String(tokenData.access_token),
       refresh_token: String(tokenData.refresh_token),
       expires_at: expiresAt,

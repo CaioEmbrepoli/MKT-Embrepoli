@@ -3,13 +3,28 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type TikTokEnvironment = "sandbox" | "production";
 
-export const TIKTOK_SCOPES = [
+export const TIKTOK_SCOPES_SANDBOX = [
+  "user.info.basic",
+  "user.info.profile",
+  "user.info.stats",
+  "video.list",
+];
+
+export const TIKTOK_SCOPES_PRODUCTION = [
   "user.info.basic",
   "user.info.profile",
   "user.info.stats",
   "video.list",
   "video.publish",
 ];
+
+// Atalho que retorna os scopes certos para o ambiente atual
+export function getTikTokScopes() {
+  return tiktokEnvironment() === "production" ? TIKTOK_SCOPES_PRODUCTION : TIKTOK_SCOPES_SANDBOX;
+}
+
+// Mantido para compatibilidade de importações existentes
+export const TIKTOK_SCOPES = TIKTOK_SCOPES_SANDBOX;
 
 type TikTokConnectionRow = {
   id: string;
