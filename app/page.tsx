@@ -380,7 +380,7 @@ function postFormatOptionsForChannel(channel?: Channel) {
   const normalized = normalizeText(channel?.name ?? "");
   if (normalized.includes("instagram")) return ["Feed", "Story", "Reels"];
   if (normalized.includes("youtube")) return ["Vídeo", "Shorts"];
-  if (normalized.includes("tiktok")) return ["Vídeo", "Story", "Live", "Feed"];
+  if (normalized.includes("tiktok")) return ["Feed", "Story", "Live"];
   if (normalized.includes("facebook")) return ["Feed", "Story", "Reels"];
   if (normalized.includes("linkedin")) return ["Post", "Artigo", "Vídeo"];
   if (normalized.includes("blog") || normalized.includes("site")) return ["Artigo", "Infográfico"];
@@ -400,6 +400,15 @@ function defaultPostFormatForChannel(channel?: Channel) {
   if (normalized.includes("email") || normalized.includes("e-mail")) return "Newsletter";
   if (normalized.includes("whatsapp")) return "Status";
   return postFormatOptionsForChannel(channel)[0] ?? "Post";
+}
+
+function normalizePostFormatForChannel(channel: Channel | undefined, format?: string) {
+  const options = postFormatOptionsForChannel(channel);
+  if (format && options.includes(format)) return format;
+  const normalizedChannel = normalizeText(channel?.name ?? "");
+  const normalizedFormat = normalizeText(format ?? "");
+  if (normalizedChannel.includes("tiktok") && normalizedFormat.includes("video")) return "Feed";
+  return defaultPostFormatForChannel(channel);
 }
 
 function authRedirectUrl() {
@@ -2470,6 +2479,7 @@ export default function Home() {
                 replaceCustomerQuestions(supabase!, next, prev).catch(() => setCustomerQuestions(prev));
               }}
               currentUser={currentUser}
+              channels={channels}
             />
           )}
           {activeSection === "marketing-banco-duvidas" && hasModulePermission(currentUser, "marketing", "banco-duvidas", "view", profileAreas, profileModulePermissions) && (
@@ -7954,7 +7964,7 @@ function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, c
         createdBy: currentUser.id,
         assignedTo: [],
         status: normalizedStatus,
-        format: idea.format || defaultPostFormatForChannel(channel),
+        format: normalizePostFormatForChannel(channel, idea.format),
         order: current.filter((post) => statusFor(post) === normalizedStatus).length + 1,
         publishAt: publishAt.toISOString().slice(0, 16),
         description: idea.description,
@@ -8349,9 +8359,7 @@ function Metrics({
   reloadData?: () => Promise<void>;
 }) {
   const [period, setPeriod] = useState("all");
-  const [youtubeImportOpen, setYoutubeImportOpen] = useState(false);
-  const [tiktokImportOpen, setTiktokImportOpen] = useState(false);
-  const [instagramImportOpen, setInstagramImportOpen] = useState(false);
+  const [metricImportOpen, setMetricImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
   const [allVideosOpen, setAllVideosOpen] = useState(false);
   const [lineFilter, setLineFilter] = useState("all");
@@ -8622,14 +8630,8 @@ function Metrics({
   return (
     <Panel title="Métricas" action={
       <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setYoutubeImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-red-50 px-3 py-2 text-sm font-black text-red-700 hover:bg-red-100">
-          <Youtube size={15} /> Importar do YouTube
-        </button>
-        <button type="button" onClick={() => setTiktokImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-slate-950 px-3 py-2 text-sm font-black text-white hover:bg-slate-700">
-          <Play size={15} /> Trazer dados do TikTok
-        </button>
-        <button type="button" onClick={() => setInstagramImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-pink-50 px-3 py-2 text-sm font-black text-pink-700 hover:bg-pink-100">
-          <Camera size={15} /> Trazer dados do Instagram
+        <button type="button" onClick={() => setMetricImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition">
+          <Download size={16} /> Importar
         </button>
         <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
       </div>
@@ -8846,7 +8848,7 @@ function Metrics({
                 <h3 className="font-black">Resumo · TikTok</h3>
                 <p className="mt-1 text-sm font-bold text-slate-400">Dados reais do Sandbox agora, métricas avançadas preparadas para produção.</p>
               </div>
-              <button type="button" onClick={() => setTiktokImportOpen(true)} className="rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
+              <button type="button" onClick={() => setMetricImportOpen(true)} className="rounded-2xl bg-slate-950 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
                 Atualizar TikTok
               </button>
             </div>
@@ -9099,33 +9101,15 @@ function Metrics({
           </section>
         </div>
       )}
-      {youtubeImportOpen && (
-        <YouTubeImportModal
+      {metricImportOpen && (
+        <MetricImportModal
           metrics={metrics}
           setMetrics={setMetrics}
           posts={posts}
           channels={channels}
           productLines={productLines}
           funnelStages={funnelStages}
-          onClose={() => setYoutubeImportOpen(false)}
-          reloadData={reloadData}
-        />
-      )}
-      {tiktokImportOpen && (
-        <TikTokImportModal
-          metrics={metrics}
-          setMetrics={setMetrics}
-          channels={channels}
-          onClose={() => setTiktokImportOpen(false)}
-          reloadData={reloadData}
-        />
-      )}
-      {instagramImportOpen && (
-        <InstagramImportModal
-          metrics={metrics}
-          setMetrics={setMetrics}
-          channels={channels}
-          onClose={() => setInstagramImportOpen(false)}
+          onClose={() => setMetricImportOpen(false)}
           reloadData={reloadData}
         />
       )}
@@ -9643,7 +9627,7 @@ function PostTemplateModal({ template, setTemplates, channels, contentTypes, fun
       description: String(form.get("description")),
       contentTypeId: String(form.get("contentTypeId")),
       channelId: String(form.get("channelId")),
-      format: String(form.get("format")),
+      format: normalizePostFormatForChannel(channels.find((channel) => channel.id === String(form.get("channelId"))), String(form.get("format"))),
       suggestedTime: String(form.get("suggestedTime")),
       funnelStageId: String(form.get("funnelStageId")),
       structure: structureItems.join("\n"),
@@ -9669,7 +9653,7 @@ function PostTemplateModal({ template, setTemplates, channels, contentTypes, fun
           <TextInput name="name" label="Nome do modelo" required defaultValue={template?.name} />
           <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={template?.contentTypeId ?? ""} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} />
           <label className="block text-sm font-bold text-slate-600">Canal recomendado<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <Select key={selectedChannelId} name="format" label="Formato recomendado" defaultValue={template?.format ?? defaultPostFormatForChannel(selectedChannel)} options={formatOptions.map((item) => [item, item])} />
+          <Select key={selectedChannelId} name="format" label="Formato recomendado" defaultValue={normalizePostFormatForChannel(selectedChannel, template?.format)} options={formatOptions.map((item) => [item, item])} />
           <TextInput name="suggestedTime" label="Horário sugerido" type="time" defaultValue={template?.suggestedTime ?? ""} />
           <Select name="funnelStageId" label="Funil recomendado" defaultValue={template?.funnelStageId ?? ""} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />
           <TextArea name="description" label="Descrição" defaultValue={template?.description} />
@@ -10726,6 +10710,352 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
             <button type="button" disabled={safePage === totalPages} onClick={() => setPage(totalPages)} className="rounded-xl bg-slate-100 px-2 py-1 text-xs font-black text-slate-700 disabled:opacity-40">»</button>
           </div>
         </div>
+    </CenteredModal>
+  );
+}
+
+function MetricImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose, reloadData }: {
+  metrics: PostMetric[];
+  setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
+  posts: EditorialPost[];
+  channels: Channel[];
+  productLines: ProductLine[];
+  funnelStages: FunnelStage[];
+  onClose: () => void;
+  reloadData?: () => Promise<void>;
+}) {
+  const hasYoutube = channels.some((c) => c.id === "youtube" || c.name.toLowerCase().includes("youtube"));
+  const hasTiktok = channels.some((c) => c.id === "tiktok" || c.name.toLowerCase().includes("tiktok"));
+  const hasInstagram = channels.some((c) => c.id === "instagram" || c.name.toLowerCase().includes("instagram"));
+  const availableChannels = (["youtube", "tiktok", "instagram"] as const).filter((ch) =>
+    ch === "youtube" ? hasYoutube : ch === "tiktok" ? hasTiktok : hasInstagram
+  );
+
+  const [phase, setPhase] = useState<"select" | "importing" | "done">("select");
+  const [selected, setSelected] = useState<string[]>([...availableChannels]);
+  const [currentChannel, setCurrentChannel] = useState("");
+  const [results, setResults] = useState<{ channel: string; created: number; updated: number; posts?: number; error?: string }[]>([]);
+  const [tiktokStatus, setTiktokStatus] = useState<TikTokConnectionStatus | null>(null);
+  const [instagramStatus, setInstagramStatus] = useState<InstagramConnectionStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const promises: Promise<void>[] = [];
+    if (hasTiktok) promises.push(getTikTokStatus().then((s) => { if (!cancelled) setTiktokStatus(s); }).catch(() => {}));
+    if (hasInstagram) promises.push(getInstagramStatus().then((s) => { if (!cancelled) setInstagramStatus(s); }).catch(() => {}));
+    Promise.all(promises).finally(() => { if (!cancelled) setStatusLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  function toggleChannel(ch: string) {
+    setSelected((prev) => prev.includes(ch) ? prev.filter((x) => x !== ch) : [...prev, ch]);
+  }
+
+  function isConnected(ch: string) {
+    if (ch === "youtube") return true; // YouTube uses OAuth session — always try
+    if (ch === "tiktok") return Boolean(tiktokStatus?.connected);
+    if (ch === "instagram") return Boolean(instagramStatus?.connected);
+    return false;
+  }
+
+  function chLabel(ch: string) {
+    if (ch === "youtube") return "YouTube";
+    if (ch === "tiktok") return "TikTok";
+    return "Instagram";
+  }
+
+  function chSubtitle(ch: string) {
+    if (ch === "youtube") return "Vídeos e estatísticas do canal";
+    if (ch === "tiktok") return statusLoading ? "Verificando..." : tiktokStatus?.connected ? `Conectado como ${tiktokStatus.displayName || "conta TikTok"}` : "TikTok não conectado";
+    return statusLoading ? "Verificando..." : instagramStatus?.connected ? `Conectado como ${instagramStatus.username || "conta Instagram"}` : "Instagram não conectado";
+  }
+
+  async function runYoutube(): Promise<{ created: number; updated: number }> {
+    const videos = await listMyYouTubeChannelVideos(() => {});
+    const youtubeChannelId = channels.find((c) => c.id === "youtube")?.id ?? channels.find((c) => c.name.toLowerCase().includes("youtube"))?.id ?? "youtube";
+    const defaultLineId = productLines[0]?.id ?? "";
+    const defaultFunnelId = funnelStages[0]?.id ?? "";
+    const byExt = new Map(metrics.filter((m) => m.externalId).map((m) => [m.externalId!, m] as const));
+    const byPostId = new Map(metrics.filter((m) => !m.externalId && m.postId).map((m) => [m.postId!, m] as const));
+    let created = 0, updated = 0;
+    const uniqueVideos = Array.from(new Map(videos.map((v) => [v.videoId, v])).values());
+    const importedRows: PostMetric[] = uniqueVideos.map((v) => {
+      const externalId = `yt:${v.videoId}`;
+      const linkedPost = posts.find((p) => p.publishedVideoId === v.videoId);
+      const existing = byExt.get(externalId) ?? (linkedPost ? byPostId.get(linkedPost.id) : undefined);
+      if (existing) updated++; else created++;
+      return {
+        id: existing?.id ?? crypto.randomUUID(),
+        campaignId: existing?.campaignId ?? "",
+        productLineId: existing?.productLineId ?? defaultLineId,
+        vehicleTypeId: existing?.vehicleTypeId ?? "",
+        contentTypeId: existing?.contentTypeId ?? "",
+        funnelStageId: existing?.funnelStageId ?? defaultFunnelId,
+        shares: existing?.shares ?? 0,
+        clicks: existing?.clicks ?? 0,
+        leads: existing?.leads ?? 0,
+        notes: existing?.notes ?? "",
+        learning: existing?.learning ?? "",
+        externalId,
+        videoType: v.isShort ? "short" as const : "video" as const,
+        privacyStatus: v.privacyStatus,
+        postId: linkedPost?.id,
+        postTitle: v.title,
+        channelId: youtubeChannelId,
+        date: v.publishedAt,
+        reach: v.viewCount,
+        likes: v.likeCount,
+        comments: v.commentCount,
+        watchTimeMinutes: v.watchTimeMinutes,
+        averageViewDurationSeconds: v.averageViewDurationSeconds,
+        averageViewPercentage: v.averageViewPercentage,
+        subscribersGained: v.subscribersGained,
+        subscribersLost: v.subscribersLost,
+        impressions: v.impressions,
+        impressionClickThroughRate: v.impressionClickThroughRate,
+      };
+    });
+    if (supabase) await replaceMetrics(supabase, importedRows, metrics);
+    setMetrics((prev) => {
+      const byId = new Map(prev.map((m) => [m.id, m]));
+      importedRows.forEach((m) => byId.set(m.id, m));
+      return Array.from(byId.values());
+    });
+    return { created, updated };
+  }
+
+  async function runTiktok(): Promise<{ created: number; updated: number; posts: number }> {
+    const { profile, videos, importSummary } = await listTikTokVideos();
+    const tiktokChannelId = channels.find((c) => c.id === "tiktok")?.id ?? channels.find((c) => c.name.toLowerCase().includes("tiktok"))?.id ?? "tiktok";
+    const byExt = new Map(metrics.filter((m) => m.externalId).map((m) => [m.externalId!, m] as const));
+    let created = 0, updated = 0;
+    function videoDate(createTime: number) { return createTime ? new Date(createTime * 1000).toISOString().slice(0, 10) : todayIso(); }
+    const importedRows: PostMetric[] = videos.map((video) => {
+      const externalId = `tiktok:${video.id}`;
+      const existing = byExt.get(externalId);
+      if (existing) updated++; else created++;
+      return {
+        id: existing?.id ?? crypto.randomUUID(),
+        externalId,
+        postId: existing?.postId,
+        postTitle: video.title || video.description || "Video TikTok",
+        channelId: tiktokChannelId,
+        campaignId: existing?.campaignId ?? "",
+        productLineId: existing?.productLineId ?? "",
+        vehicleTypeId: existing?.vehicleTypeId ?? "",
+        contentTypeId: existing?.contentTypeId ?? "",
+        funnelStageId: existing?.funnelStageId ?? "",
+        date: videoDate(video.createTime),
+        reach: video.viewCount,
+        likes: video.likeCount,
+        comments: video.commentCount,
+        shares: video.shareCount,
+        clicks: existing?.clicks ?? 0,
+        leads: existing?.leads ?? 0,
+        notes: existing?.notes ?? "Importado do TikTok Sandbox.",
+        learning: existing?.learning ?? "",
+        videoType: "video",
+        privacyStatus: "public",
+        watchTimeMinutes: existing?.watchTimeMinutes,
+        averageViewDurationSeconds: existing?.averageViewDurationSeconds,
+        averageViewPercentage: existing?.averageViewPercentage,
+        subscribersGained: existing?.subscribersGained,
+        subscribersLost: existing?.subscribersLost,
+        impressions: existing?.impressions,
+        impressionClickThroughRate: existing?.impressionClickThroughRate,
+        thumbnailUrl: video.coverImageUrl || existing?.thumbnailUrl,
+        sourceUrl: video.shareUrl || existing?.sourceUrl,
+        embedUrl: video.embedLink || existing?.embedUrl,
+      };
+    });
+    const previousRows = importedRows.map((r) => metrics.find((m) => m.id === r.id)).filter((r): r is PostMetric => Boolean(r));
+    if (supabase && importedRows.length) await replaceMetrics(supabase, importedRows, previousRows);
+    setMetrics((prev) => {
+      const byId = new Map(prev.map((m) => [m.id, m]));
+      importedRows.forEach((m) => byId.set(m.id, m));
+      return Array.from(byId.values());
+    });
+    void profile; void importSummary;
+    return { created, updated, posts: videos.length };
+  }
+
+  async function runInstagram(): Promise<{ created: number; updated: number; posts: number }> {
+    const { metrics: items } = await listInstagramMetrics();
+    const instagramChannelId = channels.find((c) => c.id === "instagram")?.id ?? channels.find((c) => c.name.toLowerCase().includes("instagram"))?.id ?? "instagram";
+    const byExt = new Map(metrics.filter((m) => m.externalId).map((m) => [m.externalId!, m] as const));
+    let created = 0, updated = 0;
+    const importedRows: PostMetric[] = items.map((item) => {
+      const externalId = `instagram:${item.id}`;
+      const existing = byExt.get(externalId);
+      if (existing) updated++; else created++;
+      const caption = (item.caption || "").trim();
+      const reach = item.reach || item.impressions || item.views || 0;
+      return {
+        id: existing?.id ?? crypto.randomUUID(),
+        externalId,
+        postId: existing?.postId,
+        postTitle: caption ? (caption.length > 140 ? `${caption.slice(0, 140)}...` : caption) : "Post Instagram",
+        channelId: instagramChannelId,
+        campaignId: existing?.campaignId ?? "",
+        productLineId: existing?.productLineId ?? "",
+        vehicleTypeId: existing?.vehicleTypeId ?? "",
+        contentTypeId: existing?.contentTypeId ?? "",
+        funnelStageId: existing?.funnelStageId ?? "",
+        date: item.timestamp ? new Date(item.timestamp).toISOString().slice(0, 10) : existing?.date ?? todayIso(),
+        reach,
+        likes: item.likeCount,
+        comments: item.commentsCount,
+        shares: item.shares,
+        clicks: existing?.clicks ?? 0,
+        leads: existing?.leads ?? 0,
+        notes: existing?.notes ?? "Importado do Instagram / Meta.",
+        learning: existing?.learning ?? "",
+        videoType: item.mediaType?.toLowerCase().includes("video") || item.mediaType?.toLowerCase().includes("reel") ? "short" : existing?.videoType,
+        privacyStatus: "public",
+        watchTimeMinutes: existing?.watchTimeMinutes,
+        averageViewDurationSeconds: existing?.averageViewDurationSeconds,
+        averageViewPercentage: existing?.averageViewPercentage,
+        subscribersGained: existing?.subscribersGained,
+        subscribersLost: existing?.subscribersLost,
+        impressions: item.impressions || existing?.impressions,
+        impressionClickThroughRate: existing?.impressionClickThroughRate,
+        thumbnailUrl: item.thumbnailUrl || item.mediaUrl || existing?.thumbnailUrl,
+        sourceUrl: item.permalink || existing?.sourceUrl,
+        embedUrl: item.permalink || existing?.embedUrl,
+      };
+    });
+    const previousRows = importedRows.map((r) => metrics.find((m) => m.id === r.id)).filter((r): r is PostMetric => Boolean(r));
+    if (supabase && importedRows.length) await replaceMetrics(supabase, importedRows, previousRows);
+    setMetrics((prev) => {
+      const byId = new Map(prev.map((m) => [m.id, m]));
+      importedRows.forEach((m) => byId.set(m.id, m));
+      return Array.from(byId.values());
+    });
+    return { created, updated, posts: items.length };
+  }
+
+  async function startImport() {
+    setPhase("importing");
+    const collected: typeof results = [];
+    for (const ch of selected) {
+      setCurrentChannel(ch);
+      try {
+        if (ch === "youtube") {
+          const r = await runYoutube();
+          collected.push({ channel: ch, ...r });
+        } else if (ch === "tiktok") {
+          const r = await runTiktok();
+          collected.push({ channel: ch, ...r });
+        } else if (ch === "instagram") {
+          const r = await runInstagram();
+          collected.push({ channel: ch, ...r });
+        }
+      } catch (e) {
+        collected.push({ channel: ch, created: 0, updated: 0, error: e instanceof Error ? e.message : "Erro desconhecido." });
+      }
+    }
+    setResults(collected);
+    void reloadData?.();
+    setPhase("done");
+  }
+
+  const allSelected = selected.length === availableChannels.length;
+
+  return (
+    <CenteredModal close={onClose} closeOnOverlay={phase !== "importing"} zClass="z-[120]" variant="compact" className="bg-slate-950/75" panelClassName="rounded-[28px] border-0">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Download size={20} className="text-slate-700" />
+          <h2 className="font-black">Importar métricas</h2>
+        </div>
+        {phase !== "importing" && (
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200">
+            <X size={18} />
+          </button>
+        )}
+      </div>
+
+      {phase === "select" && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100 transition">
+              <input type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? [] : [...availableChannels])} className="h-4 w-4 rounded accent-blue-600" />
+              <span className="text-sm font-black text-slate-800">Todos os canais</span>
+            </label>
+            {availableChannels.map((ch) => {
+              const connected = isConnected(ch);
+              return (
+                <label key={ch} className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition ${selected.includes(ch) ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"} ${!connected && !statusLoading && ch !== "youtube" ? "opacity-50" : ""}`}>
+                  <input type="checkbox" checked={selected.includes(ch)} onChange={() => toggleChannel(ch)} disabled={!connected && !statusLoading && ch !== "youtube"} className="h-4 w-4 rounded accent-blue-600" />
+                  <div className="flex flex-col">
+                    <span className="text-sm font-black text-slate-800">{chLabel(ch)}</span>
+                    <span className="text-xs font-bold text-slate-500">{chSubtitle(ch)}</span>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+          <button
+            type="button"
+            onClick={startImport}
+            disabled={selected.length === 0 || statusLoading}
+            className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 transition"
+          >
+            {statusLoading ? "Verificando conexões..." : selected.length === 0 ? "Selecione ao menos um canal" : `Importar ${selected.length === 1 ? chLabel(selected[0]) : `${selected.length} canais`}`}
+          </button>
+        </div>
+      )}
+
+      {phase === "importing" && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            {selected.map((ch) => {
+              const done = results.some((r) => r.channel === ch);
+              const isCurrent = currentChannel === ch && !done;
+              return (
+                <div key={ch} className={`flex items-center gap-3 rounded-2xl px-4 py-3 ${isCurrent ? "bg-blue-50 border border-blue-200" : done ? "bg-slate-50 border border-slate-200" : "bg-white border border-slate-100"}`}>
+                  {isCurrent ? (
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
+                  ) : done ? (
+                    <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                  ) : (
+                    <div className="h-4 w-4 rounded-full border-2 border-slate-200" />
+                  )}
+                  <span className="text-sm font-black text-slate-700">{chLabel(ch)}</span>
+                  {isCurrent && <span className="ml-auto text-xs font-bold text-blue-600">Importando...</span>}
+                </div>
+              );
+            })}
+          </div>
+          <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full animate-pulse rounded-full bg-blue-600" style={{ width: "100%" }} />
+          </div>
+        </div>
+      )}
+
+      {phase === "done" && (
+        <div className="space-y-4">
+          <div className="space-y-2">
+            {results.map((r) => (
+              <div key={r.channel} className={`rounded-2xl px-4 py-3 ${r.error ? "bg-rose-50 border border-rose-200" : "bg-green-50 border border-green-200"}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  {r.error ? <X size={14} className="text-rose-600" /> : <CheckCircle2 size={14} className="text-emerald-600" />}
+                  <span className="text-sm font-black">{chLabel(r.channel)}</span>
+                </div>
+                {r.error ? (
+                  <p className="text-xs font-bold text-rose-700">{r.error}</p>
+                ) : (
+                  <p className="text-xs font-bold text-green-700">{r.created} novos · {r.updated} atualizados{r.posts !== undefined ? ` · ${r.posts} itens encontrados` : ""}</p>
+                )}
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={onClose} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+            Fechar
+          </button>
+        </div>
+      )}
     </CenteredModal>
   );
 }
@@ -11892,8 +12222,12 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
   const [channelEntries, setChannelEntries] = useState<PostChannelEntry[]>(() => {
     const mainChannelId = editing?.channelId ?? ideaPrefill?.channelId ?? channels[0]?.id ?? "";
     const mainCh = channels.find((c) => c.id === mainChannelId);
-    const mainFormat = editing?.format ?? defaultPostFormatForChannel(mainCh);
-    return [{ channelId: mainChannelId, format: mainFormat }, ...(editing?.extraChannels ?? [])];
+    const mainFormat = normalizePostFormatForChannel(mainCh, editing?.format);
+    const extraEntries = (editing?.extraChannels ?? []).map((entry) => {
+      const entryChannel = channels.find((c) => c.id === entry.channelId);
+      return { ...entry, format: normalizePostFormatForChannel(entryChannel, entry.format) };
+    });
+    return [{ channelId: mainChannelId, format: mainFormat }, ...extraEntries];
   });
   const selectedChannelId = channelEntries[0]?.channelId ?? "";
   function setSelectedChannelId(id: string) {
@@ -11904,11 +12238,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
   const postFormatOptions = postFormatOptionsForChannel(selectedChannel);
   const selectedTemplate = postTemplates.find((template) => template.id === selectedTemplateId);
-  const defaultFormat = editing?.format && postFormatOptions.includes(editing.format)
-    ? editing.format
-    : selectedTemplate?.format && postFormatOptions.includes(selectedTemplate.format)
-      ? selectedTemplate.format
-      : defaultPostFormatForChannel(selectedChannel);
+  const defaultFormat = normalizePostFormatForChannel(selectedChannel, editing?.format ?? selectedTemplate?.format);
   const [reviewOpen, setReviewOpen] = useState(false);
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
   const canReview = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
@@ -11941,7 +12271,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
     }
     if (idea.channelId) {
       const ideaCh = channels.find((c) => c.id === idea.channelId);
-      const ideaFmt = idea.format || defaultPostFormatForChannel(ideaCh);
+      const ideaFmt = normalizePostFormatForChannel(ideaCh, idea.format);
       setChannelEntries((prev) => [{ channelId: idea.channelId, format: ideaFmt }, ...prev.slice(1)]);
     }
     if (idea.templateId) {
@@ -11971,7 +12301,8 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
     setFormValue(form, "funnelStageId", template.funnelStageId);
     if (!options.keepTitleAndDescription) setFormValue(form, "description", templateDescription(template));
     if (template.channelId) {
-      const tmplFmt = template.format || defaultPostFormatForChannel(channels.find((c) => c.id === template.channelId));
+      const tmplCh = channels.find((c) => c.id === template.channelId);
+      const tmplFmt = normalizePostFormatForChannel(tmplCh, template.format);
       setChannelEntries((prev) => [{ channelId: template.channelId, format: tmplFmt }, ...prev.slice(1)]);
     }
     const publishField = form.elements.namedItem("publishAt") as HTMLInputElement | null;
@@ -12005,7 +12336,13 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
     const status = editing?.status ?? "Produção";
     const validEntries = channelEntries.filter((e) => e.channelId);
     const [mainEntry, ...extraEntries] = validEntries.length ? validEntries : [{ channelId: "", format: "" }];
-    const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), ideaId: String(form.get("ideaId") ?? "") || undefined, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), channelId: mainEntry.channelId, campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: mainEntry.format || defaultPostFormatForChannel(selectedChannel), extraChannels: extraEntries, order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")), productionChecklist };
+    const mainChannelForSubmit = channels.find((c) => c.id === mainEntry.channelId);
+    const normalizedMainFormat = normalizePostFormatForChannel(mainChannelForSubmit, mainEntry.format);
+    const normalizedExtraEntries = extraEntries.map((entry) => {
+      const entryChannel = channels.find((c) => c.id === entry.channelId);
+      return { ...entry, format: normalizePostFormatForChannel(entryChannel, entry.format) };
+    });
+    const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), ideaId: String(form.get("ideaId") ?? "") || undefined, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), channelId: mainEntry.channelId, campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: normalizedMainFormat, extraChannels: normalizedExtraEntries, order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")), productionChecklist };
     setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
     const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
     if (newAssignees.length) createNotifications(newAssignees, "Post atribuído", value.title, "post", value.id);
@@ -12059,7 +12396,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                       {channels.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                     <select
-                      value={entry.format}
+                      value={normalizePostFormatForChannel(entryChannel, entry.format)}
                       onChange={(e) => setChannelEntries((prev) => prev.map((x, i) => i === idx ? { ...x, format: e.target.value } : x))}
                       className="w-32 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-950 outline-none focus:border-blue-500"
                     >
@@ -12397,7 +12734,7 @@ type ChannelPublishConfig = {
 const formatsByPlatform: Record<string, string[]> = {
   youtube:   ["Vídeo", "Shorts"],
   instagram: ["Feed", "Story", "Reels", "Lives"],
-  tiktok:    ["Vídeo", "Story", "Live", "Feed"],
+  tiktok:    ["Feed", "Story", "Live"],
   facebook:  ["Post", "Story", "Reels"],
   linkedin:  ["Post", "Artigo", "Vídeo"],
   outros:    ["Post"],
@@ -12782,7 +13119,8 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
     const form = formRef.current;
     setFormValue(form, "description", templateDescription(template));
     if (template.channelId && !editing) setSelectedChannelId(template.channelId);
-    for (const [name, value] of Object.entries({ contentTypeId: template.contentTypeId, channelId: template.channelId, funnelStageId: template.funnelStageId, format: template.format })) {
+    const templateChannel = channels.find((channel) => channel.id === template.channelId) ?? selectedChannel;
+    for (const [name, value] of Object.entries({ contentTypeId: template.contentTypeId, channelId: template.channelId, funnelStageId: template.funnelStageId, format: normalizePostFormatForChannel(templateChannel, template.format) })) {
       setFormValue(form, name, value);
     }
   }
@@ -12827,7 +13165,8 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const creating = !editing;
-    const value: Idea = { id: draftIdeaId.current, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), description: String(form.get("description")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), type: String(form.get("type")) as Idea["type"], channelId: String(form.get("channelId")), format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, priority: String(form.get("priority")) as Idea["priority"], order: editing?.order ?? ideas.length + 1, attachments };
+    const submitChannel = channels.find((channel) => channel.id === String(form.get("channelId"))) ?? selectedChannel;
+    const value: Idea = { id: draftIdeaId.current, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), description: String(form.get("description")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), type: String(form.get("type")) as Idea["type"], channelId: String(form.get("channelId")), format: normalizePostFormatForChannel(submitChannel, String(form.get("format"))), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, priority: String(form.get("priority")) as Idea["priority"], order: editing?.order ?? ideas.length + 1, attachments };
     setIdeas((current) => editing ? current.map((idea) => idea.id === value.id ? value : idea) : [value, ...current]);
     if (creating) {
       createNotifications(profiles.filter((profile) => profile.id !== currentUser.id && profile.active).map((profile) => profile.id), "Nova ideia cadastrada", value.title, "idea", value.id);
@@ -12850,7 +13189,7 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
         <Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} />
         <Select name="contentTypeId" label="Tipo de conteúdo" defaultValue={editing?.contentTypeId} options={[["", "Sem tipo de conteúdo"], ...contentTypes.map((item) => [item.id, item.name])]} />
         <label className="block text-sm font-bold text-slate-600">Canal<select name="channelId" value={selectedChannelId} onChange={(event) => setSelectedChannelId(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{channels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <Select key={selectedChannelId} name="format" label="Formato" defaultValue={editing?.format ?? defaultPostFormatForChannel(selectedChannel)} options={formatOptions.map((item) => [item, item])} />
+        <Select key={selectedChannelId} name="format" label="Formato" defaultValue={normalizePostFormatForChannel(selectedChannel, editing?.format)} options={formatOptions.map((item) => [item, item])} />
         <Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} />
         <Select name="priority" label="Prioridade" defaultValue={editing?.priority} options={["Alta", "Média", "Baixa"].map((item) => [item, item])} />
         <SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton>
@@ -13264,11 +13603,12 @@ function PostModal({ modal, currentUser, profiles, channels, productLines, vehic
   const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? channels[0]?.id ?? "");
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
   const postFormatOptions = postFormatOptionsForChannel(selectedChannel);
-  const defaultFormat = editing?.format && postFormatOptions.includes(editing.format) ? editing.format : defaultPostFormatForChannel(selectedChannel);
+  const defaultFormat = normalizePostFormatForChannel(selectedChannel, editing?.format);
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const status = editing?.status ?? "Produção";
+    const submitChannel = channels.find((channel) => channel.id === String(form.get("channelId"))) ?? selectedChannel;
     const value: EditorialPost = {
       id: editing?.id ?? crypto.randomUUID(),
       title: String(form.get("title")),
@@ -13281,7 +13621,7 @@ function PostModal({ modal, currentUser, profiles, channels, productLines, vehic
       createdBy: editing?.createdBy ?? currentUser.id,
       assignedTo: form.getAll("assignedTo").map(String),
       status,
-      format: String(form.get("format")) || defaultPostFormatForChannel(selectedChannel),
+      format: normalizePostFormatForChannel(submitChannel, String(form.get("format"))),
       order: editing?.order ?? posts.filter((post) => post.status === status).length + 1,
       publishAt: String(form.get("publishAt")),
       description: String(form.get("description")),
@@ -14808,6 +15148,7 @@ function ComentariosSection({
   questions,
   setQuestions,
   currentUser,
+  channels,
 }: {
   comments: Comment[];
   setComments: (next: Comment[]) => void;
@@ -14816,18 +15157,17 @@ function ComentariosSection({
   questions: CustomerQuestion[];
   setQuestions: (next: CustomerQuestion[]) => void;
   currentUser: Profile;
+  channels: Channel[];
 }) {
   const [statusFilter, setStatusFilter] = useState<CommentStatus | "todos">("novo");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [newKeyword, setNewKeyword] = useState("");
   const [newMatchType, setNewMatchType] = useState<"contains" | "startsWith" | "exact">("contains");
-  const [importModal, setImportModal] = useState(false);
+  const [commentImportOpen, setCommentImportOpen] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [pressedBtn, setPressedBtn] = useState<Record<string, boolean>>({});
-  const [instagramImporting, setInstagramImporting] = useState(false);
-  const [instagramImportError, setInstagramImportError] = useState("");
 
   function pressButton(key: string) {
     setPressedBtn((prev) => ({ ...prev, [key]: true }));
@@ -15042,20 +15382,7 @@ function ComentariosSection({
       }
     }
 
-    setImportModal(false);
-  }
-
-  async function handleInstagramImport() {
-    setInstagramImporting(true);
-    setInstagramImportError("");
-    try {
-      const result = await listInstagramComments();
-      await handleImport(result.comments, [], "instagram");
-    } catch (error) {
-      setInstagramImportError(error instanceof Error ? error.message : "Erro ao importar comentários do Instagram.");
-    } finally {
-      setInstagramImporting(false);
-    }
+    setCommentImportOpen(false);
   }
 
   async function handleStatusChange(comment: Comment, status: CommentStatus) {
@@ -15170,24 +15497,15 @@ function ComentariosSection({
             <Settings size={14} />
           </button>
           <button
-            onClick={() => setImportModal(true)}
-            className="flex items-center gap-2 rounded-2xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700"
+            onClick={() => setCommentImportOpen(true)}
+            className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition"
           >
-            <Youtube size={14} /> Importar YouTube
-          </button>
-          <button
-            onClick={handleInstagramImport}
-            disabled={instagramImporting}
-            className="flex items-center gap-2 rounded-2xl bg-pink-600 px-4 py-2 text-sm font-bold text-white hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400"
-          >
-            <Camera size={14} /> {instagramImporting ? "Importando..." : "Importar Instagram"}
+            <Download size={14} /> Importar
           </button>
         </div>
       </div>
 
-      {instagramImportError && (
-        <p className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{instagramImportError}</p>
-      )}
+
 
       {/* Auto-filter panel */}
       {showFilters && (
@@ -15328,12 +15646,14 @@ function ComentariosSection({
         ))}
       </div>
 
-      {importModal && (
-        <CommentImportModal
+      {commentImportOpen && (
+        <CommentImportUnifiedModal
           existingComments={comments}
           autoFilters={autoFilters}
-          onImport={(newItems, updatedItems) => handleImport(newItems, updatedItems, "youtube")}
-          onClose={() => setImportModal(false)}
+          channels={channels}
+          onYoutubeImport={(newItems, updatedItems) => handleImport(newItems, updatedItems, "youtube")}
+          onInstagramImport={(items) => handleImport(items, [], "instagram")}
+          onClose={() => setCommentImportOpen(false)}
         />
       )}
     </div>
@@ -15584,6 +15904,287 @@ function CommentImportModal({
   );
 }
 
+// ─── CommentImportUnifiedModal ───────────────────────────────────────────────
+
+function CommentImportUnifiedModal({
+  existingComments,
+  autoFilters,
+  channels,
+  onYoutubeImport,
+  onInstagramImport,
+  onClose,
+}: {
+  existingComments: Comment[];
+  autoFilters: AutoFilter[];
+  channels: Channel[];
+  onYoutubeImport: (newItems: YouTubeCommentItem[], updatedItems: YouTubeCommentItem[]) => Promise<void>;
+  onInstagramImport: (items: InstagramCommentItem[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const hasYoutube = channels.some((c) => c.id === "youtube" || c.name.toLowerCase().includes("youtube"));
+  const hasInstagram = channels.some((c) => c.id === "instagram" || c.name.toLowerCase().includes("instagram"));
+  const availableChannels = (["youtube", "instagram"] as const).filter((ch) => ch === "youtube" ? hasYoutube : hasInstagram);
+
+  const [phase, setPhase] = useState<"select" | "scanning" | "confirm" | "importing" | "done">("select");
+  const [selected, setSelected] = useState<string[]>([...availableChannels]);
+  const [scope, setScope] = useState<"recent" | "all">("recent");
+  const [progressMsg, setProgressMsg] = useState("");
+  const [progressPct, setProgressPct] = useState(0);
+  const [currentChannel, setCurrentChannel] = useState("");
+  const [ytNew, setYtNew] = useState<YouTubeCommentItem[]>([]);
+  const [ytUpdated, setYtUpdated] = useState<YouTubeCommentItem[]>([]);
+  const [ytIgnored, setYtIgnored] = useState(0);
+  const [results, setResults] = useState<{ channel: string; count: number; error?: string }[]>([]);
+  const [scanError, setScanError] = useState<string | null>(null);
+
+  function toggleChannel(ch: string) {
+    setSelected((prev) => prev.includes(ch) ? prev.filter((x) => x !== ch) : [...prev, ch]);
+  }
+
+  function chLabel(ch: string) { return ch === "youtube" ? "YouTube" : "Instagram"; }
+
+  async function runScan() {
+    setPhase("scanning");
+    setScanError(null);
+    setProgressPct(0);
+    setProgressMsg("Iniciando...");
+    setYtNew([]);
+    setYtUpdated([]);
+    setYtIgnored(0);
+
+    try {
+      if (selected.includes("youtube")) {
+        const minDate = new Date();
+        minDate.setDate(minDate.getDate() - 30);
+        const existingByExtId = new Map<string, Comment>();
+        for (const c of existingComments) { if (c.externalId) existingByExtId.set(c.externalId, c); }
+        const allNew: YouTubeCommentItem[] = [];
+        const allUpdated: YouTubeCommentItem[] = [];
+        let skippedOld = 0;
+
+        setProgressMsg("Buscando canal...");
+        const videos = await listMyYouTubeChannelVideos((p) => {
+          if (p.phase === "fetching-channel") setProgressMsg("Buscando canal...");
+          else if (p.phase === "listing") setProgressMsg(`Listando vídeos... (${p.collected})`);
+          else setProgressMsg(`Carregando estatísticas... (${p.done}/${p.total})`);
+        });
+        const targets = videos.filter((v) => v.commentCount > 0);
+
+        for (let i = 0; i < targets.length; i++) {
+          const v = targets[i];
+          setProgressMsg(`Vídeo ${i + 1} de ${targets.length}: ${v.title}`);
+          setProgressPct(Math.round(((i + 1) / targets.length) * 100));
+          try {
+            const items = await listVideoComments(v.videoId, v.title, 200);
+            for (const item of items) {
+              if (scope === "recent") {
+                const pub = item.publishedAt ? new Date(item.publishedAt) : null;
+                if (!pub || Number.isNaN(pub.getTime()) || pub < minDate) { skippedOld++; continue; }
+              }
+              const existing = existingByExtId.get(item.commentId) ?? existingByExtId.get(`yt_comment:${item.commentId}`);
+              if (!existing) allNew.push(item);
+              else if (item.channelReply && item.channelReply !== existing.response) allUpdated.push(item);
+            }
+          } catch { /* pula vídeo com erro */ }
+        }
+        setYtNew(allNew);
+        setYtUpdated(allUpdated);
+        setYtIgnored(skippedOld);
+      }
+      setPhase("confirm");
+    } catch (e: unknown) {
+      setScanError(e instanceof Error ? e.message : String(e));
+      setPhase("select");
+    }
+  }
+
+  async function runImport() {
+    setPhase("importing");
+    const collected: typeof results = [];
+
+    if (selected.includes("youtube") && (ytNew.length > 0 || ytUpdated.length > 0)) {
+      setCurrentChannel("youtube");
+      try {
+        await onYoutubeImport(ytNew, ytUpdated);
+        collected.push({ channel: "youtube", count: ytNew.length + ytUpdated.length });
+      } catch (e) {
+        collected.push({ channel: "youtube", count: 0, error: e instanceof Error ? e.message : "Erro ao importar YouTube." });
+      }
+    } else if (selected.includes("youtube")) {
+      collected.push({ channel: "youtube", count: 0 });
+    }
+
+    if (selected.includes("instagram")) {
+      setCurrentChannel("instagram");
+      try {
+        const { comments: igComments } = await listInstagramComments();
+        await onInstagramImport(igComments);
+        collected.push({ channel: "instagram", count: igComments.length });
+      } catch (e) {
+        collected.push({ channel: "instagram", count: 0, error: e instanceof Error ? e.message : "Erro ao importar Instagram." });
+      }
+    }
+
+    setResults(collected);
+    setPhase("done");
+  }
+
+  const isLoading = phase === "scanning" || phase === "importing";
+  const ytHasChanges = ytNew.length > 0 || ytUpdated.length > 0;
+
+  return (
+    <CenteredModal close={isLoading ? undefined : onClose} className="bg-black/40" variant="compact" panelClassName="rounded-3xl border-0">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Download size={20} className="text-slate-700" />
+          <h3 className="text-lg font-black text-slate-900">Importar comentários</h3>
+        </div>
+        {!isLoading && (
+          <button onClick={onClose} className="rounded-full p-1 hover:bg-slate-100"><X size={18} /></button>
+        )}
+      </div>
+
+      {/* Select */}
+      {phase === "select" && (
+        <div className="flex flex-col gap-4">
+          <div className="space-y-2">
+            <label className="flex cursor-pointer items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 hover:bg-slate-100 transition">
+              <input type="checkbox" checked={selected.length === availableChannels.length} onChange={() => setSelected(selected.length === availableChannels.length ? [] : [...availableChannels])} className="h-4 w-4 rounded accent-blue-600" />
+              <span className="text-sm font-black text-slate-800">Todos os canais</span>
+            </label>
+            {availableChannels.map((ch) => (
+              <label key={ch} className={`flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition ${selected.includes(ch) ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}>
+                <input type="checkbox" checked={selected.includes(ch)} onChange={() => toggleChannel(ch)} className="h-4 w-4 rounded accent-blue-600" />
+                <span className="text-sm font-black text-slate-800">{chLabel(ch)}</span>
+              </label>
+            ))}
+          </div>
+
+          {selected.includes("youtube") && (
+            <div className="grid gap-2">
+              <p className="text-xs font-black uppercase text-slate-500">Escopo do YouTube</p>
+              <button type="button" onClick={() => setScope("recent")} className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "recent" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
+                <span className="block font-black">Últimos 30 dias</span>
+                <span className="text-xs font-bold opacity-75">Busca só comentários dos últimos 30 dias.</span>
+              </button>
+              <button type="button" onClick={() => setScope("all")} className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "all" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
+                <span className="block font-black">Todos os comentários</span>
+                <span className="text-xs font-bold opacity-75">Varredura completa do canal.</span>
+              </button>
+            </div>
+          )}
+
+          {scanError && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{scanError}</p>}
+
+          <div className="flex gap-2">
+            <button onClick={onClose} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancelar</button>
+            <button onClick={runScan} disabled={selected.length === 0} className="flex-1 rounded-2xl bg-slate-950 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400">
+              {selected.includes("youtube") ? "Buscar comentários" : "Importar"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Scanning */}
+      {phase === "scanning" && (
+        <div className="flex flex-col items-center gap-4 py-6">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" />
+          <p className="text-sm font-bold text-slate-700">{progressMsg}</p>
+          <p className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">Escopo: {scope === "recent" ? "últimos 30 dias" : "todos os comentários"}</p>
+          {progressPct > 0 && (
+            <div className="w-full">
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${progressPct}%` }} />
+              </div>
+              <p className="mt-1 text-center text-xs text-slate-400">{progressPct}%</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Confirm */}
+      {phase === "confirm" && (
+        <div className="flex flex-col gap-4">
+          <p className="rounded-full bg-slate-100 px-3 py-1 text-center text-xs font-black text-slate-500">Escopo: {scope === "recent" ? "últimos 30 dias" : "todos os comentários"}</p>
+
+          {selected.includes("youtube") && (
+            <div className="rounded-2xl bg-slate-50 p-4 space-y-2">
+              <p className="text-xs font-black uppercase text-slate-500 mb-2">YouTube</p>
+              {ytHasChanges ? (
+                <>
+                  {ytNew.length > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-xs font-black text-blue-700">{ytNew.length}</span>
+                      <span className="font-bold text-slate-700">novo{ytNew.length !== 1 ? "s" : ""} comentário{ytNew.length !== 1 ? "s" : ""}</span>
+                    </div>
+                  )}
+                  {ytUpdated.length > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-xs font-black text-emerald-700">{ytUpdated.length}</span>
+                      <span className="font-bold text-slate-700">resposta{ytUpdated.length !== 1 ? "s" : ""} atualizada{ytUpdated.length !== 1 ? "s" : ""}</span>
+                    </div>
+                  )}
+                  {scope === "recent" && ytIgnored > 0 && (
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-200 text-xs font-black text-slate-600">{ytIgnored}</span>
+                      <span className="font-bold text-slate-700">ignorado{ytIgnored !== 1 ? "s" : ""} por estar fora dos últimos 30 dias</span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <p className="text-sm font-bold text-slate-500">{scope === "recent" ? "Nenhum comentário novo nos últimos 30 dias." : "Tudo atualizado — nada novo encontrado."}</p>
+              )}
+            </div>
+          )}
+
+          {selected.includes("instagram") && (
+            <div className="rounded-2xl bg-pink-50 p-4">
+              <p className="text-xs font-black uppercase text-slate-500 mb-1">Instagram</p>
+              <p className="text-sm font-bold text-slate-700">Os comentários serão importados diretamente ao confirmar.</p>
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <button onClick={() => setPhase("select")} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Voltar</button>
+            <button onClick={runImport} className="flex-1 rounded-2xl bg-slate-950 py-2 text-sm font-bold text-white hover:bg-slate-800">
+              {selected.includes("instagram") || ytHasChanges ? "Importar" : "Fechar"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Importing */}
+      {phase === "importing" && (
+        <div className="flex flex-col items-center gap-4 py-6">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" />
+          <p className="text-sm font-bold text-slate-700">Importando {currentChannel === "youtube" ? "YouTube" : "Instagram"}...</p>
+        </div>
+      )}
+
+      {/* Done */}
+      {phase === "done" && (
+        <div className="flex flex-col gap-4">
+          <div className="space-y-2">
+            {results.map((r) => (
+              <div key={r.channel} className={`rounded-2xl px-4 py-3 ${r.error ? "bg-rose-50 border border-rose-200" : "bg-green-50 border border-green-200"}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  {r.error ? <X size={14} className="text-rose-600" /> : <CheckCircle2 size={14} className="text-emerald-600" />}
+                  <span className="text-sm font-black">{chLabel(r.channel)}</span>
+                </div>
+                {r.error ? (
+                  <p className="text-xs font-bold text-rose-700">{r.error}</p>
+                ) : (
+                  <p className="text-xs font-bold text-green-700">{r.count > 0 ? `${r.count} item${r.count !== 1 ? "s" : ""} importado${r.count !== 1 ? "s" : ""}` : "Nenhuma novidade encontrada."}</p>
+                )}
+              </div>
+            ))}
+          </div>
+          <button onClick={onClose} className="w-full rounded-2xl bg-slate-950 py-2 text-sm font-bold text-white hover:bg-slate-800">Fechar</button>
+        </div>
+      )}
+    </CenteredModal>
+  );
+}
 
 
 

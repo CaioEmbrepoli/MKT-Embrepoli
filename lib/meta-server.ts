@@ -176,14 +176,21 @@ export async function fetchInstagramAccount(accessToken: string): Promise<Instag
     }>;
   };
 
-  // Tokens IGAA são Instagram Graph API tokens — chamam /me diretamente.
-  // Tokens de usuário do Facebook (EAA...) usam /me/accounts para achar a conta IG vinculada.
+  // Tokens IGAA/IGQV/IGQ são Instagram Graph API tokens — usam graph.instagram.com/me.
+  // Tokens de usuário do Facebook (EAA...) usam graph.facebook.com/me/accounts.
   const isInstagramToken = accessToken.startsWith("IGAA") || accessToken.startsWith("IGQV") || accessToken.startsWith("IGQ");
 
   if (isInstagramToken) {
-    const me = await graphGet<MeResponse>("/me", accessToken, {
-      fields: "id,username,name,profile_picture_url"
-    });
+    // Instagram Graph API tokens precisam de graph.instagram.com, não graph.facebook.com
+    const igBase = `https://graph.instagram.com/${metaGraphVersion()}`;
+    const igUrl = new URL(`${igBase}/me`);
+    igUrl.searchParams.set("fields", "id,username,name,profile_picture_url");
+    igUrl.searchParams.set("access_token", accessToken);
+    const igRes = await fetch(igUrl);
+    const me = await igRes.json().catch(() => ({})) as MeResponse & { error?: { message?: string } };
+    if (!igRes.ok || me.error) {
+      throw new Error(me.error?.message || "Token inválido ou sem permissão para acessar a conta Instagram.");
+    }
     if (!me.id) throw new Error("Token inválido ou sem permissão para acessar a conta Instagram.");
     return {
       instagramAccountId: String(me.id),
