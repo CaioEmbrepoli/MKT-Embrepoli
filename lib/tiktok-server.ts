@@ -7,7 +7,8 @@ export const TIKTOK_SCOPES = [
   "user.info.basic",
   "user.info.profile",
   "user.info.stats",
-  "video.list"
+  "video.list",
+  "video.publish",
 ];
 
 type TikTokConnectionRow = {

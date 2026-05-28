@@ -13,6 +13,10 @@ function extractDriveFileId(url: string): string | null {
   return null;
 }
 
+export const maxDuration = 300; // 5 minutos (Vercel Pro/Enterprise)
+
+const STREAM_THRESHOLD = 200 * 1024 * 1024; // 200 MB
+
 export async function POST(request: Request) {
   try {
     const context = await googleRequestContext(request);
@@ -34,15 +38,26 @@ export async function POST(request: Request) {
     }
 
     // ── Download do arquivo ──────────────────────────────────────────────────
-    let fileBuffer: ArrayBuffer;
-    let contentType: string;
-    let fileSize: number;
+    let fileBuffer: ArrayBuffer | null = null;
+    let contentType: string = "video/mp4";
+    let fileSize: number = 0;
+    let useStream = false;
+    let driveStream: ReadableStream<Uint8Array> | null = null;
 
     const driveFileId = extractDriveFileId(assetUrl);
 
     if (driveFileId) {
-      // Arquivo do Google Drive — precisa de token OAuth do Drive
+      // Arquivo do Google Drive — busca metadados primeiro para saber o tamanho
       const driveToken = await getGoogleAccessToken(context, "drive");
+
+      const metaRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=size,mimeType`,
+        { headers: { Authorization: `Bearer ${driveToken}` } }
+      );
+      const meta = await metaRes.json() as { size?: string; mimeType?: string };
+      const knownSize = meta.size ? parseInt(meta.size) : 0;
+      contentType = meta.mimeType ?? "video/mp4";
+
       const driveRes = await fetch(
         `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
         { headers: { Authorization: `Bearer ${driveToken}` } }
@@ -52,28 +67,48 @@ export async function POST(request: Request) {
         const msg = errData?.error?.message ?? "Não foi possível baixar o arquivo do Google Drive.";
         return NextResponse.json({ error: msg }, { status: 400 });
       }
-      fileBuffer = await driveRes.arrayBuffer();
-      contentType = driveRes.headers.get("content-type") ?? "video/mp4";
-      fileSize = fileBuffer.byteLength;
+
+      if (knownSize > STREAM_THRESHOLD) {
+        // Modo streaming — não carrega em memória
+        fileSize = knownSize;
+        useStream = true;
+        driveStream = driveRes.body!;
+      } else {
+        fileBuffer = await driveRes.arrayBuffer();
+        contentType = driveRes.headers.get("content-type") ?? contentType;
+        fileSize = fileBuffer.byteLength;
+      }
     } else {
-      // URL direta (Supabase Storage ou outro)
+      // URL direta (Supabase Storage ou outro) — verifica tamanho via HEAD
+      const headRes = await fetch(assetUrl, { method: "HEAD" });
+      const knownSize = parseInt(headRes.headers.get("content-length") ?? "0");
+
       const fileRes = await fetch(assetUrl);
       if (!fileRes.ok) {
         return NextResponse.json({ error: "Não foi possível acessar o arquivo de mídia." }, { status: 400 });
       }
-      fileBuffer = await fileRes.arrayBuffer();
-      contentType = fileRes.headers.get("content-type") ?? "video/mp4";
-      fileSize = fileBuffer.byteLength;
+
+      if (knownSize > STREAM_THRESHOLD) {
+        fileSize = knownSize;
+        useStream = true;
+        driveStream = fileRes.body!;
+        contentType = fileRes.headers.get("content-type") ?? "video/mp4";
+      } else {
+        fileBuffer = await fileRes.arrayBuffer();
+        contentType = fileRes.headers.get("content-type") ?? "video/mp4";
+        fileSize = fileBuffer.byteLength;
+      }
     }
 
     // ── Metadados do vídeo ───────────────────────────────────────────────────
     // `format` é mantido como metadado interno (ex: "Shorts", "Vídeo") para referência futura,
     // mas NÃO altera o conteúdo enviado ao YouTube — o próprio YouTube detecta Shorts
     // automaticamente pela duração (≤60s) e aspect ratio do vídeo.
+    void format;
     const snippet = { title, description, categoryId: "22" };
     const videoStatus = scheduledAt
-      ? { privacyStatus: "private", publishAt: new Date(scheduledAt).toISOString() }
-      : { privacyStatus: "public" };
+      ? { privacyStatus: "private", publishAt: new Date(scheduledAt).toISOString(), selfDeclaredMadeForKids: false }
+      : { privacyStatus: "public", selfDeclaredMadeForKids: false };
 
     // ── Passo 1: iniciar resumable upload ────────────────────────────────────
     const initRes = await fetch(
@@ -101,14 +136,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "YouTube não retornou URL de upload." }, { status: 500 });
     }
 
-    // ── Passo 2: enviar os bytes ─────────────────────────────────────────────
+    // ── Passo 2: enviar os bytes (streaming ou buffer) ───────────────────────
     const uploadRes = await fetch(uploadUrl, {
       method: "PUT",
       headers: {
         "Content-Type": contentType,
         "Content-Length": String(fileSize),
       },
-      body: fileBuffer,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(useStream ? { body: driveStream, duplex: "half" } as any : { body: fileBuffer }),
     });
 
     if (!uploadRes.ok) {

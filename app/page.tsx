@@ -89,6 +89,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokVideos, startTikTokConnection, type TikTokConnectionStatus } from "@/lib/tiktok-api";
+import { connectInstagramToken, disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
 import {
   type AppData,
   deleteCampaign,
@@ -8350,6 +8351,7 @@ function Metrics({
   const [period, setPeriod] = useState("all");
   const [youtubeImportOpen, setYoutubeImportOpen] = useState(false);
   const [tiktokImportOpen, setTiktokImportOpen] = useState(false);
+  const [instagramImportOpen, setInstagramImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
   const [allVideosOpen, setAllVideosOpen] = useState(false);
   const [lineFilter, setLineFilter] = useState("all");
@@ -8625,6 +8627,9 @@ function Metrics({
         </button>
         <button type="button" onClick={() => setTiktokImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-slate-950 px-3 py-2 text-sm font-black text-white hover:bg-slate-700">
           <Play size={15} /> Trazer dados do TikTok
+        </button>
+        <button type="button" onClick={() => setInstagramImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-pink-50 px-3 py-2 text-sm font-black text-pink-700 hover:bg-pink-100">
+          <Camera size={15} /> Trazer dados do Instagram
         </button>
         <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
       </div>
@@ -9112,6 +9117,15 @@ function Metrics({
           setMetrics={setMetrics}
           channels={channels}
           onClose={() => setTiktokImportOpen(false)}
+          reloadData={reloadData}
+        />
+      )}
+      {instagramImportOpen && (
+        <InstagramImportModal
+          metrics={metrics}
+          setMetrics={setMetrics}
+          channels={channels}
+          onClose={() => setInstagramImportOpen(false)}
           reloadData={reloadData}
         />
       )}
@@ -9774,6 +9788,13 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
   const [tiktokLoading, setTikTokLoading] = useState(true);
   const [tiktokBusy, setTikTokBusy] = useState(false);
   const [tiktokError, setTikTokError] = useState("");
+  const [instagramStatus, setInstagramStatus] = useState<InstagramConnectionStatus | null>(null);
+  const [instagramLoading, setInstagramLoading] = useState(true);
+  const [instagramBusy, setInstagramBusy] = useState(false);
+  const [instagramError, setInstagramError] = useState("");
+  const [instagramTokenOpen, setInstagramTokenOpen] = useState(false);
+  const [instagramAccessToken, setInstagramAccessToken] = useState("");
+  const [instagramExpiresAt, setInstagramExpiresAt] = useState("");
 
   async function loadGoogleStatus() {
     setGoogleLoading(true);
@@ -9799,9 +9820,22 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     }
   }
 
+  async function loadInstagramStatus() {
+    setInstagramLoading(true);
+    setInstagramError("");
+    try {
+      setInstagramStatus(await getInstagramStatus());
+    } catch (error) {
+      setInstagramError(error instanceof Error ? error.message : "Erro ao carregar integracao Instagram / Meta.");
+    } finally {
+      setInstagramLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadGoogleStatus();
     loadTikTokStatus();
+    loadInstagramStatus();
   }, []);
 
   async function connectGoogle(service: GoogleService) {
@@ -9857,6 +9891,40 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     }
   }
 
+  async function submitInstagramToken() {
+    if (!instagramAccessToken.trim()) return;
+    setInstagramBusy(true);
+    setInstagramError("");
+    try {
+      const nextStatus = await connectInstagramToken({
+        accessToken: instagramAccessToken.trim(),
+        expiresAt: instagramExpiresAt ? new Date(instagramExpiresAt).toISOString() : undefined,
+      });
+      setInstagramStatus(nextStatus);
+      setInstagramTokenOpen(false);
+      setInstagramAccessToken("");
+      setInstagramExpiresAt("");
+    } catch (error) {
+      setInstagramError(error instanceof Error ? error.message : "Erro ao cadastrar token Instagram / Meta.");
+    } finally {
+      setInstagramBusy(false);
+    }
+  }
+
+  async function disconnectInstagram() {
+    if (!window.confirm("Desconectar Instagram / Meta para toda a equipe?")) return;
+    setInstagramBusy(true);
+    setInstagramError("");
+    try {
+      await disconnectInstagramConnection();
+      await loadInstagramStatus();
+    } catch (error) {
+      setInstagramError(error instanceof Error ? error.message : "Erro ao desconectar Instagram / Meta.");
+    } finally {
+      setInstagramBusy(false);
+    }
+  }
+
   const googleIntegrations: Array<{ service: GoogleService; title: string; description: string }> = [
     {
       service: "drive",
@@ -9871,6 +9939,7 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
   ];
 
   return (
+    <>
     <Panel title="Conta e permissões">
       <div className="space-y-4 rounded-3xl bg-slate-50 p-5">
         <div>
@@ -10001,9 +10070,91 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
               <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar TikTok.</p>
             )}
           </div>
+          <div className="mt-4 rounded-[26px] border border-pink-100 bg-pink-50/60 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-black">Instagram / Meta</p>
+                <p className="mt-1 text-sm font-bold text-slate-500">
+                  Token corporativo para importar comentários e métricas do Instagram.
+                </p>
+              </div>
+              <span className={`rounded-full px-3 py-1 text-xs font-black ${instagramStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
+                {instagramLoading ? "Verificando" : instagramStatus?.connected ? "Conectado" : "Desconectado"}
+              </span>
+            </div>
+            {instagramError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{instagramError}</p>}
+            <div className="mt-3 rounded-2xl border border-pink-100 bg-white px-3 py-2">
+              <p className="text-xs font-black uppercase text-slate-400">Status</p>
+              <p className={`mt-1 break-all text-sm font-black ${instagramStatus?.connected ? "text-emerald-700" : "text-slate-500"}`}>
+                {instagramLoading
+                  ? "Verificando conexão..."
+                  : instagramStatus?.connected
+                    ? `Conectado como ${instagramStatus.username || instagramStatus.instagramAccountId || "conta Instagram"}`
+                    : "Nenhuma conta Instagram conectada"}
+              </p>
+              {instagramStatus?.expiresAt && (
+                <p className="mt-1 text-xs font-bold text-slate-400">
+                  Expira em {new Date(instagramStatus.expiresAt).toLocaleString("pt-BR")}
+                </p>
+              )}
+            </div>
+            {canManageIntegrations ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" disabled={instagramBusy || instagramLoading} onClick={() => setInstagramTokenOpen(true)} className="rounded-2xl bg-pink-600 px-4 py-2 text-sm font-black text-white transition hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400">
+                  {instagramBusy ? "Salvando..." : instagramStatus?.connected ? "Atualizar token" : "Cadastrar token"}
+                </button>
+                {instagramStatus?.connected && (
+                  <button type="button" disabled={instagramBusy || instagramLoading} onClick={disconnectInstagram} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                    Desconectar
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar Instagram / Meta.</p>
+            )}
+          </div>
         </div>
       </div>
     </Panel>
+    {instagramTokenOpen && (
+      <CenteredModal close={() => !instagramBusy && setInstagramTokenOpen(false)} closeOnOverlay={!instagramBusy} variant="compact" zClass="z-[120]" className="bg-slate-950/75" panelClassName="rounded-[28px] border-0">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <div className="mb-2 inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-pink-100 text-pink-700">
+              <Camera size={18} />
+            </div>
+            <h3 className="text-2xl font-black text-slate-950">Cadastrar token Instagram / Meta</h3>
+            <p className="mt-1 text-sm font-bold text-slate-500">
+              Cole aqui o token gerado no Meta Developer. Ele será salvo no Supabase pelo servidor.
+            </p>
+          </div>
+          <button type="button" onClick={() => !instagramBusy && setInstagramTokenOpen(false)} className="rounded-2xl bg-slate-100 p-2 text-slate-500 transition hover:bg-slate-200">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-pink-50 p-4 text-sm font-bold text-pink-900">
+            Use o token da conta Instagram conectada ao app. Se ele tiver prazo, informe a expiração para o sistema avisar quando precisar renovar.
+          </div>
+          <label className="block text-sm font-bold text-slate-600">
+            Token de acesso
+            <textarea value={instagramAccessToken} onChange={(event) => setInstagramAccessToken(event.target.value)} rows={5} className="mt-1 w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 font-mono text-xs outline-none focus:border-pink-300" placeholder="Cole o token aqui..." />
+          </label>
+          <label className="block text-sm font-bold text-slate-600">
+            Expiração opcional
+            <input type="datetime-local" value={instagramExpiresAt} onChange={(event) => setInstagramExpiresAt(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-pink-300" />
+          </label>
+          {instagramError && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{instagramError}</p>}
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" disabled={instagramBusy} onClick={() => setInstagramTokenOpen(false)} className="rounded-2xl bg-slate-100 px-5 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-200 disabled:opacity-50">Cancelar</button>
+            <button type="button" disabled={instagramBusy || !instagramAccessToken.trim()} onClick={submitInstagramToken} className="rounded-2xl bg-pink-600 px-5 py-3 text-sm font-black text-white transition hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400">
+              {instagramBusy ? "Validando..." : "Salvar conexão"}
+            </button>
+          </div>
+        </div>
+      </CenteredModal>
+    )}
+    </>
   );
 }
 
@@ -10993,6 +11144,198 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
             </div>
             <div className="flex gap-2">
               <button type="button" onClick={run} className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+                Tentar novamente
+              </button>
+              <button type="button" onClick={onClose} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
+    </CenteredModal>
+  );
+}
+
+function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadData }: {
+  metrics: PostMetric[];
+  setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
+  channels: Channel[];
+  onClose: () => void;
+  reloadData?: () => Promise<void>;
+}) {
+  const [phase, setPhase] = useState<"idle" | "fetching" | "saving" | "done" | "error">("idle");
+  const [error, setError] = useState("");
+  const [summary, setSummary] = useState({ created: 0, updated: 0, posts: 0 });
+  const [status, setStatus] = useState<InstagramConnectionStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatusLoading(true);
+    getInstagramStatus()
+      .then((nextStatus) => {
+        if (!cancelled) setStatus(nextStatus);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Erro ao consultar conexão Instagram / Meta.");
+      })
+      .finally(() => {
+        if (!cancelled) setStatusLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function run() {
+    setError("");
+    try {
+      setPhase("fetching");
+      const { metrics: items } = await listInstagramMetrics();
+      setPhase("saving");
+
+      const instagramChannelId =
+        channels.find((channel) => channel.id === "instagram")?.id ??
+        channels.find((channel) => channel.name.toLowerCase().includes("instagram"))?.id ??
+        "instagram";
+      const byExt = new Map(metrics.filter((metric) => metric.externalId).map((metric) => [metric.externalId!, metric] as const));
+
+      let created = 0;
+      let updated = 0;
+      const importedRows: PostMetric[] = items.map((item) => {
+        const externalId = `instagram:${item.id}`;
+        const existing = byExt.get(externalId);
+        if (existing) updated += 1;
+        else created += 1;
+        const caption = (item.caption || "").trim();
+        const reach = item.reach || item.impressions || item.views || 0;
+        return {
+          id: existing?.id ?? crypto.randomUUID(),
+          externalId,
+          postId: existing?.postId,
+          postTitle: caption ? (caption.length > 140 ? `${caption.slice(0, 140)}...` : caption) : "Post Instagram",
+          channelId: instagramChannelId,
+          campaignId: existing?.campaignId ?? "",
+          productLineId: existing?.productLineId ?? "",
+          vehicleTypeId: existing?.vehicleTypeId ?? "",
+          contentTypeId: existing?.contentTypeId ?? "",
+          funnelStageId: existing?.funnelStageId ?? "",
+          date: item.timestamp ? new Date(item.timestamp).toISOString().slice(0, 10) : existing?.date ?? todayIso(),
+          reach,
+          likes: item.likeCount,
+          comments: item.commentsCount,
+          shares: item.shares,
+          clicks: existing?.clicks ?? 0,
+          leads: existing?.leads ?? 0,
+          notes: existing?.notes ?? "Importado do Instagram / Meta.",
+          learning: existing?.learning ?? "",
+          videoType: item.mediaType?.toLowerCase().includes("video") || item.mediaType?.toLowerCase().includes("reel") ? "short" : existing?.videoType,
+          privacyStatus: "public",
+          watchTimeMinutes: existing?.watchTimeMinutes,
+          averageViewDurationSeconds: existing?.averageViewDurationSeconds,
+          averageViewPercentage: existing?.averageViewPercentage,
+          subscribersGained: existing?.subscribersGained,
+          subscribersLost: existing?.subscribersLost,
+          impressions: item.impressions || existing?.impressions,
+          impressionClickThroughRate: existing?.impressionClickThroughRate,
+          thumbnailUrl: item.thumbnailUrl || item.mediaUrl || existing?.thumbnailUrl,
+          sourceUrl: item.permalink || existing?.sourceUrl,
+          embedUrl: item.permalink || existing?.embedUrl
+        };
+      });
+
+      const previousRows = importedRows
+        .map((row) => metrics.find((metric) => metric.id === row.id))
+        .filter((row): row is PostMetric => Boolean(row));
+      if (supabase && importedRows.length) {
+        await replaceMetrics(supabase, importedRows, previousRows);
+      }
+      setMetrics((current) => {
+        const byId = new Map(current.map((metric) => [metric.id, metric] as const));
+        importedRows.forEach((metric) => byId.set(metric.id, metric));
+        return Array.from(byId.values());
+      });
+      void reloadData?.();
+      setSummary({ created, updated, posts: items.length });
+      setPhase("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar Instagram / Meta.");
+      setPhase("error");
+    }
+  }
+
+  return (
+    <CenteredModal close={onClose} closeOnOverlay={phase !== "fetching" && phase !== "saving"} zClass="z-[120]" variant="compact" className="bg-slate-950/75" panelClassName="rounded-[28px] border-0">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Camera size={22} className="text-pink-600" />
+            <h2 className="font-black">Trazer dados do Instagram</h2>
+          </div>
+          {(phase === "idle" || phase === "done" || phase === "error") && (
+            <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200">
+              <X size={18} />
+            </button>
+          )}
+        </div>
+
+        {phase === "idle" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-pink-50 p-4">
+              <p className="text-sm font-black text-pink-900">Importação Instagram / Meta</p>
+              <p className="mt-1 text-sm font-bold text-pink-700/80">
+                O sistema vai buscar posts, métricas disponíveis e preparar os dados para o painel geral de métricas.
+              </p>
+              <div className="mt-3 rounded-2xl border border-pink-100 bg-white px-3 py-2">
+                <p className="text-xs font-black uppercase text-slate-400">Conexão</p>
+                <p className={`mt-1 text-sm font-black ${status?.connected ? "text-emerald-700" : "text-slate-500"}`}>
+                  {statusLoading
+                    ? "Verificando conexão..."
+                    : status?.connected
+                      ? `Conectado como ${status.username || status.instagramAccountId || "conta Instagram"}`
+                      : "Instagram / Meta não conectado"}
+                </p>
+              </div>
+              {error && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
+            </div>
+            <button type="button" disabled={statusLoading || !status?.connected} onClick={run} className="w-full rounded-2xl bg-pink-600 px-4 py-3 text-sm font-black text-white hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400">
+              {status?.connected ? "Importar dados do Instagram" : "Cadastre o token em Conta e Permissões"}
+            </button>
+          </div>
+        )}
+
+        {(phase === "fetching" || phase === "saving") && (
+          <div className="space-y-3">
+            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+              <div className="h-full animate-pulse rounded-full bg-pink-500" style={{ width: "100%" }} />
+            </div>
+            <p className="text-sm font-bold text-slate-600">
+              {phase === "fetching" ? "Buscando dados no Instagram / Meta..." : "Salvando métricas no sistema..."}
+            </p>
+          </div>
+        )}
+
+        {phase === "done" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-green-50 p-4">
+              <p className="text-sm font-black text-green-800">Importação concluída!</p>
+              <p className="mt-1 text-sm font-bold text-green-700">
+                {summary.posts} posts encontrados · {summary.created} novos · {summary.updated} atualizados
+              </p>
+            </div>
+            <button type="button" onClick={onClose} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+              Fechar
+            </button>
+          </div>
+        )}
+
+        {phase === "error" && (
+          <div className="space-y-4">
+            <div className="rounded-2xl bg-rose-50 p-4">
+              <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
+              <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" onClick={run} className="flex-1 rounded-2xl bg-pink-600 px-4 py-3 text-sm font-black text-white hover:bg-pink-700">
                 Tentar novamente
               </button>
               <button type="button" onClick={onClose} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
@@ -12048,6 +12391,7 @@ type ChannelPublishConfig = {
   description: string;
   status: "idle" | "publishing" | "success" | "error" | "unsupported";
   errorMessage?: string;
+  privacyLevel?: "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "SELF_ONLY";
 };
 
 const formatsByPlatform: Record<string, string[]> = {
@@ -12167,6 +12511,30 @@ function PublishModal({
           } catch {
             updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
           }
+        } else if (platform === "tiktok") {
+          try {
+            const res = await fetch("/api/tiktok/publish", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                assetUrl: selectedAsset.url,
+                title: config.title,
+                description: config.description,
+                format: config.format,
+                scheduledAt,
+                privacyLevel: config.privacyLevel ?? "PUBLIC_TO_EVERYONE",
+              }),
+            });
+            if (res.ok) {
+              updateConfig(config.channelId, { status: "success" });
+              setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, status: "Publicado", publishedAt: new Date().toISOString() } : p));
+            } else {
+              const data = await res.json() as { error?: string };
+              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar no TikTok." });
+            }
+          } catch {
+            updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
+          }
         } else {
           updateConfig(config.channelId, { status: "unsupported" });
         }
@@ -12251,7 +12619,7 @@ function PublishModal({
           const platform = publishPlatformKey(name);
           const formats = formatsByPlatform[platform] ?? ["Post"];
           const isYoutube = platform === "youtube";
-          const supported = platform === "youtube";
+          const supported = platform === "youtube" || platform === "tiktok";
           return (
             <div key={config.channelId} className={`rounded-3xl border p-4 ${config.status === "success" ? "border-emerald-200 bg-emerald-50" : config.status === "error" ? "border-rose-200 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -12278,6 +12646,20 @@ function PublishModal({
                   ))}
                 </div>
               </div>
+              {/* Privacidade (TikTok only) */}
+              {platform === "tiktok" && (
+                <div className="mb-3">
+                  <p className="mb-1 text-xs font-black text-slate-500">Privacidade</p>
+                  <select
+                    value={config.privacyLevel ?? "PUBLIC_TO_EVERYONE"}
+                    onChange={(e) => updateConfig(config.channelId, { privacyLevel: e.target.value as ChannelPublishConfig["privacyLevel"] })}
+                    className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500">
+                    <option value="PUBLIC_TO_EVERYONE">Público</option>
+                    <option value="MUTUAL_FOLLOW_FRIENDS">Amigos mútuos</option>
+                    <option value="SELF_ONLY">Privado</option>
+                  </select>
+                </div>
+              )}
               {/* Título (YouTube only) */}
               {isYoutube && (
                 <div className="mb-3">
@@ -14444,6 +14826,8 @@ function ComentariosSection({
   const [saving, setSaving] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [pressedBtn, setPressedBtn] = useState<Record<string, boolean>>({});
+  const [instagramImporting, setInstagramImporting] = useState(false);
+  const [instagramImportError, setInstagramImportError] = useState("");
 
   function pressButton(key: string) {
     setPressedBtn((prev) => ({ ...prev, [key]: true }));
@@ -14464,7 +14848,7 @@ function ComentariosSection({
     return t.includes(k);
   }
 
-  async function handleImport(items: YouTubeCommentItem[], updatedItems: YouTubeCommentItem[] = []) {
+  async function handleImport(items: Array<YouTubeCommentItem | InstagramCommentItem>, updatedItems: YouTubeCommentItem[] = [], source: Comment["source"] = "youtube") {
     // ── ATUALIZAÇÕES: comentários existentes com nova resposta ──
     if (updatedItems.length > 0) {
       const updatedComments = comments.map((c) => {
@@ -14503,10 +14887,10 @@ function ComentariosSection({
       const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
       const incoming: Comment = {
         id: crypto.randomUUID(),
-        source: "youtube" as const,
+        source,
         externalId: item.commentId,
         importSignature: commentImportSignature({
-          source: "youtube",
+          source,
           videoId: item.videoId,
           authorName: item.authorName,
           text: item.text,
@@ -14632,7 +15016,7 @@ function ComentariosSection({
         return {
           id: questionIdByCommentId.get(c.id)!,
           organizationId: currentUser.organizationId ?? "",
-          source: "youtube" as const,
+          source: source as CustomerQuestionSource,
           externalId: c.externalId,
           videoId: c.videoId,
           videoTitle: c.videoTitle,
@@ -14661,6 +15045,19 @@ function ComentariosSection({
     setImportModal(false);
   }
 
+  async function handleInstagramImport() {
+    setInstagramImporting(true);
+    setInstagramImportError("");
+    try {
+      const result = await listInstagramComments();
+      await handleImport(result.comments, [], "instagram");
+    } catch (error) {
+      setInstagramImportError(error instanceof Error ? error.message : "Erro ao importar comentários do Instagram.");
+    } finally {
+      setInstagramImporting(false);
+    }
+  }
+
   async function handleStatusChange(comment: Comment, status: CommentStatus) {
     const updated = comments.map((c) => c.id === comment.id ? { ...c, status } : c);
     setComments(updated);
@@ -14686,7 +15083,7 @@ function ComentariosSection({
     const newQ: CustomerQuestion = {
       id: questionId,
       organizationId: currentUser.organizationId ?? "",
-      source: "youtube" as const,
+      source: comment.source as CustomerQuestionSource,
       externalId: comment.externalId,
       videoId: comment.videoId,
       videoTitle: comment.videoTitle,
@@ -14778,8 +15175,19 @@ function ComentariosSection({
           >
             <Youtube size={14} /> Importar YouTube
           </button>
+          <button
+            onClick={handleInstagramImport}
+            disabled={instagramImporting}
+            className="flex items-center gap-2 rounded-2xl bg-pink-600 px-4 py-2 text-sm font-bold text-white hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400"
+          >
+            <Camera size={14} /> {instagramImporting ? "Importando..." : "Importar Instagram"}
+          </button>
         </div>
       </div>
+
+      {instagramImportError && (
+        <p className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{instagramImportError}</p>
+      )}
 
       {/* Auto-filter panel */}
       {showFilters && (
@@ -14855,7 +15263,7 @@ function ComentariosSection({
         <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center">
           <MessageSquare size={32} className="mx-auto mb-3 text-slate-300" />
           <p className="text-sm text-slate-400">Nenhum comentário encontrado.</p>
-          <p className="mt-1 text-xs text-slate-300">Importe comentários do YouTube para começar.</p>
+          <p className="mt-1 text-xs text-slate-300">Importe comentários do YouTube ou Instagram para começar.</p>
         </div>
       )}
       <div className="flex flex-col gap-3">
@@ -14924,7 +15332,7 @@ function ComentariosSection({
         <CommentImportModal
           existingComments={comments}
           autoFilters={autoFilters}
-          onImport={handleImport}
+          onImport={(newItems, updatedItems) => handleImport(newItems, updatedItems, "youtube")}
           onClose={() => setImportModal(false)}
         />
       )}
