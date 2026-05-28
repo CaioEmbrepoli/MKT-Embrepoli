@@ -89,6 +89,16 @@ function metaGraphBase() {
   return `https://graph.facebook.com/${metaGraphVersion()}`;
 }
 
+/** Retorna a base URL correta por tipo de token.
+ *  IGAA/IGQV/IGQ = Consumer token → graph.instagram.com
+ *  EAA/outros    = Facebook User token → graph.facebook.com */
+function igApiBase(accessToken: string): string {
+  const isConsumer = accessToken.startsWith("IGAA") || accessToken.startsWith("IGQV") || accessToken.startsWith("IGQ");
+  return isConsumer
+    ? `https://graph.instagram.com/${metaGraphVersion()}`
+    : metaGraphBase();
+}
+
 export async function metaRequestContext(request: Request): Promise<MetaRequestContext> {
   const authHeader = request.headers.get("authorization") ?? "";
   const token = authHeader.replace(/^Bearer\s+/i, "");
@@ -250,7 +260,7 @@ function normalizeMedia(item: any): InstagramMediaItem {
 
 export async function fetchInstagramMedia(accessToken: string, instagramAccountId: string) {
   const media: InstagramMediaItem[] = [];
-  let nextUrl = `${metaGraphBase()}/${instagramAccountId}/media?fields=${encodeURIComponent("id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count")}&limit=100`;
+  let nextUrl = `${igApiBase(accessToken)}/${instagramAccountId}/media?fields=${encodeURIComponent("id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count")}&limit=100`;
   let pages = 0;
   while (nextUrl && pages < 50 && media.length < 1000) {
     const data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
@@ -263,7 +273,7 @@ export async function fetchInstagramMedia(accessToken: string, instagramAccountI
 
 export async function fetchInstagramCommentsForMedia(accessToken: string, media: InstagramMediaItem) {
   const comments: InstagramCommentItem[] = [];
-  let nextUrl = `${metaGraphBase()}/${media.id}/comments?fields=${encodeURIComponent("id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}")}&limit=100`;
+  let nextUrl = `${igApiBase(accessToken)}/${media.id}/comments?fields=${encodeURIComponent("id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}")}&limit=100`;
   let pages = 0;
   const videoTitle = media.caption?.slice(0, 140) || "Post Instagram";
 
@@ -292,7 +302,7 @@ export async function fetchInstagramCommentsForMedia(accessToken: string, media:
 export async function fetchInstagramInsightsForMedia(accessToken: string, media: InstagramMediaItem) {
   const metrics = ["reach", "impressions", "views", "shares", "saved", "total_interactions"].join(",");
   try {
-    const data = await graphGet<{ data?: Array<{ name?: string; values?: Array<{ value?: number }> }> }>(`/${media.id}/insights`, accessToken, { metric: metrics });
+    const data = await graphGet<{ data?: Array<{ name?: string; values?: Array<{ value?: number }> }> }>(`${igApiBase(accessToken)}/${media.id}/insights`, accessToken, { metric: metrics });
     const values = new Map<string, number>();
     for (const item of data.data ?? []) {
       values.set(String(item.name || ""), Number(item.values?.[0]?.value || 0));
