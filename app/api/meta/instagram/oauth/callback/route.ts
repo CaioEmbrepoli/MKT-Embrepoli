@@ -3,14 +3,13 @@ import { NextResponse } from "next/server";
 import {
   fetchInstagramAccount,
   INSTAGRAM_SCOPES,
-  metaAppId,
-  metaAppSecret,
-  metaGraphVersion,
-  metaOAuthRedirectUri,
+  instagramAppId,
+  instagramAppSecret,
+  instagramOAuthRedirectUri,
   verifyMetaState
 } from "@/lib/meta-server";
 
-type MetaState = {
+type InstagramOAuthState = {
   userId: string;
   organizationId: string;
   createdAt: number;
@@ -33,57 +32,72 @@ export async function GET(request: Request) {
   if (!code || !state) return siteRedirect(request, { instagram: "error", message: "missing_code" });
 
   try {
-    const payload = verifyMetaState<MetaState>(state);
+    const payload = verifyMetaState<InstagramOAuthState>(state);
     if (Date.now() - Number(payload.createdAt) > 15 * 60 * 1000) {
       throw new Error("Estado OAuth expirado. Tente novamente.");
     }
 
-    const appId = metaAppId();
-    const appSecret = metaAppSecret();
+    const appId = instagramAppId();
+    const appSecret = instagramAppSecret();
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
     if (!appId || !appSecret || !supabaseUrl || !serviceKey) {
-      throw new Error("Variaveis de ambiente Meta/Supabase incompletas.");
+      throw new Error("Variaveis de ambiente Instagram/Supabase incompletas.");
     }
 
-    const redirectUri = metaOAuthRedirectUri(request);
-    const graphBase = `https://graph.facebook.com/${metaGraphVersion()}`;
+    const redirectUri = instagramOAuthRedirectUri(request);
 
-    // 1. Trocar code por short-lived token (1 hora)
-    const shortTokenRes = await fetch(`${graphBase}/oauth/access_token`, {
+    // 1. Trocar code por short-lived token (1 hora) — endpoint do Instagram
+    const shortTokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ code, client_id: appId, client_secret: appSecret, redirect_uri: redirectUri })
+      body: new URLSearchParams({
+        client_id: appId,
+        client_secret: appSecret,
+        redirect_uri: redirectUri,
+        code,
+        grant_type: "authorization_code"
+      })
     });
-    const shortTokenData = await shortTokenRes.json() as { access_token?: string; error?: { message?: string } };
+    const shortTokenData = await shortTokenRes.json() as {
+      access_token?: string;
+      user_id?: number;
+      error_type?: string;
+      error_message?: string;
+    };
     if (!shortTokenRes.ok || !shortTokenData.access_token) {
-      throw new Error(shortTokenData.error?.message ?? "Falha ao obter token do Facebook.");
+      throw new Error(shortTokenData.error_message ?? "Falha ao obter token do Instagram.");
     }
     const shortToken = shortTokenData.access_token;
 
-    // 2. Trocar short-lived por Long-Lived Token (60 dias)
-    const longTokenUrl = new URL(`${graphBase}/oauth/access_token`);
-    longTokenUrl.searchParams.set("grant_type", "fb_exchange_token");
+    // 2. Trocar short-lived por Long-Lived Token (60 dias) — graph.instagram.com
+    const longTokenUrl = new URL("https://graph.instagram.com/access_token");
+    longTokenUrl.searchParams.set("grant_type", "ig_exchange_token");
     longTokenUrl.searchParams.set("client_id", appId);
     longTokenUrl.searchParams.set("client_secret", appSecret);
-    longTokenUrl.searchParams.set("fb_exchange_token", shortToken);
+    longTokenUrl.searchParams.set("access_token", shortToken);
 
     const longTokenRes = await fetch(longTokenUrl);
-    const longTokenData = await longTokenRes.json() as { access_token?: string; expires_in?: number; error?: { message?: string } };
+    const longTokenData = await longTokenRes.json() as {
+      access_token?: string;
+      token_type?: string;
+      expires_in?: number;
+      error?: { message?: string };
+    };
     if (!longTokenRes.ok || !longTokenData.access_token) {
-      throw new Error(longTokenData.error?.message ?? "Falha ao obter Long-Lived Token do Facebook.");
+      throw new Error(longTokenData.error?.message ?? "Falha ao obter Long-Lived Token do Instagram.");
     }
-    const accessToken = longTokenData.access_token;
+    const accessToken = longTokenData.access_token; // IGAA...
     const expiresIn = longTokenData.expires_in ?? 60 * 24 * 60 * 60; // fallback 60 dias
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-    // 3. Buscar conta Instagram vinculada
+    // 3. Buscar dados da conta Instagram (já suporta tokens IGAA via graph.instagram.com)
     const account = await fetchInstagramAccount(accessToken);
     if (!account.instagramAccountId) {
-      throw new Error("Nenhuma conta Instagram Business vinculada a essa conta do Facebook.");
+      throw new Error("Nao foi possivel identificar a conta Instagram vinculada.");
     }
 
-    // 4. Salvar conexão no banco
+    // 4. Salvar conexao no banco
     const service = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false }
     });

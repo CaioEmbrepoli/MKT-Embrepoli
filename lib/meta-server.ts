@@ -140,18 +140,18 @@ export function requireMetaManager(context: MetaRequestContext) {
   }
 }
 
-// --- OAuth Meta/Facebook helpers ---
+// --- OAuth Instagram Business Login helpers ---
 
-export function metaAppId() { return process.env.META_APP_ID || ""; }
-export function metaAppSecret() { return process.env.META_APP_SECRET || ""; }
+export function instagramAppId() { return process.env.INSTAGRAM_APP_ID || ""; }
+export function instagramAppSecret() { return process.env.INSTAGRAM_APP_SECRET || ""; }
 
-export function metaOAuthRedirectUri(request: Request) {
+export function instagramOAuthRedirectUri(request: Request) {
   const origin = (process.env.NEXT_PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/$/, "");
   return `${origin}/api/meta/instagram/oauth/callback`;
 }
 
 function metaStateSecret() {
-  return process.env.META_OAUTH_STATE_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || "embrepoli-meta-oauth";
+  return process.env.INSTAGRAM_OAUTH_STATE_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || "embrepoli-instagram-oauth";
 }
 
 export function signMetaState(payload: Record<string, unknown>) {
