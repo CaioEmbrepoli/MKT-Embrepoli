@@ -191,6 +191,32 @@ create table if not exists public.posts (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.post_publications (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  post_id text references public.posts(id) on delete cascade,
+  platform text not null,
+  status text not null default 'pending',
+  title text not null default '',
+  caption text not null default '',
+  format text not null default '',
+  asset_url text not null default '',
+  thumbnail_url text,
+  external_id text,
+  permalink text,
+  scheduled_at timestamptz,
+  published_at timestamptz,
+  error text,
+  attempts integer not null default 0,
+  last_attempt_at timestamptz,
+  created_by text references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists post_publications_org_platform_status_idx
+on public.post_publications (organization_id, platform, status, scheduled_at);
+
 create table if not exists public.post_assignees (
   id text primary key default gen_random_uuid()::text,
   organization_id text not null references public.organizations(id) on delete cascade,
@@ -462,6 +488,27 @@ create table if not exists public.tiktok_connections (
 create unique index if not exists tiktok_connections_organization_environment_idx
 on public.tiktok_connections (organization_id, environment);
 
+create table if not exists public.meta_connections (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  service text not null default 'instagram',
+  instagram_account_id text not null,
+  page_id text,
+  username text not null default '',
+  display_name text not null default '',
+  avatar_url text not null default '',
+  scopes text[] not null default '{}'::text[],
+  access_token text not null,
+  expires_at timestamptz,
+  connected_by text references public.profiles(id) on delete set null,
+  connected_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint meta_connections_service_check check (service in ('instagram'))
+);
+
+create unique index if not exists meta_connections_organization_service_idx
+on public.meta_connections (organization_id, service);
+
 alter table public.profiles add column if not exists notification_sound boolean not null default true;
 alter table public.campaigns add column if not exists vehicle_type_id text references public.vehicle_types(id) on delete set null;
 alter table public.posts add column if not exists sort_order integer not null default 1;
@@ -469,6 +516,9 @@ alter table public.posts add column if not exists format text not null default '
 alter table public.posts add column if not exists idea_id text references public.ideas(id) on delete set null;
 alter table public.posts add column if not exists template_id text references public.post_templates(id) on delete set null;
 alter table public.posts add column if not exists production_checklist jsonb not null default '[]'::jsonb;
+alter table public.posts add column if not exists extra_channels jsonb not null default '[]'::jsonb;
+alter table public.posts add column if not exists published_video_id text;
+alter table public.posts add column if not exists published_at timestamptz;
 alter table public.ideas add column if not exists sort_order integer not null default 1;
 alter table public.ideas add column if not exists description text not null default '';
 alter table public.ideas add column if not exists template_id text references public.post_templates(id) on delete set null;
@@ -690,6 +740,7 @@ alter table public.campaigns enable row level security;
 alter table public.campaign_audiences enable row level security;
 alter table public.post_templates enable row level security;
 alter table public.posts enable row level security;
+alter table public.post_publications enable row level security;
 alter table public.post_review_assets enable row level security;
 alter table public.post_review_comments enable row level security;
 alter table public.ideas enable row level security;
@@ -708,6 +759,7 @@ alter table public.post_metrics enable row level security;
 alter table public.notifications enable row level security;
 alter table public.google_connections enable row level security;
 alter table public.tiktok_connections enable row level security;
+alter table public.meta_connections enable row level security;
 
 drop policy if exists "members can read own organization" on public.organizations;
 create policy "members can read own organization"
@@ -866,6 +918,11 @@ create policy "members manage metrics" on public.post_metrics for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
+drop policy if exists "members manage post publications" on public.post_publications;
+create policy "members manage post publications" on public.post_publications for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
 create policy "members manage own notifications" on public.notifications for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
@@ -885,6 +942,15 @@ using (organization_id = public.current_organization_id());
 
 drop policy if exists "admins and managers manage tiktok connection" on public.tiktok_connections;
 create policy "admins and managers manage tiktok connection" on public.tiktok_connections for all
+using (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'))
+with check (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'));
+
+drop policy if exists "members read meta connection status" on public.meta_connections;
+create policy "members read meta connection status" on public.meta_connections for select
+using (organization_id = public.current_organization_id());
+
+drop policy if exists "admins and managers manage meta connection" on public.meta_connections;
+create policy "admins and managers manage meta connection" on public.meta_connections for all
 using (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'))
 with check (organization_id = public.current_organization_id() and public.current_member_role() in ('admin', 'gestor'));
 
@@ -1553,6 +1619,7 @@ alter publication supabase_realtime add table
   public.post_templates,
   public.campaign_assignees,
   public.posts,
+  public.post_publications,
   public.post_assignees,
   public.post_review_assets,
   public.post_review_comments,
@@ -1569,6 +1636,7 @@ alter publication supabase_realtime add table
   public.notifications,
   public.google_connections,
   public.tiktok_connections,
+  public.meta_connections,
   public.customer_questions,
   public.comments,
   public.auto_filters,

@@ -661,3 +661,111 @@ Metas no board de Tarefas têm suporte a reset periódico:
 - **Servidor dev:** Porta 3000, manter sempre ativo
 - **Dados de produção:** Nunca deletar/sobrescrever sem confirmação explícita
 - **Worktrees:** Ao sair do plan mode, confirmar se edições estão no app principal (`C:\Caio\app`) e não no worktree
+
+---
+
+## Atualização operacional — 27-05-2026
+
+### Arquitetura
+- O `app/page.tsx` concentra lógica demais e deve ser tratado como risco técnico.
+- Refatoração futura deve ser por domínio (`sales`, `tasks`, `calendar`, `feedback`, etc.), depois de mapear estados compartilhados e criar testes mínimos.
+- Por enquanto, manter a estrutura atual para não interromper funcionalidades em andamento.
+
+### Ligações de Vendas
+- `CallSchedule` precisa considerar `manualDate`.
+- Agendamento automático deve usar dias úteis, limite de 20 ligações automáticas por vendedor/dia e preservar datas manuais.
+- Datas manuais não entram no contador automático.
+- A visão de Urgência é dinâmica e deriva de `nextCallAt`.
+- O filtro "Minhas" deve considerar o responsável (`assignedTo`), não somente `createdBy`.
+- Busca de ligações deve procurar por nome, telefone e observações com texto normalizado.
+
+### Importação XLSX
+- A importação de clientes pode usar a coluna "Frequência" para criar agendas de ligação automaticamente.
+- Frequência vazia não cria agenda.
+- `externalCode` segue como chave de deduplicação de clientes.
+- Cliente com agenda ativa não deve receber agenda duplicada.
+
+### Clientes e Propostas
+- Cliente PF usa CPF.
+- Cliente PJ usa Empresa/CNPJ e pode ter nome de contato separado.
+- Origem "Outros" usa `sourceCustom`; limpar esse campo ao trocar para outra origem.
+- Responsáveis no modal de cliente devem ser perfis ativos da área de vendas.
+- Propostas usam ações explícitas de Ganha, Perdida e Excluir.
+- Proposta ganha pode converter Lead em Cliente e deve refletir imediatamente no funil.
+
+### Tarefas
+- `tasks.priority` e `tasks.progress` devem aceitar `NULL`.
+- A UI pode representar campos vazios como `""`, mas a persistência deve enviar `null`.
+- Migration relacionada: `supabase/tasks-nullable-priority-progress.sql`.
+
+### Feedback interno
+- Existe módulo de feedback pelo botão `?`, com tipos Dúvida, Problema e Ideia.
+- Admins têm aba de recebidos, podem responder, marcar como resolvido e excluir feedbacks.
+- Resposta do admin deve persistir e notificar o usuário remetente.
+- Validar tabela `feedback`, RLS e bucket/políticas de anexos.
+
+### Deploy
+- Em 27-05-2026 houve push para `main` no commit `2cf84a7`.
+- A Vercel disparou deploy `dpl_CQaGUTFhKPzeEGwR61madTHNjyZJ`.
+
+---
+
+## Atualização operacional — 28-05-2026
+
+### Importação unificada
+- Métricas usam um botão "Importar" e `MetricImportModal`.
+- Comentários usam um botão "Importar" e `CommentImportUnifiedModal`.
+- Importação de métricas pode selecionar múltiplos canais e processar em fila.
+- Importação de comentários suporta YouTube e Instagram; escopo "30 dias / todos" só aparece para YouTube.
+- `ComentariosSection` precisa receber `channels` para detectar canais disponíveis.
+
+### Métricas
+- O widget de métricas do Painel de Marketing usa filtro global de período.
+- Cards e gráfico devem consumir o mesmo estado filtrado.
+- Períodos usados: 7d, 14d e 30d.
+
+### Vendas
+- Painel de Vendas reutiliza a visualização do Funil Comercial.
+- `salesFunnelStages` e `salesClients` devem alimentar painel e funil para manter reatividade.
+- Conversão Lead/Cliente fica na lista principal de clientes e persiste via `syncSalesClients`.
+- Clientes inativos não exibem conversão.
+- Ligações/Desfecho limita textos longos visualmente a 20 caracteres com reticências.
+- Botões de ação devem usar ícones com `title` para acessibilidade.
+
+### Planilha de clientes
+- O botão "Planilha" une exportação de modelo e importação XLSX.
+- `exportClientTemplate()` gera modelo com cabeçalhos esperados.
+- A importação deve aceitar arquivos com 7, 8 ou 9 colunas.
+- `lastPurchaseValue` registra valor da última compra.
+- Se houver data de última compra, o lead pode ser promovido automaticamente para cliente.
+
+### Revisão de assets
+- Capas de vídeo (`isCover`) não entram na fila de aprovação/revisão.
+- Capas continuam visíveis no modal de edição como contexto.
+- Filtros de pendência devem excluir `isCover` em badges, sidebar, calendário e aba de revisões.
+
+### Publicação de vídeo
+- YouTube publish deve consultar metadata do Drive antes de baixar arquivo.
+- Arquivos acima de 200MB devem usar streaming direto, evitando `arrayBuffer()` em RAM.
+- `duplex: "half"` pode ser necessário para streaming com `fetch` em Node.
+- `maxDuration = 300` deve ser usado nas rotas longas quando necessário.
+- TikTok publish usa Content Posting API com `push_by_file`.
+- TikTok faz upload em chunks de 64MB via `/api/tiktok/publish`.
+- Evitar `pull_by_url` no TikTok porque exige domínio verificado.
+
+### TikTok OAuth
+- `video.publish` só deve ser solicitado quando o app/ambiente tiver esse escopo aprovado.
+- No Sandbox, escopo não aprovado pode quebrar/reiniciar o fluxo OAuth.
+- Ao adicionar scopes, o usuário precisa desconectar e reconectar a conta.
+
+### Instagram / Meta
+- Tokens `IGAA`, `IGQV` e `IGQ` usam `graph.instagram.com`.
+- Tokens `EAA` usam `graph.facebook.com`.
+- Centralizar essa regra em helper como `igApiBase(accessToken)`.
+- Importadores Instagram devem sanitizar lone surrogates/Unicode malformado.
+- Publicação Meta pode exigir `Content-Type` mesmo com body em `URLSearchParams`.
+
+### Deploy e Git
+- Conferir `git status` antes de commit/deploy, principalmente após criar arquivos em `app/api`, `lib` ou `supabase`.
+- Builds da Vercel podem falhar se commits intermediários referenciarem arquivos ainda não versionados.
+- Commits citados no dia: `bcf9204`, `591e6af`, `06cedd8`.
