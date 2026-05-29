@@ -142,8 +142,8 @@ export function requireMetaManager(context: MetaRequestContext) {
 
 // --- OAuth Instagram Business Login helpers ---
 
-export function instagramAppId() { return process.env.INSTAGRAM_APP_ID || ""; }
-export function instagramAppSecret() { return process.env.INSTAGRAM_APP_SECRET || ""; }
+export function instagramAppId() { return process.env.META_APP_ID || ""; }
+export function instagramAppSecret() { return process.env.META_APP_SECRET || ""; }
 
 export function instagramOAuthRedirectUri(request: Request) {
   const origin = (process.env.NEXT_PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/$/, "");
