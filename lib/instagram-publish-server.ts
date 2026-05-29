@@ -4,7 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { metaGraphVersion, type MetaRequestContext } from "./meta-server";
 import { getGoogleAccessToken } from "./google-server";
 
-export const INSTAGRAM_CONTENT_PUBLISH_SCOPE = "instagram_business_content_publish";
+export const INSTAGRAM_CONTENT_PUBLISH_SCOPE = "instagram_content_publish";
 
 const PUBLICATION_BUCKET = "instagram-publications";
 
@@ -189,8 +189,12 @@ async function waitForContainer(connection: InstagramPublishConnection, creation
 }
 
 export function assertInstagramPublishPermission(connection: InstagramPublishConnection) {
-  if (!connection.scopes?.includes(INSTAGRAM_CONTENT_PUBLISH_SCOPE)) {
-    throw new Error("Token do Instagram sem permissao de publicacao. Gere um novo token com instagram_business_content_publish.");
+  const scopes = connection.scopes ?? [];
+  const hasPublishScope =
+    scopes.includes("instagram_content_publish") ||
+    scopes.includes("instagram_business_content_publish");
+  if (!hasPublishScope) {
+    throw new Error("Token do Instagram sem permissao de publicacao. Reconecte o Instagram em Configuracoes.");
   }
 }
 
