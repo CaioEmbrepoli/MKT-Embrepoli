@@ -12747,7 +12747,7 @@ type ChannelPublishConfig = {
 
 const formatsByPlatform: Record<string, string[]> = {
   youtube:   ["Vídeo", "Shorts"],
-  instagram: ["Feed", "Story", "Reels", "Lives"],
+  instagram: ["Feed", "Reels", "Story"],
   tiktok:    ["Feed", "Story", "Live"],
   facebook:  ["Post", "Story", "Reels"],
   linkedin:  ["Post", "Artigo", "Vídeo"],
@@ -12862,6 +12862,44 @@ function PublishModal({
           } catch {
             updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
           }
+        } else if (platform === "instagram") {
+          try {
+            const res = await fetch("/api/meta/instagram/publish", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                postId: post.id,
+                assetUrl: selectedAsset.url,
+                title: config.title,
+                caption: config.description,
+                format: config.format,
+                scheduledAt,
+                thumbnailUrl: effectiveThumbnailUrl,
+                allowDuplicate: confirmedDuplicate,
+              }),
+            });
+            const data = await res.json().catch(() => ({})) as {
+              error?: string;
+              status?: "published" | "scheduled";
+              instagramMediaId?: string;
+              permalink?: string;
+              publishedAt?: string;
+              scheduledAt?: string;
+            };
+            if (res.ok) {
+              const newStatus = data.status === "scheduled" ? "Agendado" : "Publicado";
+              updateConfig(config.channelId, { status: "success" });
+              setPosts((prev) => prev.map((p) => p.id === post.id ? {
+                ...p,
+                status: newStatus,
+                publishedAt: data.status === "scheduled" ? p.publishedAt : (data.publishedAt ?? new Date().toISOString()),
+              } : p));
+            } else {
+              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar no Instagram." });
+            }
+          } catch {
+            updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
+          }
         } else if (platform === "tiktok") {
           try {
             const res = await fetch("/api/tiktok/publish", {
@@ -12970,7 +13008,7 @@ function PublishModal({
           const platform = publishPlatformKey(name);
           const formats = formatsByPlatform[platform] ?? ["Post"];
           const isYoutube = platform === "youtube";
-          const supported = platform === "youtube" || platform === "tiktok";
+          const supported = platform === "youtube" || platform === "tiktok" || platform === "instagram";
           return (
             <div key={config.channelId} className={`rounded-3xl border p-4 ${config.status === "success" ? "border-emerald-200 bg-emerald-50" : config.status === "error" ? "border-rose-200 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">

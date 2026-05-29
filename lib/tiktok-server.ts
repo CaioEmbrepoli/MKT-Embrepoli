@@ -8,6 +8,7 @@ export const TIKTOK_SCOPES_SANDBOX = [
   "user.info.profile",
   "user.info.stats",
   "video.list",
+  "video.publish",
 ];
 
 export const TIKTOK_SCOPES_PRODUCTION = [
