@@ -3,11 +3,14 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type MetaService = "instagram";
 
+// Scopes para Facebook Login (graph.facebook.com/dialog/oauth)
+// Os scopes instagram_business_* são exclusivos do Instagram Business Login
 export const INSTAGRAM_SCOPES = [
-  "instagram_business_basic",
+  "instagram_basic",
   "instagram_manage_comments",
-  "instagram_business_manage_messages",
-  "instagram_business_content_publish"
+  "instagram_content_publish",
+  "pages_show_list",
+  "pages_read_engagement"
 ];
 
 type MetaConnectionRow = {
