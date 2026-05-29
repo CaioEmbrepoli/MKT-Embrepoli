@@ -161,6 +161,31 @@ export type EditorialPost = {
   publishedAt?: string;
 };
 
+export type PostPublicationPlatform = "youtube" | "tiktok" | "instagram" | "facebook" | "linkedin" | "outros";
+
+export type PostPublicationStatus = "pending" | "processing" | "published" | "scheduled" | "error" | "cancelled";
+
+export type PostPublication = {
+  id: string;
+  postId: string;
+  platform: PostPublicationPlatform;
+  status: PostPublicationStatus;
+  title: string;
+  caption: string;
+  format: string;
+  assetUrl: string;
+  thumbnailUrl?: string;
+  externalId?: string;
+  permalink?: string;
+  scheduledAt?: string;
+  publishedAt?: string;
+  error?: string;
+  attempts: number;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type FileAttachment = {
   id: string;
   name: string;
