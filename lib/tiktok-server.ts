@@ -8,7 +8,7 @@ export const TIKTOK_SCOPES_SANDBOX = [
   "user.info.profile",
   "user.info.stats",
   "video.list",
-  "video.publish",
+  // video.publish requer aprovação explícita no painel TikTok Developer — não disponível em sandbox padrão
 ];
 
 export const TIKTOK_SCOPES_PRODUCTION = [
