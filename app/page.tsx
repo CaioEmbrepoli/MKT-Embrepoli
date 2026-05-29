@@ -13064,6 +13064,7 @@ function PublishModal({
           const platform = publishPlatformKey(name);
           const formats = formatsByPlatform[platform] ?? ["Post"];
           const isYoutube = platform === "youtube";
+          const isInstagram = platform === "instagram";
           const supported = platform === "youtube" || platform === "tiktok" || platform === "instagram";
           return (
             <div key={config.channelId} className={`rounded-3xl border p-4 ${config.status === "success" ? "border-emerald-200 bg-emerald-50" : config.status === "error" ? "border-rose-200 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
@@ -13112,10 +13113,10 @@ function PublishModal({
                   <input value={config.title} onChange={(e) => updateConfig(config.channelId, { title: e.target.value })} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
                 </div>
               )}
-              {/* Thumbnail (YouTube only) */}
-              {isYoutube && (
+              {/* Thumbnail (YouTube) / Capa do vídeo (Instagram) */}
+              {(isYoutube || isInstagram) && (
                 <div className="mb-3">
-                  <p className="mb-1 text-xs font-black text-slate-500">Thumbnail</p>
+                  <p className="mb-1 text-xs font-black text-slate-500">{isYoutube ? "Thumbnail" : "Capa do vídeo"}</p>
                   {effectiveThumbnailPreview ? (
                     <div className="flex items-center gap-3 rounded-2xl bg-white p-3">
                       <button type="button" onClick={() => setThumbFullscreen(true)} className="shrink-0 cursor-zoom-in" title="Ver capa em tamanho grande">

@@ -198,6 +198,21 @@ export function assertInstagramPublishPermission(connection: InstagramPublishCon
   }
 }
 
+async function prepareCoverUrl(context: MetaRequestContext, coverUrl: string): Promise<string> {
+  const isDrive = /drive\.google\.com/i.test(coverUrl);
+  const file = isDrive ? await fetchDriveFile(context, coverUrl) : await fetchDirectFile(coverUrl);
+  const contentType = file.contentType.split(";")[0] || "image/jpeg";
+  if (!contentType.startsWith("image/")) throw new Error("A capa deve ser uma imagem (JPG ou PNG).");
+  await ensurePublicBucket(context.service);
+  const ext = extensionForContentType(contentType);
+  const path = `${context.organizationId}/covers/${Date.now()}-${randomUUID()}.${ext}`;
+  const { error } = await context.service.storage
+    .from(PUBLICATION_BUCKET)
+    .upload(path, file.buffer, { contentType, upsert: false });
+  if (error) throw new Error(`Erro ao preparar capa publica: ${error.message}`);
+  return context.service.storage.from(PUBLICATION_BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
 export async function publishInstagramMedia(
   context: MetaRequestContext,
   connection: InstagramPublishConnection,
@@ -205,12 +220,14 @@ export async function publishInstagramMedia(
 ): Promise<InstagramPublishResult> {
   assertInstagramPublishPermission(connection);
 
-  const format = normalizeFormat(payload.format);
+  let format = normalizeFormat(payload.format);
   const asset = await preparePublicAsset(context, payload);
   const isVideo = asset.contentType.startsWith("video/");
   const isImage = asset.contentType.startsWith("image/");
+
+  // Auto-converte: vídeo selecionado como Feed vira Reels automaticamente
   if (format === "Feed" && isVideo) {
-    throw new Error("Para video no Instagram, use o formato Reels. Feed aceita imagem neste fluxo.");
+    format = "Reels";
   }
 
   const params: Record<string, string> = {};
@@ -219,7 +236,13 @@ export async function publishInstagramMedia(
     params.media_type = "REELS";
     params.video_url = asset.publicUrl;
     if (payload.caption) params.caption = payload.caption;
-    if (payload.thumbnailUrl) params.thumb_offset = "0";
+    if (payload.thumbnailUrl) {
+      try {
+        params.cover_url = await prepareCoverUrl(context, payload.thumbnailUrl);
+      } catch {
+        // capa é opcional — falha silenciosa, continua sem cover_url
+      }
+    }
   } else if (format === "Story") {
     params.media_type = "STORIES";
     if (isVideo) params.video_url = asset.publicUrl;
