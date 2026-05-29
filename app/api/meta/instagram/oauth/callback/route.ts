@@ -6,6 +6,7 @@ import {
   instagramAppId,
   instagramAppSecret,
   instagramOAuthRedirectUri,
+  metaGraphVersion,
   verifyMetaState
 } from "@/lib/meta-server";
 
@@ -46,55 +47,52 @@ export async function GET(request: Request) {
     }
 
     const redirectUri = instagramOAuthRedirectUri(request);
+    const graphBase = `https://graph.facebook.com/${metaGraphVersion()}`;
 
-    // 1. Trocar code por short-lived token (1 hora) — endpoint do Instagram
-    const shortTokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
+    // 1. Trocar code por short-lived User Access Token (1-2 horas)
+    const shortTokenRes = await fetch(`${graphBase}/oauth/access_token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         client_id: appId,
         client_secret: appSecret,
         redirect_uri: redirectUri,
-        code,
-        grant_type: "authorization_code"
+        code
       })
     });
     const shortTokenData = await shortTokenRes.json() as {
       access_token?: string;
-      user_id?: number;
-      error_type?: string;
-      error_message?: string;
+      error?: { message?: string };
     };
     if (!shortTokenRes.ok || !shortTokenData.access_token) {
-      throw new Error(shortTokenData.error_message ?? "Falha ao obter token do Instagram.");
+      throw new Error(shortTokenData.error?.message ?? "Falha ao obter token do Facebook.");
     }
     const shortToken = shortTokenData.access_token;
 
-    // 2. Trocar short-lived por Long-Lived Token (60 dias) — graph.instagram.com
-    const longTokenUrl = new URL("https://graph.instagram.com/access_token");
-    longTokenUrl.searchParams.set("grant_type", "ig_exchange_token");
+    // 2. Trocar short-lived por Long-Lived Token (60 dias)
+    const longTokenUrl = new URL(`${graphBase}/oauth/access_token`);
+    longTokenUrl.searchParams.set("grant_type", "fb_exchange_token");
     longTokenUrl.searchParams.set("client_id", appId);
     longTokenUrl.searchParams.set("client_secret", appSecret);
-    longTokenUrl.searchParams.set("access_token", shortToken);
+    longTokenUrl.searchParams.set("fb_exchange_token", shortToken);
 
     const longTokenRes = await fetch(longTokenUrl);
     const longTokenData = await longTokenRes.json() as {
       access_token?: string;
-      token_type?: string;
       expires_in?: number;
       error?: { message?: string };
     };
     if (!longTokenRes.ok || !longTokenData.access_token) {
-      throw new Error(longTokenData.error?.message ?? "Falha ao obter Long-Lived Token do Instagram.");
+      throw new Error(longTokenData.error?.message ?? "Falha ao obter Long-Lived Token do Facebook.");
     }
-    const accessToken = longTokenData.access_token; // IGAA...
-    const expiresIn = longTokenData.expires_in ?? 60 * 24 * 60 * 60; // fallback 60 dias
+    const accessToken = longTokenData.access_token;
+    const expiresIn = longTokenData.expires_in ?? 60 * 24 * 60 * 60;
     const expiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
 
-    // 3. Buscar dados da conta Instagram (já suporta tokens IGAA via graph.instagram.com)
+    // 3. Buscar conta Instagram Business vinculada à conta do Facebook
     const account = await fetchInstagramAccount(accessToken);
     if (!account.instagramAccountId) {
-      throw new Error("Nao foi possivel identificar a conta Instagram vinculada.");
+      throw new Error("Nenhuma conta Instagram Business vinculada a essa conta do Facebook. Verifique se a conta Instagram esta conectada a uma Pagina do Facebook.");
     }
 
     // 4. Salvar conexao no banco
