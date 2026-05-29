@@ -15,6 +15,18 @@
     {
       "path": "/api/data-retention/cleanup",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/instagram-publications",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/youtube-publications",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/tiktok-publications",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

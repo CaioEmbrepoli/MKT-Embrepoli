@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       format: string;
       scheduledAt?: string | null;
       thumbnailUrl?: string | null;
+      postId?: string;
     };
 
     const { assetUrl, title, description, format, scheduledAt, thumbnailUrl } = body;
@@ -215,6 +216,31 @@ export async function POST(request: Request) {
       }
     } catch {
       // Verificação falhou — mantém defaults
+    }
+
+    // ── Registrar publicação em post_publications ────────────────────────────
+    if (body.postId) {
+      const isScheduled = privacyStatus === "private" && !!body.scheduledAt;
+      try {
+        await context.service.from("post_publications").insert({
+          id: crypto.randomUUID(),
+          organization_id: context.organizationId,
+          post_id: body.postId,
+          platform: "youtube",
+          status: isScheduled ? "scheduled" : "published",
+          title: body.title ?? "",
+          caption: body.description ?? "",
+          format: body.format ?? "video",
+          asset_url: body.assetUrl,
+          external_id: videoId,
+          permalink: `https://www.youtube.com/watch?v=${videoId}`,
+          scheduled_at: body.scheduledAt ?? null,
+          published_at: isScheduled ? null : new Date().toISOString(),
+          created_by: context.userId,
+        });
+      } catch {
+        // Falha no registro não impede o retorno de sucesso
+      }
     }
 
     return NextResponse.json({ videoId, privacyStatus, uploadStatus });

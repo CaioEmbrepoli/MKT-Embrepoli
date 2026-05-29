@@ -25,6 +25,7 @@ export async function POST(request: Request) {
       format?: string;
       scheduledAt?: string | null;
       privacyLevel?: "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "SELF_ONLY";
+      postId?: string;
     };
 
     const { assetUrl, title, privacyLevel } = body;
@@ -143,6 +144,27 @@ export async function POST(request: Request) {
           { error: `Erro no chunk ${i + 1}/${totalChunks}: ${uploadRes.status} — ${errText}` },
           { status: 500 }
         );
+      }
+    }
+
+    // ── Registrar publicação em post_publications ────────────────────────────
+    if (body.postId) {
+      try {
+        await context.service.from("post_publications").insert({
+          id: crypto.randomUUID(),
+          organization_id: context.organizationId,
+          post_id: body.postId,
+          platform: "tiktok",
+          status: "processing",
+          title: body.title ?? "",
+          caption: body.description ?? "",
+          format: body.format ?? "video",
+          asset_url: body.assetUrl,
+          external_id: publish_id,
+          created_by: context.userId,
+        });
+      } catch {
+        // Falha no registro não impede o retorno de sucesso
       }
     }
 

@@ -208,7 +208,8 @@ import type {
   CallFrequency,
   CallLog,
   FeedbackKind,
-  AppFeedback
+  AppFeedback,
+  PostPublication
 } from "@/lib/types";
 import {
   Area,
@@ -1059,6 +1060,7 @@ export default function Home() {
   const [salesClients, setSalesClients] = useState<SalesClient[]>([]);
   const [salesFunnelStages, setSalesFunnelStages] = useState<SalesFunnelStage[]>([]);
   const [callSchedules, setCallSchedules] = useState<CallSchedule[]>([]);
+  const [postPublications, setPostPublications] = useState<PostPublication[]>([]);
   const [salesClientFilter, setSalesClientFilter] = useState<"todos" | SalesClientStatus>("todos");
   const [salesClientSearch, setSalesClientSearch] = useState("");
   const [salesCallFilter, setSalesCallFilter] = useState<"all" | "today" | "overdue">("all");
@@ -1366,6 +1368,7 @@ export default function Home() {
     setSalesClients(data.salesClients);
     setSalesFunnelStages(data.salesFunnelStages);
     setCallSchedules(data.callSchedules);
+    setPostPublications(data.postPublications);
     setNotifications(data.notifications);
     const { data: authData } = await supabase.auth.getUser();
     const authUserId = authData.user?.id ?? sessionUserId;
@@ -2685,6 +2688,7 @@ export default function Home() {
         deleteTaskAttachment={deleteTaskAttachment}
         addTaskExternalLink={addTaskExternalLink}
         addSubtask={addSubtask}
+        postPublications={postPublications}
       />
       {mediaPreview && <MediaPreviewModal item={mediaPreview} close={() => setMediaPreview(null)} />}
     </main>
@@ -10203,6 +10207,7 @@ function EntityModal(props: {
   deleteTaskAttachment: (taskId: string, attachment: TaskAttachment) => void;
   addTaskExternalLink: (taskId: string, url: string) => void;
   addSubtask: (task: Task, title?: string) => void;
+  postPublications?: PostPublication[];
 }) {
   if (!props.modal) return null;
   const modal = props.modal;
@@ -12221,7 +12226,7 @@ function applyTimeToDateTimeLocal(currentValue: string, time: string) {
   return `${datePart}T${time}`;
 }
 
-function PostModalV2({ modal, setModal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function PostModalV2({ modal, setModal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, postPublications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
   const initialIdea = editing?.ideaId ?? (modal?.kind === "post" ? modal.ideaId ?? "" : "");
   const ideaPrefill = ideas.find((idea) => idea.id === initialIdea);
@@ -12458,6 +12463,31 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
             </div>
             <button type="button" onClick={() => setProductionChecklist((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} title="Adicionar item" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Plus size={16} /></button>
           </section>
+          {editing && (() => {
+            const pubs = (postPublications ?? []).filter((p) => p.postId === editing.id && p.externalId);
+            if (!pubs.length) return null;
+            const platformLabel: Record<string, string> = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn" };
+            const platformColor: Record<string, string> = { youtube: "bg-red-50 border-red-100 text-red-700", tiktok: "bg-slate-50 border-slate-200 text-slate-700", instagram: "bg-purple-50 border-purple-100 text-purple-700", facebook: "bg-blue-50 border-blue-100 text-blue-700", linkedin: "bg-sky-50 border-sky-100 text-sky-700" };
+            const statusLabel: Record<string, string> = { published: "Publicado", scheduled: "Agendado", processing: "Processando", pending: "Pendente", error: "Erro", cancelled: "Cancelado" };
+            const statusColor: Record<string, string> = { published: "text-emerald-700", scheduled: "text-blue-600", processing: "text-amber-600", pending: "text-amber-600", error: "text-rose-600", cancelled: "text-slate-500" };
+            return (
+              <div className="md:col-span-2 space-y-2">
+                <p className="text-xs font-black uppercase tracking-wide text-slate-400">Publicações</p>
+                {pubs.map((pub) => (
+                  <div key={pub.id} className={`flex items-center gap-3 rounded-2xl border px-3 py-2.5 ${platformColor[pub.platform] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}>
+                    <span className="font-black text-sm">{platformLabel[pub.platform] ?? pub.platform}</span>
+                    <span className={`text-xs font-bold ${statusColor[pub.status] ?? "text-slate-500"}`}>{statusLabel[pub.status] ?? pub.status}</span>
+                    {pub.publishedAt && <span className="text-xs font-bold opacity-60">{new Date(pub.publishedAt).toLocaleDateString("pt-BR")}</span>}
+                    {pub.permalink && (
+                      <a href={pub.permalink} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-black underline-offset-2 hover:underline">
+                        Ver post ↗
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
           {editing && (
             <button type="button" onClick={() => setReviewOpen(true)} className="rounded-3xl border border-blue-100 bg-blue-50 p-4 text-left transition hover:border-blue-300 md:col-span-2">
               <p className="font-black text-blue-900">Artes para revisão</p>
@@ -12848,7 +12878,7 @@ function PublishModal({
             const res = await fetch("/api/google/youtube/publish", {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: effectiveThumbnailUrl }),
+              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: effectiveThumbnailUrl, postId: post.id }),
             });
             if (res.ok) {
               const { videoId, privacyStatus } = await res.json() as { videoId: string; privacyStatus?: string };
@@ -12912,6 +12942,7 @@ function PublishModal({
                 format: config.format,
                 scheduledAt,
                 privacyLevel: config.privacyLevel ?? "PUBLIC_TO_EVERYONE",
+                postId: post.id,
               }),
             });
             if (res.ok) {

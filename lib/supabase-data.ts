@@ -33,7 +33,8 @@ import type {
   CallSchedule,
   CallLog,
   CallFrequency,
-  SalesFunnelStage
+  SalesFunnelStage,
+  PostPublication
 } from "./types";
 
 export type AppData = {
@@ -63,6 +64,7 @@ export type AppData = {
   salesClients: SalesClient[];
   salesFunnelStages: SalesFunnelStage[];
   callSchedules: CallSchedule[];
+  postPublications: PostPublication[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -129,7 +131,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     autoFiltersData,
     salesClientsData,
     salesFunnelStagesData,
-    callSchedulesData
+    callSchedulesData,
+    postPublicationsData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("profile_areas").select("*").eq("organization_id", organizationId),
@@ -164,7 +167,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }),
-    client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true })
+    client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("post_publications").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false })
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -202,7 +206,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     autoFilters: (autoFiltersData.data ?? []).map(mapAutoFilter),
     salesClients: (salesClientsData.data ?? []).map(mapSalesClient),
     salesFunnelStages: (salesFunnelStagesData.data ?? []).map(mapSalesFunnelStage),
-    callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule)
+    callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule),
+    postPublications: (postPublicationsData.data ?? []).map(mapPostPublication)
   };
 }
 
@@ -1516,4 +1521,27 @@ export async function replyFeedback(
 
 export async function deleteFeedback(client: SupabaseClient, id: string): Promise<void> {
   await client.from("feedback").delete().eq("id", id);
+}
+
+function mapPostPublication(row: any): PostPublication {
+  return {
+    id: String(row.id ?? ""),
+    postId: String(row.post_id ?? ""),
+    platform: row.platform ?? "outros",
+    status: row.status ?? "pending",
+    title: String(row.title ?? ""),
+    caption: String(row.caption ?? ""),
+    format: String(row.format ?? ""),
+    assetUrl: String(row.asset_url ?? ""),
+    thumbnailUrl: row.thumbnail_url ?? undefined,
+    externalId: row.external_id ?? undefined,
+    permalink: row.permalink ?? undefined,
+    scheduledAt: row.scheduled_at ?? undefined,
+    publishedAt: row.published_at ?? undefined,
+    error: row.error ?? undefined,
+    attempts: Number(row.attempts ?? 0),
+    createdBy: row.created_by ?? undefined,
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? ""),
+  };
 }
