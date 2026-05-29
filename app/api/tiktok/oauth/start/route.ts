@@ -22,7 +22,7 @@ export async function GET(request: Request) {
     url.searchParams.set("client_key", clientKey);
     url.searchParams.set("redirect_uri", tiktokRedirectUri(request));
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", getTikTokScopes().join(" "));
+    url.searchParams.set("scope", getTikTokScopes().join(","));
     url.searchParams.set("state", state);
 
     return NextResponse.json({ url: url.toString() });

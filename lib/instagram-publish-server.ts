@@ -149,7 +149,10 @@ async function graphPost<T>(connection: InstagramPublishConnection, path: string
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.error) {
-    throw new Error(data?.error?.message || "Erro ao publicar no Instagram.");
+    const errMsg = typeof data?.error === "string"
+      ? data.error
+      : (data?.error?.message ?? data?.error?.error_user_msg ?? `Erro ao publicar no Instagram (HTTP ${response.status}).`);
+    throw new Error(errMsg);
   }
   return data as T;
 }
@@ -163,7 +166,10 @@ async function graphGet<T>(connection: InstagramPublishConnection, path: string,
   const response = await fetch(url);
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.error) {
-    throw new Error(data?.error?.message || "Erro ao consultar publicacao do Instagram.");
+    const errMsg = typeof data?.error === "string"
+      ? data.error
+      : (data?.error?.message ?? data?.error?.error_user_msg ?? `Erro ao consultar publicacao do Instagram (HTTP ${response.status}).`);
+    throw new Error(errMsg);
   }
   return data as T;
 }
