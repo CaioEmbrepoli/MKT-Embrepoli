@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type MetaService = "instagram";
@@ -5,7 +6,8 @@ export type MetaService = "instagram";
 export const INSTAGRAM_SCOPES = [
   "instagram_business_basic",
   "instagram_manage_comments",
-  "instagram_business_manage_messages"
+  "instagram_business_manage_messages",
+  "instagram_business_content_publish"
 ];
 
 type MetaConnectionRow = {
@@ -136,6 +138,36 @@ export function requireMetaManager(context: MetaRequestContext) {
   if (context.role !== "admin" && context.role !== "gestor") {
     throw new Error("Apenas Administrador ou Gestor pode gerenciar a conexao Meta/Instagram.");
   }
+}
+
+// --- OAuth Meta/Facebook helpers ---
+
+export function metaAppId() { return process.env.META_APP_ID || ""; }
+export function metaAppSecret() { return process.env.META_APP_SECRET || ""; }
+
+export function metaOAuthRedirectUri(request: Request) {
+  const origin = (process.env.NEXT_PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/$/, "");
+  return `${origin}/api/meta/instagram/oauth/callback`;
+}
+
+function metaStateSecret() {
+  return process.env.META_OAUTH_STATE_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || "embrepoli-meta-oauth";
+}
+
+export function signMetaState(payload: Record<string, unknown>) {
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = crypto.createHmac("sha256", metaStateSecret()).update(body).digest("base64url");
+  return `${body}.${sig}`;
+}
+
+export function verifyMetaState<T extends Record<string, unknown>>(state: string): T {
+  const [body, sig] = state.split(".");
+  if (!body || !sig) throw new Error("Estado OAuth invalido.");
+  const expected = crypto.createHmac("sha256", metaStateSecret()).update(body).digest("base64url");
+  if (Buffer.from(sig).length !== Buffer.from(expected).length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+    throw new Error("Assinatura OAuth invalida.");
+  }
+  return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as T;
 }
 
 export async function getMetaConnection(supabaseClient: SupabaseClient, organizationId: string, service: MetaService = "instagram") {

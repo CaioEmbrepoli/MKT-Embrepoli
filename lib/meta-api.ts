@@ -91,6 +91,11 @@ export async function getInstagramStatus(): Promise<InstagramConnectionStatus> {
   return fetchJson<InstagramConnectionStatus>("/api/meta/instagram/status");
 }
 
+export async function startInstagramOAuth(): Promise<void> {
+  const data = await fetchJson<{ url: string }>("/api/meta/instagram/oauth/start");
+  window.location.href = data.url;
+}
+
 export async function connectInstagramToken(input: { accessToken: string; expiresAt?: string }): Promise<InstagramConnectionStatus> {
   return fetchJson<InstagramConnectionStatus>("/api/meta/instagram/connect-token", {
     method: "POST",

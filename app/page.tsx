@@ -89,7 +89,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokVideos, startTikTokConnection, type TikTokConnectionStatus } from "@/lib/tiktok-api";
-import { connectInstagramToken, disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
+import { connectInstagramToken, disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
 import {
   type AppData,
   deleteCampaign,
@@ -1272,6 +1272,17 @@ export default function Home() {
     const cleanUrl = window.location.pathname;
     window.history.replaceState({}, "", cleanUrl);
     // Navega para Configurações para o usuário ver o status
+    setActiveArea("marketing");
+    setActiveSection("marketing-configuracoes");
+  }, [loggedIn]);
+
+  // Lê ?instagram=connected|error após retorno do OAuth e navega para Configurações
+  useEffect(() => {
+    if (!loggedIn) return;
+    const params = new URLSearchParams(window.location.search);
+    const igParam = params.get("instagram");
+    if (!igParam) return;
+    window.history.replaceState({}, "", window.location.pathname);
     setActiveArea("marketing");
     setActiveSection("marketing-configuracoes");
   }, [loggedIn]);
@@ -9893,6 +9904,17 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     }
   }
 
+  async function connectInstagram() {
+    setInstagramBusy(true);
+    setInstagramError("");
+    try {
+      await startInstagramOAuth();
+    } catch (error) {
+      setInstagramError(error instanceof Error ? error.message : "Erro ao iniciar OAuth Instagram.");
+      setInstagramBusy(false);
+    }
+  }
+
   async function submitInstagramToken() {
     if (!instagramAccessToken.trim()) return;
     setInstagramBusy(true);
@@ -10102,8 +10124,11 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
             </div>
             {canManageIntegrations ? (
               <div className="mt-4 flex flex-wrap gap-2">
-                <button type="button" disabled={instagramBusy || instagramLoading} onClick={() => setInstagramTokenOpen(true)} className="rounded-2xl bg-pink-600 px-4 py-2 text-sm font-black text-white transition hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400">
-                  {instagramBusy ? "Salvando..." : instagramStatus?.connected ? "Atualizar token" : "Cadastrar token"}
+                <button type="button" disabled={instagramBusy || instagramLoading} onClick={connectInstagram} className="rounded-2xl bg-[#1877F2] px-4 py-2 text-sm font-black text-white transition hover:bg-[#1464d8] disabled:bg-slate-200 disabled:text-slate-400">
+                  {instagramBusy ? "Abrindo..." : instagramStatus?.connected ? "Reconectar com Facebook" : "Conectar com Facebook"}
+                </button>
+                <button type="button" disabled={instagramBusy || instagramLoading} onClick={() => setInstagramTokenOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-slate-200 disabled:opacity-50">
+                  Token manual
                 </button>
                 {instagramStatus?.connected && (
                   <button type="button" disabled={instagramBusy || instagramLoading} onClick={disconnectInstagram} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
