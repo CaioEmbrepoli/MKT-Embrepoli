@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server";
+import { parseSaoPauloDateTime } from "@/lib/app-time";
 
 /** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
@@ -30,6 +31,7 @@ export async function POST(request: Request) {
       scheduledAt?: string | null;
       thumbnailUrl?: string | null;
       postId?: string;
+      allowDuplicate?: boolean;
     };
 
     const { assetUrl, title, description, format, scheduledAt, thumbnailUrl } = body;
@@ -39,6 +41,25 @@ export async function POST(request: Request) {
     }
 
     // ── Download do arquivo ──────────────────────────────────────────────────
+    if (body.postId && !body.allowDuplicate) {
+      const { data: existingPublication } = await context.service
+        .from("post_publications")
+        .select("id,status")
+        .eq("organization_id", context.organizationId)
+        .eq("post_id", body.postId)
+        .eq("platform", "youtube")
+        .in("status", ["pending", "processing", "published", "scheduled"])
+        .limit(1)
+        .maybeSingle();
+
+      if (existingPublication) {
+        return NextResponse.json(
+          { error: "Este post já tem publicação registrada no YouTube. Desative o canal ou confirme republicação para continuar." },
+          { status: 409 }
+        );
+      }
+    }
+
     let fileBuffer: ArrayBuffer | null = null;
     let contentType: string = "video/mp4";
     let fileSize: number = 0;
@@ -106,9 +127,10 @@ export async function POST(request: Request) {
     // mas NÃO altera o conteúdo enviado ao YouTube — o próprio YouTube detecta Shorts
     // automaticamente pela duração (≤60s) e aspect ratio do vídeo.
     void format;
+    const scheduledDate = scheduledAt ? parseSaoPauloDateTime(scheduledAt) : null;
     const snippet = { title, description, categoryId: "22" };
-    const videoStatus = scheduledAt
-      ? { privacyStatus: "private", publishAt: new Date(scheduledAt).toISOString(), selfDeclaredMadeForKids: false }
+    const videoStatus = scheduledDate
+      ? { privacyStatus: "private", publishAt: scheduledDate.toISOString(), selfDeclaredMadeForKids: false }
       : { privacyStatus: "public", selfDeclaredMadeForKids: false };
 
     // ── Passo 1: iniciar resumable upload ────────────────────────────────────
@@ -199,7 +221,7 @@ export async function POST(request: Request) {
     }
 
     // ── Verificação pós-upload (best-effort) ────────────────────────────────
-    let privacyStatus = scheduledAt ? "private" : "public";
+    let privacyStatus = scheduledDate ? "private" : "public";
     let uploadStatus = "uploaded";
     try {
       const verifyRes = await fetch(
@@ -220,7 +242,7 @@ export async function POST(request: Request) {
 
     // ── Registrar publicação em post_publications ────────────────────────────
     if (body.postId) {
-      const isScheduled = privacyStatus === "private" && !!body.scheduledAt;
+      const isScheduled = privacyStatus === "private" && !!scheduledDate;
       try {
         await context.service.from("post_publications").insert({
           id: crypto.randomUUID(),
@@ -234,7 +256,7 @@ export async function POST(request: Request) {
           asset_url: body.assetUrl,
           external_id: videoId,
           permalink: `https://www.youtube.com/watch?v=${videoId}`,
-          scheduled_at: body.scheduledAt ?? null,
+          scheduled_at: scheduledDate?.toISOString() ?? null,
           published_at: isScheduled ? null : new Date().toISOString(),
           created_by: context.userId,
         });

@@ -26,6 +26,7 @@ export async function POST(request: Request) {
       scheduledAt?: string | null;
       privacyLevel?: "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "SELF_ONLY";
       postId?: string;
+      allowDuplicate?: boolean;
     };
 
     const { assetUrl, title, privacyLevel } = body;
@@ -35,6 +36,25 @@ export async function POST(request: Request) {
     }
 
     // ── Download do arquivo ──────────────────────────────────────────────────
+    if (body.postId && !body.allowDuplicate) {
+      const { data: existingPublication } = await context.service
+        .from("post_publications")
+        .select("id,status")
+        .eq("organization_id", context.organizationId)
+        .eq("post_id", body.postId)
+        .eq("platform", "tiktok")
+        .in("status", ["pending", "processing", "published", "scheduled"])
+        .limit(1)
+        .maybeSingle();
+
+      if (existingPublication) {
+        return NextResponse.json(
+          { error: "Este post já tem publicação registrada no TikTok. Desative o canal ou confirme republicação para continuar." },
+          { status: 409 }
+        );
+      }
+    }
+
     let fileBuffer: ArrayBuffer;
     let fileSize: number;
 

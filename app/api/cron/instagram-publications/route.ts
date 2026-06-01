@@ -11,6 +11,14 @@ type QStashBody = {
   publicationId: string;
 };
 
+function shouldUseInstagramCaption(format?: string | null) {
+  return format === "Feed" || format === "Reels";
+}
+
+function shouldUseInstagramThumbnail(format?: string | null) {
+  return format === "Reels";
+}
+
 export async function POST(request: Request) {
   // Verificar assinatura do QStash
   const signingKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
@@ -72,6 +80,14 @@ async function processPublication(publicationId: string) {
     return NextResponse.json({ ok: true, message: "Ja publicado." });
   }
 
+  if (publication.status === "cancelled") {
+    return NextResponse.json({ ok: true, message: "Publicacao cancelada." });
+  }
+
+  if (publication.status !== "scheduled") {
+    return NextResponse.json({ ok: true, message: "Publicacao sem agendamento ativo." });
+  }
+
   const attempts = (publication.attempts ?? 0) + 1;
 
   try {
@@ -96,9 +112,9 @@ async function processPublication(publicationId: string) {
     const published = await publishInstagramMedia(context, connection, {
       assetUrl: publication.asset_url,
       title: publication.title ?? "",
-      caption: publication.caption ?? "",
+      caption: shouldUseInstagramCaption(publication.format) ? (publication.caption ?? "") : "",
       format: publication.format ?? "Story",
-      thumbnailUrl: publication.thumbnail_url
+      thumbnailUrl: shouldUseInstagramThumbnail(publication.format) ? publication.thumbnail_url : null
     });
 
     await service

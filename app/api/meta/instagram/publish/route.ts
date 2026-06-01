@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { Client as QStashClient } from "@upstash/qstash";
 import { getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
 import { publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
+import { parseSaoPauloDateTime } from "@/lib/app-time";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -19,13 +20,18 @@ type PublishBody = {
 };
 
 function parseScheduledAt(value?: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("Data de agendamento invalida.");
-  }
+  const date = parseSaoPauloDateTime(value);
+  if (!date) return null;
   // Mínimo 10 minutos no futuro (requisito da Meta para agendamento nativo)
   return date.getTime() > Date.now() + 10 * 60_000 ? date : null;
+}
+
+function shouldPersistInstagramCaption(format?: string | null) {
+  return format === "Feed" || format === "Reels";
+}
+
+function shouldPersistInstagramThumbnail(format?: string | null) {
+  return format === "Reels";
 }
 
 export async function POST(request: Request) {
@@ -53,6 +59,7 @@ export async function POST(request: Request) {
           .eq("post_id", body.postId)
           .eq("platform", "instagram")
           .in("status", ["scheduled", "pending", "processing", "published"])
+          .limit(1)
           .maybeSingle();
         if (existingError) throw new Error(existingError.message);
         if (existing) {
@@ -85,10 +92,10 @@ export async function POST(request: Request) {
           platform: "instagram",
           status: "scheduled",
           title: body.title ?? "",
-          caption: body.caption ?? "",
+          caption: "",
           format: "Story",
           asset_url: body.assetUrl,
-          thumbnail_url: body.thumbnailUrl ?? null,
+          thumbnail_url: null,
           scheduled_at: scheduledAt.toISOString(),
           attempts: 0,
           created_by: context.userId,
@@ -137,10 +144,10 @@ export async function POST(request: Request) {
         platform: "instagram",
         status: "scheduled",
         title: body.title ?? "",
-        caption: body.caption ?? "",
+        caption: shouldPersistInstagramCaption(effectiveFormat) ? (body.caption ?? "") : "",
         format: effectiveFormat,
         asset_url: body.assetUrl,
-        thumbnail_url: body.thumbnailUrl ?? null,
+        thumbnail_url: shouldPersistInstagramThumbnail(effectiveFormat) ? (body.thumbnailUrl ?? null) : null,
         external_id: externalId,
         scheduled_at: scheduledAt.toISOString(),
         attempts: 0,
@@ -173,7 +180,8 @@ export async function POST(request: Request) {
         .eq("organization_id", context.organizationId)
         .eq("post_id", body.postId)
         .eq("platform", "instagram")
-        .eq("status", "published")
+        .in("status", ["scheduled", "pending", "processing", "published"])
+        .limit(1)
         .maybeSingle();
       if (existingError) throw new Error(existingError.message);
       if (existing) {
@@ -200,10 +208,10 @@ export async function POST(request: Request) {
         platform: "instagram",
         status: "published",
         title: body.title ?? "",
-        caption: body.caption ?? "",
+        caption: shouldPersistInstagramCaption(result.effectiveFormat) ? (body.caption ?? "") : "",
         format: result.effectiveFormat,
         asset_url: body.assetUrl,
-        thumbnail_url: body.thumbnailUrl ?? null,
+        thumbnail_url: shouldPersistInstagramThumbnail(result.effectiveFormat) ? (body.thumbnailUrl ?? null) : null,
         external_id: result.instagramMediaId,
         permalink: result.permalink,
         published_at: result.publishedAt,

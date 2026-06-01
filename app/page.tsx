@@ -90,6 +90,7 @@ import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokVideos, startTikTokConnection, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import { connectInstagramToken, disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
+import { buildSaoPauloDateTime, formatSaoPauloSchedule } from "@/lib/app-time";
 import {
   type AppData,
   deleteCampaign,
@@ -2700,6 +2701,7 @@ export default function Home() {
         addTaskExternalLink={addTaskExternalLink}
         addSubtask={addSubtask}
         postPublications={postPublications}
+        setPostPublications={setPostPublications}
       />
       {mediaPreview && <MediaPreviewModal item={mediaPreview} close={() => setMediaPreview(null)} />}
     </main>
@@ -10233,6 +10235,7 @@ function EntityModal(props: {
   addTaskExternalLink: (taskId: string, url: string) => void;
   addSubtask: (task: Task, title?: string) => void;
   postPublications?: PostPublication[];
+  setPostPublications?: Dispatch<SetStateAction<PostPublication[]>>;
 }) {
   if (!props.modal) return null;
   const modal = props.modal;
@@ -10267,7 +10270,7 @@ function EntityModal(props: {
         {modal.kind === "publish" && (() => {
           const publishPost = props.posts.find((p) => p.id === modal.postId);
           if (!publishPost) return null;
-          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
+          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} postPublications={props.postPublications} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
         })()}
     </CenteredModal>
   );
@@ -12251,7 +12254,7 @@ function applyTimeToDateTimeLocal(currentValue: string, time: string) {
   return `${datePart}T${time}`;
 }
 
-function PostModalV2({ modal, setModal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, postPublications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function PostModalV2({ modal, setModal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, postPublications, setPostPublications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
   const initialIdea = editing?.ideaId ?? (modal?.kind === "post" ? modal.ideaId ?? "" : "");
   const ideaPrefill = ideas.find((idea) => idea.id === initialIdea);
@@ -12284,6 +12287,8 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
   const selectedTemplate = postTemplates.find((template) => template.id === selectedTemplateId);
   const defaultFormat = normalizePostFormatForChannel(selectedChannel, editing?.format ?? selectedTemplate?.format);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [cancelingPublicationId, setCancelingPublicationId] = useState("");
+  const [publicationCancelError, setPublicationCancelError] = useState("");
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
   const canReview = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
   const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão" && !asset.isCover).length;
@@ -12398,6 +12403,36 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
     close();
   }
 
+  async function cancelScheduledPublication(pub: PostPublication) {
+    if (!supabase) {
+      setPublicationCancelError("Supabase não configurado.");
+      return;
+    }
+    if (!window.confirm(`Cancelar o agendamento do ${pub.platform}?`)) return;
+    setPublicationCancelError("");
+    setCancelingPublicationId(pub.id);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Sessão expirada. Entre novamente.");
+      const response = await fetch("/api/post-publications/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ publicationId: pub.id })
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string; postStatus?: EditorialPost["status"] };
+      if (!response.ok) throw new Error(result.error ?? "Não foi possível cancelar o agendamento.");
+      setPostPublications?.((current) => current.map((item) => item.id === pub.id ? { ...item, status: "cancelled", error: undefined } : item));
+      if (editing && result.postStatus) {
+        setPosts((current) => current.map((post) => post.id === editing.id ? { ...post, status: result.postStatus! } : post));
+      }
+    } catch (error) {
+      setPublicationCancelError(error instanceof Error ? error.message : "Erro ao cancelar agendamento.");
+    } finally {
+      setCancelingPublicationId("");
+    }
+  }
+
   return (
     <div className={`grid gap-5 ${reviewOpen && editing ? "xl:grid-cols-[minmax(0,1fr)_420px]" : ""}`}>
       <div>
@@ -12489,7 +12524,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
             <button type="button" onClick={() => setProductionChecklist((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} title="Adicionar item" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Plus size={16} /></button>
           </section>
           {editing && (() => {
-            const pubs = (postPublications ?? []).filter((p) => p.postId === editing.id);
+            const pubs = (postPublications ?? []).filter((p) => p.postId === editing.id && p.status !== "cancelled");
             if (!pubs.length) return null;
             const platformLabel: Record<string, string> = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn" };
             const platformColor: Record<string, string> = { youtube: "bg-red-50 border-red-100 text-red-700", tiktok: "bg-slate-50 border-slate-200 text-slate-700", instagram: "bg-purple-50 border-purple-100 text-purple-700", facebook: "bg-blue-50 border-blue-100 text-blue-700", linkedin: "bg-sky-50 border-sky-100 text-sky-700" };
@@ -12499,13 +12534,11 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
               if (p.status === "scheduled") acc[p.platform] = (acc[p.platform] ?? 0) + 1;
               return acc;
             }, {} as Record<string, number>);
-            const fmtScheduled = (iso: string) => {
-              const d = new Date(iso);
-              return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) + " às " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-            };
+            const canCancelPublication = (status: PostPublication["status"]) => status === "scheduled" || status === "pending" || status === "processing";
             return (
               <div className="md:col-span-2 space-y-2">
                 <p className="text-xs font-black uppercase tracking-wide text-slate-400">Publicações</p>
+                {publicationCancelError && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700">{publicationCancelError}</p>}
                 {pubs.map((pub) => {
                   const isDuplicate = pub.status === "scheduled" && (scheduledByPlatform[pub.platform] ?? 0) > 1;
                   return (
@@ -12513,7 +12546,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                       <span className="font-black text-sm">{platformLabel[pub.platform] ?? pub.platform}</span>
                       <span className={`text-xs font-bold ${statusColor[pub.status] ?? "text-slate-500"}`}>{statusLabel[pub.status] ?? pub.status}</span>
                       {pub.status === "scheduled" && pub.scheduledAt && (
-                        <span className="text-xs font-bold opacity-70">📅 {fmtScheduled(pub.scheduledAt)}</span>
+                        <span className="text-xs font-bold opacity-70">📅 {formatSaoPauloSchedule(pub.scheduledAt)}</span>
                       )}
                       {pub.status === "published" && pub.publishedAt && (
                         <span className="text-xs font-bold opacity-60">{new Date(pub.publishedAt).toLocaleDateString("pt-BR")}</span>
@@ -12522,8 +12555,18 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                         <span className="text-xs font-bold text-rose-600 truncate max-w-[200px]" title={pub.error}>✗ {pub.error}</span>
                       )}
                       {isDuplicate && <span className="ml-auto text-xs font-black text-amber-700">⚠ duplicata</span>}
+                      {canCancelPublication(pub.status) && (
+                        <button
+                          type="button"
+                          disabled={cancelingPublicationId === pub.id}
+                          onClick={() => cancelScheduledPublication(pub)}
+                          className={`${isDuplicate ? "" : "ml-auto"} rounded-xl bg-white/80 px-2 py-1 text-xs font-black text-rose-700 transition hover:bg-rose-100 disabled:opacity-50`}
+                        >
+                          {cancelingPublicationId === pub.id ? "Cancelando..." : "Cancelar agendamento"}
+                        </button>
+                      )}
                       {pub.permalink && !isDuplicate && (
-                        <a href={pub.permalink} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-black underline-offset-2 hover:underline">
+                        <a href={pub.permalink} target="_blank" rel="noopener noreferrer" className={`${canCancelPublication(pub.status) ? "" : "ml-auto"} flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-black underline-offset-2 hover:underline`}>
                           Ver post ↗
                         </a>
                       )}
@@ -12891,15 +12934,39 @@ function effectiveInstagramFormat(format: string, kind: PublishAssetKind) {
   return format;
 }
 
+function instagramFormatUsesCaption(format: string) {
+  return format === "Feed" || format === "Reels";
+}
+
+function instagramFormatUsesCover(format: string) {
+  return format === "Reels";
+}
+
 function instagramFormatUnavailableReason(format: string, kind: PublishAssetKind) {
   if (format === "Reels" && kind === "image") return "Reels precisa de vídeo. Para imagem, use Feed ou Story.";
   return "";
 }
 
+const duplicateBlockingPublicationStatuses: PostPublication["status"][] = ["pending", "processing", "published", "scheduled"];
+
+function isDuplicateBlockingPublication(status: PostPublication["status"]) {
+  return duplicateBlockingPublicationStatuses.includes(status);
+}
+
+const publishPlatformLabels: Record<string, string> = {
+  youtube: "YouTube",
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  facebook: "Facebook",
+  linkedin: "LinkedIn",
+  outros: "Outros",
+};
+
 function PublishModal({
   post,
   postReviewAssets,
   channels,
+  postPublications,
   setPosts,
   addPostReviewAssets,
   close,
@@ -12907,6 +12974,7 @@ function PublishModal({
   post: EditorialPost;
   postReviewAssets: PostReviewAsset[];
   channels: Channel[];
+  postPublications?: PostPublication[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
   close: () => void;
@@ -12940,9 +13008,35 @@ function PublishModal({
   const [localThumbnailPreview, setLocalThumbnailPreview] = useState<string | null>(null);
   const [thumbDriveOpen, setThumbDriveOpen] = useState(false);
   const [thumbFullscreen, setThumbFullscreen] = useState(false);
-  const [confirmedDuplicate, setConfirmedDuplicate] = useState(false);
+  const [confirmedDuplicatePlatforms, setConfirmedDuplicatePlatforms] = useState<string[]>([]);
 
-  const alreadyPublished = Boolean(post.publishedVideoId) || post.status === "Publicado" || post.status === "Agendado";
+  const duplicatePlatforms = useMemo(() => {
+    const platforms = new Set<string>();
+    (postPublications ?? []).forEach((publication) => {
+      if (publication.postId !== post.id) return;
+      if (isDuplicateBlockingPublication(publication.status)) platforms.add(publication.platform);
+    });
+    if (post.publishedVideoId) platforms.add("youtube");
+    return platforms;
+  }, [post.id, post.publishedVideoId, postPublications]);
+
+  const blockedEnabledPlatforms = useMemo(() => {
+    const platforms = new Set<string>();
+    channelConfigs.forEach((config) => {
+      if (!config.enabled) return;
+      const platform = publishPlatformKey(channelById.get(config.channelId)?.name ?? "");
+      if (duplicatePlatforms.has(platform) && !confirmedDuplicatePlatforms.includes(platform)) {
+        platforms.add(platform);
+      }
+    });
+    return [...platforms];
+  }, [channelConfigs, channelById, duplicatePlatforms, confirmedDuplicatePlatforms]);
+
+  const hasBlockedDuplicatePlatform = blockedEnabledPlatforms.length > 0;
+
+  function confirmDuplicatePlatform(platform: string) {
+    setConfirmedDuplicatePlatforms((current) => current.includes(platform) ? current : [...current, platform]);
+  }
 
   const effectiveThumbnailUrl = coverAsset?.url ?? localThumbnailUrl ?? null;
 
@@ -12980,18 +13074,19 @@ function PublishModal({
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData?.session?.access_token;
     if (!token) return;
-    const scheduledAt = publishMode === "scheduled" ? `${scheduledDate}T${scheduledTime}:00` : null;
+    const scheduledAt = publishMode === "scheduled" ? buildSaoPauloDateTime(scheduledDate, scheduledTime) : null;
     setChannelConfigs((prev) => prev.map((c) => c.enabled ? { ...c, status: "publishing" } : c));
     await Promise.allSettled(
       channelConfigs.filter((c) => c.enabled).map(async (config) => {
         const ch = channelById.get(config.channelId);
         const platform = publishPlatformKey(ch?.name ?? "");
+        const allowDuplicateForPlatform = confirmedDuplicatePlatforms.includes(platform);
         if (platform === "youtube") {
           try {
             const res = await fetch("/api/google/youtube/publish", {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: effectiveThumbnailUrl, postId: post.id }),
+              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: effectiveThumbnailUrl, postId: post.id, allowDuplicate: allowDuplicateForPlatform }),
             });
             if (res.ok) {
               const { videoId, privacyStatus } = await res.json() as { videoId: string; privacyStatus?: string };
@@ -13011,6 +13106,9 @@ function PublishModal({
             updateConfig(config.channelId, { status: "error", errorMessage: formatError });
             return;
           }
+          const instagramEffectiveFormat = effectiveInstagramFormat(config.format, selectedAssetKind);
+          const instagramCaption = instagramFormatUsesCaption(instagramEffectiveFormat) ? config.description : "";
+          const instagramThumbnailUrl = instagramFormatUsesCover(instagramEffectiveFormat) ? effectiveThumbnailUrl : null;
           try {
             const res = await fetch("/api/meta/instagram/publish", {
               method: "POST",
@@ -13019,11 +13117,11 @@ function PublishModal({
                 postId: post.id,
                 assetUrl: selectedAsset.url,
                 title: config.title,
-                caption: config.description,
+                caption: instagramCaption,
                 format: config.format,
                 scheduledAt,
-                thumbnailUrl: effectiveThumbnailUrl,
-                allowDuplicate: confirmedDuplicate,
+                thumbnailUrl: instagramThumbnailUrl,
+                allowDuplicate: allowDuplicateForPlatform,
               }),
             });
             const data = await res.json().catch(() => ({})) as {
@@ -13062,6 +13160,7 @@ function PublishModal({
                 scheduledAt,
                 privacyLevel: config.privacyLevel ?? "PUBLIC_TO_EVERYONE",
                 postId: post.id,
+                allowDuplicate: allowDuplicateForPlatform,
               }),
             });
             if (res.ok) {
@@ -13086,16 +13185,26 @@ function PublishModal({
       <p className="text-sm font-bold text-slate-500">{post.title}</p>
 
       {/* Aviso de duplicação */}
-      {alreadyPublished && !confirmedDuplicate && (
+      {hasBlockedDuplicatePlatform && (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
           <p className="text-sm font-black text-amber-800">
-            ⚠️ Este post já foi {post.status === "Agendado" ? "agendado" : "publicado"}.
-            Publicar novamente irá criar uma cópia duplicada no canal.
+            Este post já tem publicação registrada em {blockedEnabledPlatforms.map((platform) => publishPlatformLabels[platform] ?? platform).join(", ")}.
           </p>
-          <button type="button" onClick={() => setConfirmedDuplicate(true)}
-            className="mt-2 rounded-2xl bg-amber-600 px-3 py-1.5 text-xs font-black text-white hover:bg-amber-700">
-            Entendo, publicar mesmo assim
-          </button>
+          <p className="mt-1 text-xs font-bold text-amber-700">
+            A trava agora é por canal: desative o canal ou confirme a republicação somente nele.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {blockedEnabledPlatforms.map((platform) => (
+              <button
+                key={platform}
+                type="button"
+                onClick={() => confirmDuplicatePlatform(platform)}
+                className="rounded-2xl bg-amber-600 px-3 py-1.5 text-xs font-black text-white hover:bg-amber-700"
+              >
+                Permitir em {publishPlatformLabels[platform] ?? platform}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -13172,6 +13281,8 @@ function PublishModal({
           const supported = platform === "youtube" || platform === "tiktok" || platform === "instagram";
           const instagramEffectiveFormat = isInstagram ? effectiveInstagramFormat(config.format, selectedAssetKind) : config.format;
           const instagramFormatError = isInstagram ? instagramFormatUnavailableReason(config.format, selectedAssetKind) : "";
+          const showInstagramCaption = isInstagram && instagramFormatUsesCaption(instagramEffectiveFormat);
+          const showInstagramCover = isInstagram && instagramFormatUsesCover(instagramEffectiveFormat);
           return (
             <div key={config.channelId} className={`rounded-3xl border p-4 ${config.status === "success" ? "border-emerald-200 bg-emerald-50" : config.status === "error" ? "border-rose-200 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -13207,7 +13318,7 @@ function PublishModal({
                 )}
                 {isInstagram && config.format === "Story" && (
                   <p className="mt-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                    Stories não exibem legenda como Feed/Reels; o texto precisa estar dentro da arte ou do vídeo. Use mídia vertical em 9:16.
+                    Stories não usam legenda pela API. O texto precisa estar dentro da imagem ou vídeo. Use mídia vertical em 9:16.
                   </p>
                 )}
                 {isInstagram && selectedAssetKind === "unknown" && (
@@ -13243,10 +13354,10 @@ function PublishModal({
                   <input value={config.title} onChange={(e) => updateConfig(config.channelId, { title: e.target.value })} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
                 </div>
               )}
-              {/* Thumbnail (YouTube) / Capa do vídeo (Instagram) */}
-              {(isYoutube || isInstagram) && (
+              {/* Thumbnail (YouTube) / Capa do Reels (Instagram) */}
+              {(isYoutube || showInstagramCover) && (
                 <div className="mb-3">
-                  <p className="mb-1 text-xs font-black text-slate-500">{isYoutube ? "Thumbnail" : "Capa do vídeo"}</p>
+                  <p className="mb-1 text-xs font-black text-slate-500">{isYoutube ? "Thumbnail" : "Capa do Reels"}</p>
                   {effectiveThumbnailPreview ? (
                     <div className="flex items-center gap-3 rounded-2xl bg-white p-3">
                       <button type="button" onClick={() => setThumbFullscreen(true)} className="shrink-0 cursor-zoom-in" title="Ver capa em tamanho grande">
@@ -13284,10 +13395,12 @@ function PublishModal({
                 </div>
               )}
               {/* Descrição / Legenda */}
-              <div>
-                <p className="mb-1 text-xs font-black text-slate-500">{isYoutube ? "Descrição" : "Legenda"}</p>
-                <textarea value={config.description} onChange={(e) => updateConfig(config.channelId, { description: e.target.value })} rows={4} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500" />
-              </div>
+              {(!isInstagram || showInstagramCaption) && (
+                <div>
+                  <p className="mb-1 text-xs font-black text-slate-500">{isYoutube ? "Descrição" : "Legenda"}</p>
+                  <textarea value={config.description} onChange={(e) => updateConfig(config.channelId, { description: e.target.value })} rows={4} lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="w-full resize-none rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                </div>
+              )}
               {config.status === "error" && config.errorMessage && (
                 <p className="mt-2 text-xs font-black text-rose-700">{config.errorMessage}</p>
               )}
@@ -13298,7 +13411,7 @@ function PublishModal({
 
       {/* Botão de ação */}
       {!isDone ? (
-        <button type="button" disabled={enabledCount === 0 || isPublishing || !selectedAsset || (alreadyPublished && !confirmedDuplicate)} onClick={handlePublish} className="w-full rounded-3xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">
+        <button type="button" disabled={enabledCount === 0 || isPublishing || !selectedAsset || hasBlockedDuplicatePlatform} onClick={handlePublish} className="w-full rounded-3xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">
           {isPublishing
             ? "Publicando…"
             : publishMode === "now"
