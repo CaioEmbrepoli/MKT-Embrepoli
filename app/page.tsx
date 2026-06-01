@@ -13241,14 +13241,6 @@ function PublishModal({
               <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
               <input type="time" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
             </div>
-            {channelConfigs.some((c) => {
-              const platform = publishPlatformKey(channelById.get(c.channelId)?.name ?? "");
-              return c.enabled && platform === "instagram" && c.format === "Story";
-            }) && (
-              <p className="mt-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
-                ⚠ Stories no Instagram não suportam agendamento nativo. Mude o formato para Feed ou Reels, ou publique imediatamente.
-              </p>
-            )}
           </>
         )}
       </section>
