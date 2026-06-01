@@ -12851,6 +12851,31 @@ function publishPlatformKey(name: string): string {
   return "outros";
 }
 
+type PublishAssetKind = "image" | "video" | "unknown";
+
+function inferPublishAssetKind(asset?: PostReviewAsset): PublishAssetKind {
+  if (!asset) return "unknown";
+  const mime = asset.mimeType?.toLowerCase() ?? "";
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (asset.type === "foto") return "image";
+  if (asset.type === "video") return "video";
+  const text = `${asset.name} ${asset.url} ${asset.previewUrl}`.toLowerCase();
+  if (/\.(png|jpe?g|webp|gif)(\?|#|$)/.test(text)) return "image";
+  if (/\.(mp4|mov|m4v|webm)(\?|#|$)/.test(text)) return "video";
+  return "unknown";
+}
+
+function effectiveInstagramFormat(format: string, kind: PublishAssetKind) {
+  if (format === "Feed" && kind === "video") return "Reels";
+  return format;
+}
+
+function instagramFormatUnavailableReason(format: string, kind: PublishAssetKind) {
+  if (format === "Reels" && kind === "image") return "Reels precisa de vídeo. Para imagem, use Feed ou Story.";
+  return "";
+}
+
 function PublishModal({
   post,
   postReviewAssets,
@@ -12889,6 +12914,7 @@ function PublishModal({
   const [selectedAssetId, setSelectedAssetId] = useState(approvedAssets[0]?.id ?? "");
 
   const selectedAsset = approvedAssets.find((a) => a.id === selectedAssetId) ?? approvedAssets[0];
+  const selectedAssetKind = inferPublishAssetKind(selectedAsset);
 
   const [localThumbnailUrl, setLocalThumbnailUrl] = useState<string | null>(null);
   const [localThumbnailPreview, setLocalThumbnailPreview] = useState<string | null>(null);
@@ -12914,6 +12940,16 @@ function PublishModal({
   function updateConfig(channelId: string, patch: Partial<ChannelPublishConfig>) {
     setChannelConfigs((prev) => prev.map((c) => c.channelId === channelId ? { ...c, ...patch } : c));
   }
+
+  useEffect(() => {
+    if (!selectedAsset) return;
+    setChannelConfigs((prev) => prev.map((config) => {
+      const platform = publishPlatformKey(channelById.get(config.channelId)?.name ?? "");
+      if (platform !== "instagram") return config;
+      if (!instagramFormatUnavailableReason(config.format, selectedAssetKind)) return config;
+      return { ...config, format: selectedAssetKind === "image" ? "Feed" : "Reels" };
+    }));
+  }, [selectedAsset?.id, selectedAssetKind, channelById]);
 
   const enabledCount = channelConfigs.filter((c) => c.enabled).length;
   const isPublishing  = channelConfigs.some((c) => c.status === "publishing");
@@ -12950,6 +12986,11 @@ function PublishModal({
             updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
           }
         } else if (platform === "instagram") {
+          const formatError = instagramFormatUnavailableReason(config.format, selectedAssetKind);
+          if (formatError) {
+            updateConfig(config.channelId, { status: "error", errorMessage: formatError });
+            return;
+          }
           try {
             const res = await fetch("/api/meta/instagram/publish", {
               method: "POST",
@@ -12972,6 +13013,7 @@ function PublishModal({
               permalink?: string;
               publishedAt?: string;
               scheduledAt?: string;
+              effectiveFormat?: string;
             };
             if (res.ok) {
               const newStatus = data.status === "scheduled" ? "Agendado" : "Publicado";
@@ -13098,6 +13140,8 @@ function PublishModal({
           const isYoutube = platform === "youtube";
           const isInstagram = platform === "instagram";
           const supported = platform === "youtube" || platform === "tiktok" || platform === "instagram";
+          const instagramEffectiveFormat = isInstagram ? effectiveInstagramFormat(config.format, selectedAssetKind) : config.format;
+          const instagramFormatError = isInstagram ? instagramFormatUnavailableReason(config.format, selectedAssetKind) : "";
           return (
             <div key={config.channelId} className={`rounded-3xl border p-4 ${config.status === "success" ? "border-emerald-200 bg-emerald-50" : config.status === "error" ? "border-rose-200 bg-rose-50" : "border-slate-100 bg-slate-50"}`}>
               <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -13116,13 +13160,37 @@ function PublishModal({
               <div className="mb-3">
                 <p className="mb-1 text-xs font-black text-slate-500">Formato</p>
                 <div className="flex flex-wrap gap-3">
-                  {formats.map((fmt) => (
-                    <label key={fmt} className="flex cursor-pointer items-center gap-1.5">
-                      <input type="radio" name={`format-${config.channelId}`} checked={config.format === fmt} onChange={() => updateConfig(config.channelId, { format: fmt })} className="accent-blue-700" />
+                  {formats.map((fmt) => {
+                    const disabled = isInstagram && Boolean(instagramFormatUnavailableReason(fmt, selectedAssetKind));
+                    return (
+                    <label key={fmt} className={`flex items-center gap-1.5 ${disabled ? "cursor-not-allowed text-slate-300" : "cursor-pointer"}`}>
+                      <input type="radio" name={`format-${config.channelId}`} checked={config.format === fmt} disabled={disabled} onChange={() => updateConfig(config.channelId, { format: fmt })} className="accent-blue-700 disabled:opacity-40" />
                       <span className="text-sm font-black">{fmt}</span>
                     </label>
-                  ))}
+                    );
+                  })}
                 </div>
+                {isInstagram && selectedAssetKind === "video" && config.format === "Feed" && (
+                  <p className="mt-2 rounded-2xl bg-pink-50 px-3 py-2 text-xs font-black text-pink-700">
+                    Vídeo selecionado como Feed será publicado como Reels automaticamente.
+                  </p>
+                )}
+                {isInstagram && config.format === "Story" && (
+                  <p className="mt-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                    Stories não exibem legenda como Feed/Reels; o texto precisa estar dentro da arte ou do vídeo. Use mídia vertical em 9:16.
+                  </p>
+                )}
+                {isInstagram && selectedAssetKind === "unknown" && (
+                  <p className="mt-2 rounded-2xl bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500">
+                    Não consegui identificar o tipo da arte no navegador; o servidor vai validar imagem/vídeo antes de publicar ou agendar.
+                  </p>
+                )}
+                {isInstagram && selectedAssetKind !== "unknown" && (
+                  <p className="mt-2 text-xs font-bold text-slate-400">
+                    Instagram vai publicar como {instagramEffectiveFormat}.
+                  </p>
+                )}
+                {instagramFormatError && <p className="mt-2 text-xs font-black text-rose-700">{instagramFormatError}</p>}
               </div>
               {/* Privacidade (TikTok only) */}
               {platform === "tiktok" && (
@@ -13248,10 +13316,14 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
   const draftIdeaId = useRef(editing?.id ?? crypto.randomUUID());
   const [selectedTemplateId, setSelectedTemplateId] = useState(editing?.templateId ?? "");
   const [creationMode, setCreationMode] = useState<"zero" | "template">("zero");
-  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId ?? channels[0]?.id ?? "");
+  const [selectedChannelId, setSelectedChannelId] = useState(editing?.channelId && channels.some((channel) => channel.id === editing.channelId) ? editing.channelId : channels[0]?.id ?? "");
   const [attachments, setAttachments] = useState<TaskAttachment[]>(editing?.attachments ?? []);
   const selectedChannel = channels.find((channel) => channel.id === selectedChannelId);
   const formatOptions = postFormatOptionsForChannel(selectedChannel);
+  const validFormId = (value: FormDataEntryValue | null, ids: string[]) => {
+    const text = String(value ?? "").trim();
+    return text && ids.includes(text) ? text : "";
+  };
 
   function applyTemplate(templateId: string) {
     setSelectedTemplateId(templateId);
@@ -13259,9 +13331,10 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
     if (!template || !formRef.current) return;
     const form = formRef.current;
     setFormValue(form, "description", templateDescription(template));
-    if (template.channelId && !editing) setSelectedChannelId(template.channelId);
+    const templateChannelId = channels.some((channel) => channel.id === template.channelId) ? template.channelId : "";
+    if (templateChannelId && !editing) setSelectedChannelId(templateChannelId);
     const templateChannel = channels.find((channel) => channel.id === template.channelId) ?? selectedChannel;
-    for (const [name, value] of Object.entries({ contentTypeId: template.contentTypeId, channelId: template.channelId, funnelStageId: template.funnelStageId, format: normalizePostFormatForChannel(templateChannel, template.format) })) {
+    for (const [name, value] of Object.entries({ contentTypeId: template.contentTypeId, channelId: templateChannelId, funnelStageId: template.funnelStageId, format: normalizePostFormatForChannel(templateChannel, template.format) })) {
       setFormValue(form, name, value);
     }
   }
@@ -13306,8 +13379,26 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const creating = !editing;
-    const submitChannel = channels.find((channel) => channel.id === String(form.get("channelId"))) ?? selectedChannel;
-    const value: Idea = { id: draftIdeaId.current, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), description: String(form.get("description")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), type: String(form.get("type")) as Idea["type"], channelId: String(form.get("channelId")), format: normalizePostFormatForChannel(submitChannel, String(form.get("format"))), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, priority: String(form.get("priority")) as Idea["priority"], order: editing?.order ?? ideas.length + 1, attachments };
+    const channelId = validFormId(form.get("channelId"), channels.map((item) => item.id));
+    const submitChannel = channels.find((channel) => channel.id === channelId) ?? selectedChannel;
+    const templateId = validFormId(form.get("templateId"), postTemplates.map((item) => item.id));
+    const value: Idea = {
+      id: draftIdeaId.current,
+      templateId: templateId || undefined,
+      title: String(form.get("title")),
+      description: String(form.get("description")),
+      productLineId: validFormId(form.get("productLineId"), productLines.map((item) => item.id)),
+      vehicleTypeId: validFormId(form.get("vehicleTypeId"), vehicleTypes.map((item) => item.id)),
+      contentTypeId: validFormId(form.get("contentTypeId"), contentTypes.map((item) => item.id)),
+      type: String(form.get("type")) as Idea["type"],
+      channelId,
+      format: normalizePostFormatForChannel(submitChannel, String(form.get("format"))),
+      funnelStageId: validFormId(form.get("funnelStageId"), funnelStages.map((item) => item.id)),
+      createdBy: editing?.createdBy ?? currentUser.id,
+      priority: String(form.get("priority")) as Idea["priority"],
+      order: editing?.order ?? ideas.length + 1,
+      attachments
+    };
     setIdeas((current) => editing ? current.map((idea) => idea.id === value.id ? value : idea) : [value, ...current]);
     if (creating) {
       createNotifications(profiles.filter((profile) => profile.id !== currentUser.id && profile.active).map((profile) => profile.id), "Nova ideia cadastrada", value.title, "idea", value.id);

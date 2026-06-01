@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
-import { publishInstagramMedia } from "@/lib/instagram-publish-server";
+import { publishInstagramMedia, validateInstagramMediaForPublish } from "@/lib/instagram-publish-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -61,6 +61,14 @@ export async function POST(request: Request) {
         }
       }
 
+      const validation = await validateInstagramMediaForPublish(context, connection, {
+        assetUrl: body.assetUrl,
+        title: body.title,
+        caption: body.caption,
+        format: body.format ?? "Feed",
+        thumbnailUrl: body.thumbnailUrl ?? null
+      });
+
       const publication = {
         id: randomUUID(),
         organization_id: context.organizationId,
@@ -90,7 +98,9 @@ export async function POST(request: Request) {
       return NextResponse.json({
         status: "scheduled",
         publicationId: publication.id,
-        scheduledAt: publication.scheduled_at
+        scheduledAt: publication.scheduled_at,
+        effectiveFormat: validation.effectiveFormat,
+        contentType: validation.contentType
       });
     }
 
@@ -129,7 +139,7 @@ export async function POST(request: Request) {
         status: "published",
         title: body.title ?? "",
         caption: body.caption ?? "",
-        format: body.format ?? "Feed",
+        format: result.effectiveFormat,
         asset_url: body.assetUrl,
         thumbnail_url: body.thumbnailUrl ?? null,
         external_id: result.instagramMediaId,

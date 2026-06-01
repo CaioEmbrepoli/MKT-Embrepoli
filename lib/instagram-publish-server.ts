@@ -29,11 +29,22 @@ export type InstagramPublishResult = {
   permalink: string;
   status: "published";
   publishedAt: string;
+  effectiveFormat: InstagramPublishFormat;
+  contentType: string;
 };
 
 type PreparedAsset = {
   publicUrl: string;
   contentType: string;
+  buffer?: Buffer;
+};
+
+type MediaKind = "image" | "video";
+
+type InstagramPublishPlan = {
+  effectiveFormat: InstagramPublishFormat;
+  kind: MediaKind;
+  params: Record<string, string>;
 };
 
 function graphBase(accessToken: string) {
@@ -48,6 +59,12 @@ function normalizeFormat(format: string): InstagramPublishFormat {
   if (raw.includes("reel")) return "Reels";
   if (raw.includes("story") || raw.includes("stories")) return "Story";
   return "Feed";
+}
+
+function mediaKindLabel(contentType: string) {
+  if (contentType.startsWith("image/")) return "imagem";
+  if (contentType.startsWith("video/")) return "vídeo";
+  return "arquivo";
 }
 
 function extensionForContentType(contentType: string) {
@@ -123,7 +140,7 @@ async function preparePublicAsset(context: MetaRequestContext, payload: Instagra
   const contentType = file.contentType.split(";")[0] || "application/octet-stream";
 
   if (!contentType.startsWith("image/") && !contentType.startsWith("video/")) {
-    throw new Error("O Instagram aceita apenas imagem ou video neste fluxo.");
+    throw new Error("O Instagram aceita apenas imagem ou vídeo neste fluxo.");
   }
 
   await ensurePublicBucket(context.service);
@@ -135,8 +152,153 @@ async function preparePublicAsset(context: MetaRequestContext, payload: Instagra
   if (error) throw new Error(`Erro ao preparar arquivo publico: ${error.message}`);
 
   const publicUrl = context.service.storage.from(PUBLICATION_BUCKET).getPublicUrl(path).data.publicUrl;
-  if (!publicUrl) throw new Error("Nao foi possivel gerar URL publica para a Meta.");
-  return { publicUrl, contentType };
+  if (!publicUrl) throw new Error("Não foi possível gerar URL pública para a Meta.");
+  return { publicUrl, contentType, buffer: file.buffer };
+}
+
+async function assertMetaCanReadUrl(publicUrl: string) {
+  try {
+    const response = await fetch(publicUrl, { method: "HEAD" });
+    if (response.ok) return;
+  } catch {
+    // Alguns storages/CDNs não respondem HEAD corretamente. Testa com GET abaixo.
+  }
+
+  const response = await fetch(publicUrl, { headers: { Range: "bytes=0-0" } });
+  if (!response.ok && response.status !== 206) {
+    throw new Error("A Meta precisa acessar uma URL pública da mídia. O arquivo preparado não ficou acessível.");
+  }
+}
+
+function readUInt24LE(buffer: Buffer, offset: number) {
+  return buffer[offset] + (buffer[offset + 1] << 8) + (buffer[offset + 2] << 16);
+}
+
+function readImageDimensions(buffer?: Buffer): { width: number; height: number } | null {
+  if (!buffer || buffer.length < 24) return null;
+
+  const isPng = buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47;
+  if (isPng && buffer.length >= 24) {
+    return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
+  }
+
+  const isGif = buffer.toString("ascii", 0, 3) === "GIF";
+  if (isGif && buffer.length >= 10) {
+    return { width: buffer.readUInt16LE(6), height: buffer.readUInt16LE(8) };
+  }
+
+  const isWebp = buffer.toString("ascii", 0, 4) === "RIFF" && buffer.toString("ascii", 8, 12) === "WEBP";
+  if (isWebp) {
+    const chunk = buffer.toString("ascii", 12, 16);
+    if (chunk === "VP8X" && buffer.length >= 30) {
+      return { width: readUInt24LE(buffer, 24) + 1, height: readUInt24LE(buffer, 27) + 1 };
+    }
+    if (chunk === "VP8 " && buffer.length >= 30) {
+      return { width: buffer.readUInt16LE(26) & 0x3fff, height: buffer.readUInt16LE(28) & 0x3fff };
+    }
+    if (chunk === "VP8L" && buffer.length >= 25) {
+      const b0 = buffer[21];
+      const b1 = buffer[22];
+      const b2 = buffer[23];
+      const b3 = buffer[24];
+      return {
+        width: 1 + (((b1 & 0x3f) << 8) | b0),
+        height: 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6))
+      };
+    }
+  }
+
+  if (buffer[0] === 0xff && buffer[1] === 0xd8) {
+    let offset = 2;
+    while (offset + 9 < buffer.length) {
+      if (buffer[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      const marker = buffer[offset + 1];
+      const length = buffer.readUInt16BE(offset + 2);
+      if (
+        marker === 0xc0 || marker === 0xc1 || marker === 0xc2 || marker === 0xc3 ||
+        marker === 0xc5 || marker === 0xc6 || marker === 0xc7 || marker === 0xc9 ||
+        marker === 0xca || marker === 0xcb || marker === 0xcd || marker === 0xce || marker === 0xcf
+      ) {
+        return { height: buffer.readUInt16BE(offset + 5), width: buffer.readUInt16BE(offset + 7) };
+      }
+      offset += 2 + length;
+    }
+  }
+
+  return null;
+}
+
+function validateStoryImage(asset: PreparedAsset) {
+  const dimensions = readImageDimensions(asset.buffer);
+  if (!dimensions) {
+    throw new Error("Não foi possível validar as dimensões da imagem para Story. Envie uma imagem JPG, PNG ou WebP em formato vertical.");
+  }
+
+  if (dimensions.height <= dimensions.width) {
+    throw new Error("Story precisa de mídia vertical. Use uma arte em 9:16, como 1080x1920.");
+  }
+
+  const ratio = dimensions.width / dimensions.height;
+  if (ratio < 0.45 || ratio > 0.8) {
+    throw new Error(`Story precisa estar próximo do formato vertical 9:16. A mídia atual é ${dimensions.width}x${dimensions.height}.`);
+  }
+}
+
+function validateStoryVideo(asset: PreparedAsset) {
+  const allowed = ["video/mp4", "video/quicktime", "video/mov", "video/webm", "video/x-m4v"];
+  if (!allowed.includes(asset.contentType.toLowerCase())) {
+    throw new Error("Story em vídeo precisa estar em MP4, MOV ou WebM.");
+  }
+}
+
+function buildInstagramPublishPlan(payload: InstagramPublishPayload, asset: PreparedAsset): InstagramPublishPlan {
+  const requestedFormat = normalizeFormat(payload.format);
+  let effectiveFormat = requestedFormat;
+  const isVideo = asset.contentType.startsWith("video/");
+  const isImage = asset.contentType.startsWith("image/");
+
+  if (!isVideo && !isImage) {
+    throw new Error("O Instagram aceita apenas imagem ou vídeo neste fluxo.");
+  }
+
+  if (requestedFormat === "Feed" && isVideo) {
+    effectiveFormat = "Reels";
+  }
+
+  const kind: MediaKind = isVideo ? "video" : "image";
+  const params: Record<string, string> = {};
+
+  if (effectiveFormat === "Reels") {
+    if (!isVideo) {
+      throw new Error(`Reels precisa de um vídeo. O arquivo selecionado é ${mediaKindLabel(asset.contentType)}.`);
+    }
+    params.media_type = "REELS";
+    params.video_url = asset.publicUrl;
+    if (payload.caption) params.caption = payload.caption;
+    return { effectiveFormat, kind, params };
+  }
+
+  if (effectiveFormat === "Story") {
+    params.media_type = "STORIES";
+    if (isImage) {
+      validateStoryImage(asset);
+      params.image_url = asset.publicUrl;
+    } else {
+      validateStoryVideo(asset);
+      params.video_url = asset.publicUrl;
+    }
+    return { effectiveFormat, kind, params };
+  }
+
+  if (!isImage) {
+    throw new Error("Feed do Instagram precisa de imagem. Vídeos são publicados automaticamente como Reels.");
+  }
+  params.image_url = asset.publicUrl;
+  if (payload.caption) params.caption = payload.caption;
+  return { effectiveFormat, kind, params };
 }
 
 async function graphPost<T>(connection: InstagramPublishConnection, path: string, params: Record<string, string>) {
@@ -213,6 +375,23 @@ async function prepareCoverUrl(context: MetaRequestContext, coverUrl: string): P
   return context.service.storage.from(PUBLICATION_BUCKET).getPublicUrl(path).data.publicUrl;
 }
 
+export async function validateInstagramMediaForPublish(
+  context: MetaRequestContext,
+  connection: InstagramPublishConnection,
+  payload: InstagramPublishPayload
+) {
+  assertInstagramPublishPermission(connection);
+  const asset = await preparePublicAsset(context, payload);
+  await assertMetaCanReadUrl(asset.publicUrl);
+  const plan = buildInstagramPublishPlan(payload, asset);
+  return {
+    effectiveFormat: plan.effectiveFormat,
+    contentType: asset.contentType,
+    publicUrl: asset.publicUrl,
+    kind: plan.kind
+  };
+}
+
 export async function publishInstagramMedia(
   context: MetaRequestContext,
   connection: InstagramPublishConnection,
@@ -220,60 +399,42 @@ export async function publishInstagramMedia(
 ): Promise<InstagramPublishResult> {
   assertInstagramPublishPermission(connection);
 
-  let format = normalizeFormat(payload.format);
-  const asset = await preparePublicAsset(context, payload);
-  const isVideo = asset.contentType.startsWith("video/");
-  const isImage = asset.contentType.startsWith("image/");
+  const validatedAsset = await preparePublicAsset(context, payload);
+  await assertMetaCanReadUrl(validatedAsset.publicUrl);
+  const plan = buildInstagramPublishPlan(payload, validatedAsset);
 
-  // Auto-converte: vídeo selecionado como Feed vira Reels automaticamente
-  if (format === "Feed" && isVideo) {
-    format = "Reels";
-  }
-
-  const params: Record<string, string> = {};
-  if (format === "Reels") {
-    if (!isVideo) throw new Error("Reels precisa de um arquivo de video.");
-    params.media_type = "REELS";
-    params.video_url = asset.publicUrl;
-    if (payload.caption) params.caption = payload.caption;
-    if (payload.thumbnailUrl) {
-      try {
-        params.cover_url = await prepareCoverUrl(context, payload.thumbnailUrl);
-      } catch {
-        // capa é opcional — falha silenciosa, continua sem cover_url
-      }
+  if (plan.effectiveFormat === "Reels" && payload.thumbnailUrl) {
+    try {
+      plan.params.cover_url = await prepareCoverUrl(context, payload.thumbnailUrl);
+    } catch {
+      // A capa e opcional; se falhar, continua sem cover_url.
     }
-  } else if (format === "Story") {
-    params.media_type = "STORIES";
-    if (isVideo) params.video_url = asset.publicUrl;
-    if (isImage) params.image_url = asset.publicUrl;
-  } else {
-    params.image_url = asset.publicUrl;
-    if (payload.caption) params.caption = payload.caption;
   }
 
-  const creation = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, params);
+  const creation = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, plan.params);
   if (!creation.id) throw new Error("A Meta nao retornou o container de publicacao.");
-  if (isVideo) await waitForContainer(connection, creation.id);
+  if (plan.kind === "video") await waitForContainer(connection, creation.id);
 
   const published = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media_publish`, {
     creation_id: creation.id
   });
   if (!published.id) throw new Error("A Meta nao retornou o ID da publicacao.");
 
-  let permalink = "";
+  let validatedPermalink = "";
   try {
     const media = await graphGet<{ permalink?: string }>(connection, `/${published.id}`, { fields: "permalink" });
-    permalink = media.permalink || "";
+    validatedPermalink = media.permalink || "";
   } catch {
-    permalink = "";
+    validatedPermalink = "";
   }
 
   return {
     instagramMediaId: published.id,
-    permalink,
+    permalink: validatedPermalink,
     status: "published",
-    publishedAt: new Date().toISOString()
+    publishedAt: new Date().toISOString(),
+    effectiveFormat: plan.effectiveFormat,
+    contentType: validatedAsset.contentType
   };
-}
 
+}

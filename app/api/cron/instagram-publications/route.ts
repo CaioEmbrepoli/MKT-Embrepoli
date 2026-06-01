@@ -82,6 +82,7 @@ export async function GET(request: Request) {
         .from("post_publications")
         .update({
           status: "published",
+          format: published.effectiveFormat,
           external_id: published.instagramMediaId,
           permalink: published.permalink,
           published_at: published.publishedAt,
