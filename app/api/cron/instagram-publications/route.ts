@@ -1,13 +1,134 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+import { Receiver } from "@upstash/qstash";
+import { getMetaConnection, type MetaRequestContext } from "@/lib/meta-server";
+import { publishInstagramMedia } from "@/lib/instagram-publish-server";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
-/**
- * O agendamento de publicações do Instagram agora é feito nativamente pela Meta API
- * (published=false + scheduled_publish_time). Este cron não é mais necessário para publicar.
- */
-export async function GET() {
-  return NextResponse.json({ ok: true, processed: 0, message: "Agendamento nativo Meta ativo. Cron nao utilizado." });
+type QStashBody = {
+  publicationId: string;
+};
+
+export async function POST(request: Request) {
+  // Verificar assinatura do QStash
+  const signingKey = process.env.QSTASH_CURRENT_SIGNING_KEY;
+  const nextSigningKey = process.env.QSTASH_NEXT_SIGNING_KEY;
+
+  if (signingKey && nextSigningKey) {
+    const receiver = new Receiver({ currentSigningKey: signingKey, nextSigningKey });
+    const rawBody = await request.text();
+    try {
+      await receiver.verify({ signature: request.headers.get("upstash-signature") ?? "", body: rawBody });
+    } catch {
+      return NextResponse.json({ error: "Assinatura QStash invalida." }, { status: 401 });
+    }
+    try {
+      const body = JSON.parse(rawBody) as QStashBody;
+      return await processPublication(body.publicationId);
+    } catch {
+      return NextResponse.json({ error: "Body invalido." }, { status: 400 });
+    }
+  }
+
+  // Fallback: chamada direta sem QStash (para testes locais)
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && request.headers.get("authorization") !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: "Nao autorizado." }, { status: 401 });
+  }
+  const body = await request.json().catch(() => ({})) as Partial<QStashBody>;
+  if (!body.publicationId) return NextResponse.json({ error: "publicationId obrigatorio." }, { status: 400 });
+  return await processPublication(body.publicationId);
 }
 
-export const POST = GET;
+export async function GET() {
+  return NextResponse.json({ ok: true, message: "Agendamento de Stories via QStash ativo." });
+}
+
+async function processPublication(publicationId: string) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceRoleKey) {
+    return NextResponse.json({ error: "Supabase nao configurado." }, { status: 500 });
+  }
+
+  const service = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+
+  const { data: publication, error: fetchError } = await service
+    .from("post_publications")
+    .select("*")
+    .eq("id", publicationId)
+    .eq("platform", "instagram")
+    .maybeSingle();
+
+  if (fetchError || !publication) {
+    return NextResponse.json({ error: "Publicacao nao encontrada." }, { status: 404 });
+  }
+
+  if (publication.status === "published") {
+    return NextResponse.json({ ok: true, message: "Ja publicado." });
+  }
+
+  const attempts = (publication.attempts ?? 0) + 1;
+
+  try {
+    await service
+      .from("post_publications")
+      .update({ status: "processing", attempts, last_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", publicationId);
+
+    const connection = await getMetaConnection(service, publication.organization_id, "instagram");
+    if (!connection?.access_token || !connection.instagram_account_id) {
+      throw new Error("Instagram/Meta nao conectado para esta organizacao.");
+    }
+
+    const context: MetaRequestContext = {
+      service,
+      userId: publication.created_by ?? "qstash",
+      organizationId: publication.organization_id,
+      role: "admin",
+      active: true
+    };
+
+    const published = await publishInstagramMedia(context, connection, {
+      assetUrl: publication.asset_url,
+      title: publication.title ?? "",
+      caption: publication.caption ?? "",
+      format: publication.format ?? "Story",
+      thumbnailUrl: publication.thumbnail_url
+    });
+
+    await service
+      .from("post_publications")
+      .update({
+        status: "published",
+        format: published.effectiveFormat,
+        external_id: published.instagramMediaId,
+        permalink: published.permalink,
+        published_at: published.publishedAt,
+        error: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", publicationId);
+
+    if (publication.post_id) {
+      await service
+        .from("posts")
+        .update({ status: "Publicado", published_at: published.publishedAt })
+        .eq("organization_id", publication.organization_id)
+        .eq("id", publication.post_id);
+    }
+
+    return NextResponse.json({ ok: true, status: "published", permalink: published.permalink });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Erro ao publicar Story no Instagram.";
+    await service
+      .from("post_publications")
+      .update({ status: "error", error: message, attempts, last_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", publicationId);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

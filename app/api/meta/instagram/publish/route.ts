@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
+import { Client as QStashClient } from "@upstash/qstash";
 import { getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
 import { publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
 
@@ -62,7 +63,62 @@ export async function POST(request: Request) {
         }
       }
 
-      // Agendamento nativo Meta: cria container com published=false + scheduled_publish_time
+      const isStory = (body.format ?? "").toLowerCase().includes("story");
+
+      let effectiveFormat: string = body.format ?? "Feed";
+      let externalId: string | null = null;
+
+      if (isStory) {
+        // Stories não suportam agendamento nativo da Meta → usa QStash para disparar no horário certo
+        const qstashToken = process.env.QSTASH_TOKEN;
+        if (!qstashToken) throw new Error("QSTASH_TOKEN nao configurado. Adicione nas env vars da Vercel.");
+
+        const publicationId = randomUUID();
+        const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
+        const callbackUrl = `${siteUrl}/api/cron/instagram-publications`;
+
+        // Salva no banco antes de agendar no QStash
+        const { error: insertError } = await context.service.from("post_publications").insert({
+          id: publicationId,
+          organization_id: context.organizationId,
+          post_id: body.postId,
+          platform: "instagram",
+          status: "scheduled",
+          title: body.title ?? "",
+          caption: body.caption ?? "",
+          format: "Story",
+          asset_url: body.assetUrl,
+          thumbnail_url: body.thumbnailUrl ?? null,
+          scheduled_at: scheduledAt.toISOString(),
+          attempts: 0,
+          created_by: context.userId,
+          updated_at: new Date().toISOString()
+        });
+        if (insertError) throw new Error(insertError.message);
+
+        const qstash = new QStashClient({ token: qstashToken });
+        await qstash.publishJSON({
+          url: callbackUrl,
+          body: { publicationId },
+          notBefore: Math.floor(scheduledAt.getTime() / 1000)
+        });
+
+        await context.service
+          .from("posts")
+          .update({ status: "Agendado" })
+          .eq("organization_id", context.organizationId)
+          .eq("id", body.postId);
+
+        return NextResponse.json({
+          status: "scheduled",
+          publicationId,
+          scheduledAt: scheduledAt.toISOString(),
+          effectiveFormat: "Story",
+          contentType: "video/mp4"
+        });
+      }
+
+      // Feed e Reels: agendamento nativo Meta
       const scheduled = await scheduleInstagramMedia(context, connection, {
         assetUrl: body.assetUrl,
         title: body.title,
@@ -70,6 +126,9 @@ export async function POST(request: Request) {
         format: body.format ?? "Feed",
         thumbnailUrl: body.thumbnailUrl ?? null
       }, scheduledAt);
+
+      effectiveFormat = scheduled.effectiveFormat;
+      externalId = scheduled.containerId;
 
       const publication = {
         id: randomUUID(),
@@ -79,10 +138,10 @@ export async function POST(request: Request) {
         status: "scheduled",
         title: body.title ?? "",
         caption: body.caption ?? "",
-        format: scheduled.effectiveFormat,
+        format: effectiveFormat,
         asset_url: body.assetUrl,
         thumbnail_url: body.thumbnailUrl ?? null,
-        external_id: scheduled.containerId,
+        external_id: externalId,
         scheduled_at: scheduledAt.toISOString(),
         attempts: 0,
         created_by: context.userId,

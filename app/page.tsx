@@ -12489,27 +12489,47 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
             <button type="button" onClick={() => setProductionChecklist((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} title="Adicionar item" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Plus size={16} /></button>
           </section>
           {editing && (() => {
-            const pubs = (postPublications ?? []).filter((p) => p.postId === editing.id && p.externalId);
+            const pubs = (postPublications ?? []).filter((p) => p.postId === editing.id);
             if (!pubs.length) return null;
             const platformLabel: Record<string, string> = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn" };
             const platformColor: Record<string, string> = { youtube: "bg-red-50 border-red-100 text-red-700", tiktok: "bg-slate-50 border-slate-200 text-slate-700", instagram: "bg-purple-50 border-purple-100 text-purple-700", facebook: "bg-blue-50 border-blue-100 text-blue-700", linkedin: "bg-sky-50 border-sky-100 text-sky-700" };
             const statusLabel: Record<string, string> = { published: "Publicado", scheduled: "Agendado", processing: "Processando", pending: "Pendente", error: "Erro", cancelled: "Cancelado" };
             const statusColor: Record<string, string> = { published: "text-emerald-700", scheduled: "text-blue-600", processing: "text-amber-600", pending: "text-amber-600", error: "text-rose-600", cancelled: "text-slate-500" };
+            const scheduledByPlatform = pubs.reduce((acc, p) => {
+              if (p.status === "scheduled") acc[p.platform] = (acc[p.platform] ?? 0) + 1;
+              return acc;
+            }, {} as Record<string, number>);
+            const fmtScheduled = (iso: string) => {
+              const d = new Date(iso);
+              return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) + " às " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+            };
             return (
               <div className="md:col-span-2 space-y-2">
                 <p className="text-xs font-black uppercase tracking-wide text-slate-400">Publicações</p>
-                {pubs.map((pub) => (
-                  <div key={pub.id} className={`flex items-center gap-3 rounded-2xl border px-3 py-2.5 ${platformColor[pub.platform] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}>
-                    <span className="font-black text-sm">{platformLabel[pub.platform] ?? pub.platform}</span>
-                    <span className={`text-xs font-bold ${statusColor[pub.status] ?? "text-slate-500"}`}>{statusLabel[pub.status] ?? pub.status}</span>
-                    {pub.publishedAt && <span className="text-xs font-bold opacity-60">{new Date(pub.publishedAt).toLocaleDateString("pt-BR")}</span>}
-                    {pub.permalink && (
-                      <a href={pub.permalink} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-black underline-offset-2 hover:underline">
-                        Ver post ↗
-                      </a>
-                    )}
-                  </div>
-                ))}
+                {pubs.map((pub) => {
+                  const isDuplicate = pub.status === "scheduled" && (scheduledByPlatform[pub.platform] ?? 0) > 1;
+                  return (
+                    <div key={pub.id} className={`flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2.5 ${isDuplicate ? "border-amber-300 bg-amber-50" : platformColor[pub.platform] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}>
+                      <span className="font-black text-sm">{platformLabel[pub.platform] ?? pub.platform}</span>
+                      <span className={`text-xs font-bold ${statusColor[pub.status] ?? "text-slate-500"}`}>{statusLabel[pub.status] ?? pub.status}</span>
+                      {pub.status === "scheduled" && pub.scheduledAt && (
+                        <span className="text-xs font-bold opacity-70">📅 {fmtScheduled(pub.scheduledAt)}</span>
+                      )}
+                      {pub.status === "published" && pub.publishedAt && (
+                        <span className="text-xs font-bold opacity-60">{new Date(pub.publishedAt).toLocaleDateString("pt-BR")}</span>
+                      )}
+                      {pub.status === "error" && pub.error && (
+                        <span className="text-xs font-bold text-rose-600 truncate max-w-[200px]" title={pub.error}>✗ {pub.error}</span>
+                      )}
+                      {isDuplicate && <span className="ml-auto text-xs font-black text-amber-700">⚠ duplicata</span>}
+                      {pub.permalink && !isDuplicate && (
+                        <a href={pub.permalink} target="_blank" rel="noopener noreferrer" className="ml-auto flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-black underline-offset-2 hover:underline">
+                          Ver post ↗
+                        </a>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             );
           })()}
