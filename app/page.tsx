@@ -12289,6 +12289,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
   const [reviewOpen, setReviewOpen] = useState(false);
   const [cancelingPublicationId, setCancelingPublicationId] = useState("");
   const [publicationCancelError, setPublicationCancelError] = useState("");
+  const [publicationDetailModal, setPublicationDetailModal] = useState<PostPublication | null>(null);
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
   const canReview = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
   const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão" && !asset.isCover).length;
@@ -12542,7 +12543,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                 {pubs.map((pub) => {
                   const isDuplicate = pub.status === "scheduled" && (scheduledByPlatform[pub.platform] ?? 0) > 1;
                   return (
-                    <div key={pub.id} className={`flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2.5 ${isDuplicate ? "border-amber-300 bg-amber-50" : platformColor[pub.platform] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}>
+                    <div key={pub.id} onClick={() => setPublicationDetailModal(pub)} className={`cursor-pointer flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2.5 transition hover:opacity-75 ${isDuplicate ? "border-amber-300 bg-amber-50" : platformColor[pub.platform] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}>
                       <span className="font-black text-sm">{platformLabel[pub.platform] ?? pub.platform}</span>
                       <span className={`text-xs font-bold ${statusColor[pub.status] ?? "text-slate-500"}`}>{statusLabel[pub.status] ?? pub.status}</span>
                       {pub.status === "scheduled" && pub.scheduledAt && (
@@ -12559,14 +12560,14 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                         <button
                           type="button"
                           disabled={cancelingPublicationId === pub.id}
-                          onClick={() => cancelScheduledPublication(pub)}
+                          onClick={(e) => { e.stopPropagation(); cancelScheduledPublication(pub); }}
                           className={`${isDuplicate ? "" : "ml-auto"} rounded-xl bg-white/80 px-2 py-1 text-xs font-black text-rose-700 transition hover:bg-rose-100 disabled:opacity-50`}
                         >
                           {cancelingPublicationId === pub.id ? "Cancelando..." : "Cancelar agendamento"}
                         </button>
                       )}
                       {pub.permalink && !isDuplicate && (
-                        <a href={pub.permalink} target="_blank" rel="noopener noreferrer" className={`${canCancelPublication(pub.status) ? "" : "ml-auto"} flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-black underline-offset-2 hover:underline`}>
+                        <a href={pub.permalink} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className={`${canCancelPublication(pub.status) ? "" : "ml-auto"} flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-black underline-offset-2 hover:underline`}>
                           Ver post ↗
                         </a>
                       )}
@@ -12616,6 +12617,89 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
           close={() => setReviewOpen(false)}
         />
       )}
+
+      {publicationDetailModal && (() => {
+        const pub = publicationDetailModal;
+        const closeDetail = () => setPublicationDetailModal(null);
+        const platLabel: Record<string, string> = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn" };
+        const platColor: Record<string, string> = { youtube: "bg-red-50 border-red-200", tiktok: "bg-slate-50 border-slate-200", instagram: "bg-purple-50 border-purple-200", facebook: "bg-blue-50 border-blue-200", linkedin: "bg-sky-50 border-sky-200" };
+        const platText: Record<string, string> = { youtube: "text-red-700", tiktok: "text-slate-700", instagram: "text-purple-700", facebook: "text-blue-700", linkedin: "text-sky-700" };
+        const statLabel: Record<string, string> = { published: "Publicado", scheduled: "Agendado", processing: "Processando", pending: "Pendente", error: "Erro", cancelled: "Cancelado" };
+        const statColor: Record<string, string> = { published: "text-emerald-700", scheduled: "text-blue-600", processing: "text-amber-600", pending: "text-amber-600", error: "text-rose-600", cancelled: "text-slate-500" };
+        const canCancel = pub.status === "scheduled" || pub.status === "pending" || pub.status === "processing";
+        const isQStash = pub.format === "Story" || (pub.status === "scheduled" && !pub.externalId);
+        const PubRow = ({ label, value }: { label: string; value: string }) => (
+          <div>
+            <p className="mb-0.5 text-xs font-black uppercase text-slate-400">{label}</p>
+            <p className="text-sm font-bold">{value}</p>
+          </div>
+        );
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={closeDetail}>
+            <div className="w-full max-w-md overflow-hidden rounded-3xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+              <div className={`flex items-center justify-between border-b px-5 py-4 ${platColor[pub.platform] ?? "bg-slate-50 border-slate-200"}`}>
+                <div className="flex items-center gap-2">
+                  <span className={`font-black ${platText[pub.platform] ?? "text-slate-700"}`}>{platLabel[pub.platform] ?? pub.platform}</span>
+                  <span className={`text-xs font-bold ${statColor[pub.status] ?? "text-slate-500"}`}>{statLabel[pub.status] ?? pub.status}</span>
+                  {pub.format && <span className="rounded-xl bg-white/70 px-2 py-0.5 text-xs font-black">{pub.format}</span>}
+                </div>
+                <button onClick={closeDetail} className="rounded-2xl bg-white/60 p-2 hover:bg-white"><X size={16} /></button>
+              </div>
+              <div className="max-h-[70vh] overflow-y-auto space-y-4 p-5">
+                {pub.thumbnailUrl && (
+                  <img src={pub.thumbnailUrl} alt="Capa" className="w-full rounded-2xl object-cover max-h-48" />
+                )}
+                {pub.status === "scheduled" && (
+                  <div className="rounded-2xl bg-slate-50 px-4 py-3">
+                    <p className="mb-1 text-xs font-black uppercase text-slate-400">Método de agendamento</p>
+                    <p className="text-sm font-bold">
+                      {isQStash
+                        ? "🔗 Via sistema (QStash) — publicará automaticamente no horário"
+                        : "📡 Via Meta API — container agendado diretamente na Meta"}
+                    </p>
+                  </div>
+                )}
+                {pub.scheduledAt && <PubRow label="Agendado para" value={formatSaoPauloSchedule(pub.scheduledAt)} />}
+                {pub.publishedAt && <PubRow label="Publicado em" value={new Date(pub.publishedAt).toLocaleString("pt-BR")} />}
+                {pub.caption && (
+                  <div>
+                    <p className="mb-1 text-xs font-black uppercase text-slate-400">Legenda</p>
+                    <p className="whitespace-pre-wrap rounded-2xl bg-slate-50 px-4 py-3 text-sm font-bold">{pub.caption}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="mb-1 text-xs font-black uppercase text-slate-400">Mídia enviada</p>
+                  <a href={pub.assetUrl} target="_blank" rel="noopener noreferrer" className="block truncate text-xs font-bold text-blue-600 hover:underline">{pub.assetUrl}</a>
+                </div>
+                {pub.error && (
+                  <div className="rounded-2xl bg-rose-50 px-4 py-3">
+                    <p className="mb-1 text-xs font-black uppercase text-rose-400">Erro</p>
+                    <p className="text-sm font-bold text-rose-700">{pub.error}</p>
+                  </div>
+                )}
+                {pub.attempts > 0 && <PubRow label="Tentativas" value={String(pub.attempts)} />}
+                {(pub.permalink || canCancel) && (
+                  <div className="flex gap-2 pt-1">
+                    {pub.permalink && (
+                      <a href={pub.permalink} target="_blank" rel="noopener noreferrer"
+                         className="flex-1 rounded-2xl bg-slate-100 px-3 py-2 text-center text-sm font-black text-slate-700 hover:bg-slate-200">
+                        Ver post ↗
+                      </a>
+                    )}
+                    {canCancel && (
+                      <button type="button"
+                        onClick={() => { cancelScheduledPublication(pub); closeDetail(); }}
+                        className="flex-1 rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">
+                        Cancelar agendamento
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
