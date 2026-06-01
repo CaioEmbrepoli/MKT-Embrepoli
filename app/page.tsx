@@ -10270,7 +10270,7 @@ function EntityModal(props: {
         {modal.kind === "publish" && (() => {
           const publishPost = props.posts.find((p) => p.id === modal.postId);
           if (!publishPost) return null;
-          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} postPublications={props.postPublications} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
+          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} postPublications={props.postPublications} setPostPublications={props.setPostPublications} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
         })()}
     </CenteredModal>
   );
@@ -12967,6 +12967,7 @@ function PublishModal({
   postReviewAssets,
   channels,
   postPublications,
+  setPostPublications,
   setPosts,
   addPostReviewAssets,
   close,
@@ -12975,6 +12976,7 @@ function PublishModal({
   postReviewAssets: PostReviewAsset[];
   channels: Channel[];
   postPublications?: PostPublication[];
+  setPostPublications?: Dispatch<SetStateAction<PostPublication[]>>;
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
   close: () => void;
@@ -13127,11 +13129,13 @@ function PublishModal({
             const data = await res.json().catch(() => ({})) as {
               error?: string;
               status?: "published" | "scheduled";
+              publicationId?: string;
               instagramMediaId?: string;
               permalink?: string;
               publishedAt?: string;
               scheduledAt?: string;
               effectiveFormat?: string;
+              contentType?: string;
             };
             if (res.ok) {
               const newStatus = data.status === "scheduled" ? "Agendado" : "Publicado";
@@ -13141,6 +13145,24 @@ function PublishModal({
                 status: newStatus,
                 publishedAt: data.status === "scheduled" ? p.publishedAt : (data.publishedAt ?? new Date().toISOString()),
               } : p));
+              if (data.status === "scheduled" && data.publicationId) {
+                const newPub: PostPublication = {
+                  id: data.publicationId,
+                  postId: post.id,
+                  platform: "instagram",
+                  status: "scheduled",
+                  format: data.effectiveFormat ?? config.format,
+                  assetUrl: selectedAsset.url,
+                  thumbnailUrl: effectiveThumbnailUrl ?? undefined,
+                  scheduledAt: data.scheduledAt ?? scheduledAt ?? undefined,
+                  title: config.title ?? "",
+                  caption: config.description ?? "",
+                  attempts: 0,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString()
+                };
+                setPostPublications?.((current) => [newPub, ...current]);
+              }
             } else {
               updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar no Instagram." });
             }
