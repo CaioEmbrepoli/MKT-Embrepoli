@@ -198,7 +198,7 @@ export type FileAttachment = {
   mimeType: string;
 };
 
-export type ReviewAssetStatus = "Aguardando revisão" | "Aprovado" | "Ajustes solicitados";
+export type ReviewAssetStatus = "Aguardando revisão" | "Aprovado" | "Ajustes solicitados" | "Substituído";
 
 export type PostReviewComment = {
   id: string;

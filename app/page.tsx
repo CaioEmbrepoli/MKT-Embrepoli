@@ -12595,6 +12595,7 @@ function PostReviewPanel({
   const [externalUrl, setExternalUrl] = useState("");
   const [driveOpen, setDriveOpen] = useState(false);
   const [replaceTarget, setReplaceTarget] = useState<PostReviewAsset | null>(null);
+  const [replaceUploadOpen, setReplaceUploadOpen] = useState(false);
 
   function submitComment(assetId: string, event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -12635,7 +12636,7 @@ function PostReviewPanel({
         setReplaceTarget(null);
         return;
       }
-      deletePostReviewAsset(replaceTarget.id);
+      setReviewAssetStatus(replaceTarget.id, "Substituído");
       // For covers (images) use thumbnailUrl so preview renders correctly
       const preview = isCoverReplace ? driveImagePreview(file) : file.previewUrl;
       addPostReviewExternalAsset(post, file.url, preview, file.mimeType, isCoverReplace);
@@ -12649,6 +12650,15 @@ function PostReviewPanel({
     }
     const preview = addingCover ? driveImagePreview(file) : file.previewUrl;
     addPostReviewExternalAsset(post, file.url, preview, file.mimeType, addingCover);
+  }
+
+  async function replaceWithUpload(files: File[]) {
+    if (!replaceTarget || files.length === 0) return;
+    const old = replaceTarget;
+    setReplaceTarget(null);
+    setReplaceUploadOpen(false);
+    setReviewAssetStatus(old.id, "Substituído");
+    await addPostReviewAssets(post, files, old.isCover ?? false);
   }
 
   const driveButtonLabel = canUploadCover ? "Selecionar capa do Drive" : "Selecionar do Drive";
@@ -12697,6 +12707,23 @@ function PostReviewPanel({
         </>
       )}
       {driveOpen && <DriveExplorerModal onSelect={addDriveFileToReview} onClose={() => { setDriveOpen(false); setReplaceTarget(null); }} />}
+      {replaceUploadOpen && replaceTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm rounded-3xl bg-white p-5 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <p className="font-black">Trocar arquivo</p>
+              <button type="button" onClick={() => { setReplaceUploadOpen(false); setReplaceTarget(null); }} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200"><X size={16} /></button>
+            </div>
+            <FileDropZone
+              icon={replaceTarget.type === "video" ? "file" : "image"}
+              title="Enviar novo arquivo"
+              hint={replaceTarget.type === "video" ? "Vídeos até 100 MB" : "Imagens até 2 MB"}
+              accept={replaceTarget.type === "video" ? "video/*" : replaceTarget.isCover ? "image/*" : undefined}
+              onFiles={replaceWithUpload}
+            />
+          </div>
+        </div>
+      )}
 
       {assets.length > 0 ? (
         <div className="space-y-3">
@@ -12704,26 +12731,31 @@ function PostReviewPanel({
             const adjMsg = adjustmentMessages[asset.id] ?? "";
             const showAdj = showAdjustInputs[asset.id] ?? false;
             const commentText = comments[asset.id] ?? "";
+            const isReplaced = asset.status === "Substituído";
             return (
-              <div key={asset.id} className="overflow-hidden rounded-3xl border border-slate-200 bg-white">
+              <div key={asset.id} className={`overflow-hidden rounded-3xl border border-slate-200 ${isReplaced ? "bg-slate-50 opacity-60" : "bg-white"}`}>
                 <button type="button" onClick={() => openMediaPreview(asset)} className="block w-full">
                   <MediaPreviewContent item={asset} />
                 </button>
                 <div className="space-y-3 p-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    {asset.isCover
-                      ? <Badge tone="slate">Capa / Thumbnail</Badge>
-                      : <Badge tone={asset.status === "Aprovado" ? "green" : asset.status === "Ajustes solicitados" ? "red" : "blue"}>{asset.status}</Badge>
+                    {isReplaced
+                      ? <Badge tone="slate">Substituído</Badge>
+                      : asset.isCover
+                        ? <Badge tone="slate">Capa / Thumbnail</Badge>
+                        : <Badge tone={asset.status === "Aprovado" ? "green" : asset.status === "Ajustes solicitados" ? "red" : "blue"}>{asset.status}</Badge>
                     }
                     <Badge tone="slate">{asset.source === "external" ? externalMediaLabel(asset) : formatBytes(asset.compressedSize || asset.originalSize)}</Badge>
                     <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(asset.uploadedBy)?.name}</span>
                     <div className="ml-auto flex items-center gap-1">
                       <FileActionButtons item={asset} />
-                      <button type="button"
-                        onClick={() => { setReplaceTarget(asset); setDriveOpen(true); }}
-                        className="rounded-2xl bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-200">
-                        Trocar
-                      </button>
+                      {!isReplaced && (
+                        <button type="button"
+                          onClick={() => { setReplaceTarget(asset); if (asset.source === "external") setDriveOpen(true); else setReplaceUploadOpen(true); }}
+                          className="rounded-2xl bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 hover:bg-slate-200">
+                          Trocar
+                        </button>
+                      )}
                       <button type="button"
                         onClick={() => { if (window.confirm("Excluir este arquivo de revisão?")) deletePostReviewAsset(asset.id); }}
                         className="rounded-2xl bg-rose-100 px-3 py-1.5 text-xs font-black text-rose-700 hover:bg-rose-200">
@@ -12732,7 +12764,7 @@ function PostReviewPanel({
                     </div>
                   </div>
 
-                  {canReview && !asset.isCover && (
+                  {canReview && !asset.isCover && !isReplaced && (
                     <div className="rounded-2xl bg-slate-50 p-3">
                       {asset.status === "Aprovado" ? (
                         showAdj ? (
