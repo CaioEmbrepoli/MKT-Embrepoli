@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
-import { publishInstagramMedia, validateInstagramMediaForPublish } from "@/lib/instagram-publish-server";
+import { publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -23,7 +23,8 @@ function parseScheduledAt(value?: string | null) {
   if (Number.isNaN(date.getTime())) {
     throw new Error("Data de agendamento invalida.");
   }
-  return date.getTime() > Date.now() + 60_000 ? date : null;
+  // Mínimo 10 minutos no futuro (requisito da Meta para agendamento nativo)
+  return date.getTime() > Date.now() + 10 * 60_000 ? date : null;
 }
 
 export async function POST(request: Request) {
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
           .eq("organization_id", context.organizationId)
           .eq("post_id", body.postId)
           .eq("platform", "instagram")
-          .in("status", ["pending", "processing", "published"])
+          .in("status", ["scheduled", "pending", "processing", "published"])
           .maybeSingle();
         if (existingError) throw new Error(existingError.message);
         if (existing) {
@@ -61,25 +62,27 @@ export async function POST(request: Request) {
         }
       }
 
-      const validation = await validateInstagramMediaForPublish(context, connection, {
+      // Agendamento nativo Meta: cria container com published=false + scheduled_publish_time
+      const scheduled = await scheduleInstagramMedia(context, connection, {
         assetUrl: body.assetUrl,
         title: body.title,
         caption: body.caption,
         format: body.format ?? "Feed",
         thumbnailUrl: body.thumbnailUrl ?? null
-      });
+      }, scheduledAt);
 
       const publication = {
         id: randomUUID(),
         organization_id: context.organizationId,
         post_id: body.postId,
         platform: "instagram",
-        status: "pending",
+        status: "scheduled",
         title: body.title ?? "",
         caption: body.caption ?? "",
-        format: body.format ?? "Feed",
+        format: scheduled.effectiveFormat,
         asset_url: body.assetUrl,
         thumbnail_url: body.thumbnailUrl ?? null,
+        external_id: scheduled.containerId,
         scheduled_at: scheduledAt.toISOString(),
         attempts: 0,
         created_by: context.userId,
@@ -99,8 +102,8 @@ export async function POST(request: Request) {
         status: "scheduled",
         publicationId: publication.id,
         scheduledAt: publication.scheduled_at,
-        effectiveFormat: validation.effectiveFormat,
-        contentType: validation.contentType
+        effectiveFormat: scheduled.effectiveFormat,
+        contentType: scheduled.contentType
       });
     }
 

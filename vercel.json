@@ -17,10 +17,6 @@
       "schedule": "30 3 * * *"
     },
     {
-      "path": "/api/cron/instagram-publications",
-      "schedule": "0 7 * * *"
-    },
-    {
       "path": "/api/cron/youtube-publications",
       "schedule": "0 7 * * *"
     },

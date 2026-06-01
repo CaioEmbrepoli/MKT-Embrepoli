@@ -33,6 +33,13 @@ export type InstagramPublishResult = {
   contentType: string;
 };
 
+export type InstagramScheduleResult = {
+  containerId: string;
+  scheduledPublishTime: string;
+  effectiveFormat: InstagramPublishFormat;
+  contentType: string;
+};
+
 type PreparedAsset = {
   publicUrl: string;
   contentType: string;
@@ -389,6 +396,42 @@ export async function validateInstagramMediaForPublish(
     contentType: asset.contentType,
     publicUrl: asset.publicUrl,
     kind: plan.kind
+  };
+}
+
+export async function scheduleInstagramMedia(
+  context: MetaRequestContext,
+  connection: InstagramPublishConnection,
+  payload: InstagramPublishPayload,
+  scheduledAt: Date
+): Promise<InstagramScheduleResult> {
+  assertInstagramPublishPermission(connection);
+
+  const asset = await preparePublicAsset(context, payload);
+  await assertMetaCanReadUrl(asset.publicUrl);
+  const plan = buildInstagramPublishPlan(payload, asset);
+
+  if (plan.effectiveFormat === "Story") {
+    throw new Error("Stories não suportam agendamento nativo. Publique imediatamente ou escolha Feed/Reels.");
+  }
+
+  const scheduledUnix = String(Math.floor(scheduledAt.getTime() / 1000));
+  const params: Record<string, string> = { ...plan.params, published: "false", scheduled_publish_time: scheduledUnix };
+
+  if (plan.effectiveFormat === "Reels" && payload.thumbnailUrl) {
+    try { params.cover_url = await prepareCoverUrl(context, payload.thumbnailUrl); } catch { /* opcional */ }
+  }
+
+  const creation = await graphPost<{ id?: string }>(
+    connection, `/${connection.instagram_account_id}/media`, params
+  );
+  if (!creation.id) throw new Error("A Meta não retornou o container de agendamento.");
+
+  return {
+    containerId: creation.id,
+    scheduledPublishTime: scheduledAt.toISOString(),
+    effectiveFormat: plan.effectiveFormat,
+    contentType: asset.contentType
   };
 }
 
