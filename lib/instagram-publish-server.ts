@@ -213,7 +213,24 @@ async function preparePublicAsset(context: MetaRequestContext, payload: Instagra
       } as RequestInit);
 
       if (!uploadRes.ok) {
-        const errData = await uploadRes.json().catch(() => ({})) as { message?: string; error?: string };
+        const errData = await uploadRes.json().catch(() => ({})) as { message?: string; error?: string; statusCode?: string };
+        const isTooBig = errData.message?.toLowerCase().includes("maximum allowed size") || errData.statusCode === "413";
+
+        if (isTooBig) {
+          // Fallback: tentar usar URL pública do Drive diretamente (funciona se o arquivo estiver compartilhado como público)
+          const publicDriveUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0`;
+          const testRes = await fetch(publicDriveUrl, { method: "HEAD" }).catch(() => null);
+          const ct = (testRes?.headers.get("content-type") || "").split(";")[0];
+          if (testRes?.ok && ct.startsWith("video/")) {
+            return { publicUrl: publicDriveUrl, contentType: ct || contentType, buffer: Buffer.alloc(0) };
+          }
+          throw new Error(
+            "O vídeo do Drive excede o limite de 50MB do Supabase. " +
+            "Solução: compartilhe o arquivo no Drive como 'Qualquer pessoa com o link pode visualizar', " +
+            "ou envie o vídeo diretamente na revisão (sem usar link do Drive)."
+          );
+        }
+
         throw new Error(`Erro ao preparar arquivo publico: ${errData.message || errData.error || `HTTP ${uploadRes.status}`}`);
       }
 
