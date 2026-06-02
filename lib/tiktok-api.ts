@@ -83,6 +83,26 @@ export type TikTokVideoListSummary = {
   stoppedByLimit: boolean;
 };
 
+export type TikTokCommentItem = {
+  commentId: string;
+  videoId: string;
+  videoTitle: string;
+  authorName: string;
+  text: string;
+  likes: number;
+  publishedAt: string;
+  channelReply?: string;
+};
+
+export type TikTokCommentImportSummary = {
+  videoCount: number;
+  videosWithComments?: number;
+  commentsFound: number;
+  ignoredByDate: number;
+  unsupported?: boolean;
+  scope: "recent" | "all";
+};
+
 export async function getTikTokStatus(): Promise<TikTokConnectionStatus> {
   return fetchJson<TikTokConnectionStatus>("/api/tiktok/status");
 }
@@ -98,4 +118,8 @@ export async function disconnectTikTokConnection(): Promise<void> {
 
 export async function listTikTokVideos(): Promise<{ profile: TikTokProfile; videos: TikTokVideo[]; importSummary?: TikTokVideoListSummary }> {
   return fetchJson<{ profile: TikTokProfile; videos: TikTokVideo[]; importSummary?: TikTokVideoListSummary }>("/api/tiktok/videos", undefined, 90000);
+}
+
+export async function listTikTokComments(scope: "recent" | "all" = "recent"): Promise<{ comments: TikTokCommentItem[]; summary: TikTokCommentImportSummary }> {
+  return fetchJson<{ comments: TikTokCommentItem[]; summary: TikTokCommentImportSummary }>(`/api/tiktok/comments?scope=${encodeURIComponent(scope)}`, undefined, 120000);
 }

@@ -88,7 +88,7 @@ import {
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
-import { disconnectTikTokConnection, getTikTokStatus, listTikTokVideos, startTikTokConnection, type TikTokConnectionStatus } from "@/lib/tiktok-api";
+import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import { connectInstagramToken, disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule } from "@/lib/app-time";
 import {
@@ -9993,154 +9993,209 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
             )}
             {googleError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{googleError}</p>}
           </div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {googleIntegrations.map((integration) => {
+          {/* ── Cards de integração redesenhados ── */}
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            {/* Google Drive */}
+            {googleIntegrations.filter((i) => i.service === "drive").map((integration) => {
               const serviceStatus = googleStatus?.[integration.service];
               const busy = googleBusy === integration.service;
               const connectedEmail = serviceStatus?.googleEmail?.trim();
+              const initial = connectedEmail?.[0]?.toUpperCase() ?? "G";
               return (
-                <div key={integration.service} className="rounded-[26px] border border-slate-100 bg-slate-50 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-black">{integration.title}</p>
-                      <p className="mt-1 text-sm font-bold text-slate-500">{integration.description}</p>
+                <div key={integration.service} className="overflow-hidden rounded-[26px] border border-slate-200 bg-white shadow-sm">
+                  <div className="flex items-center gap-3 border-b border-slate-100 bg-slate-50 px-4 py-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white shadow-sm">
+                      <svg viewBox="0 0 87.3 78" className="h-5 w-5"><path d="M6.6 66.85l3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3L27.5 51H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/><path d="M43.65 25L29.9 0c-1.35.8-2.5 1.9-3.3 3.3L1.2 46.5A9 9 0 000 51h27.5z" fill="#00ac47"/><path d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75L86.1 55.5c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.2z" fill="#ea4335"/><path d="M43.65 25L57.4 0H29.9z" fill="#00832d"/><path d="M59.8 51H87.3L73.55 26.5H43.65z" fill="#2684fc"/><path d="M43.65 25L57.4 0H29.9z" fill="#00832d"/><path d="M13.75 76.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2L59.8 51H27.5z" fill="#ffba00"/></svg>
                     </div>
-                    <span className={`rounded-full px-3 py-1 text-xs font-black ${serviceStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
-                      {googleLoading ? "Verificando" : serviceStatus?.connected ? "Conectado" : "Desconectado"}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-black text-slate-800">{integration.title}</p>
+                      <p className="text-xs font-bold text-slate-400 truncate">{integration.description}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${serviceStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                      {googleLoading ? "…" : serviceStatus?.connected ? "Conectado" : "Desconectado"}
                     </span>
                   </div>
-                  <p className="mt-3 text-sm font-black text-slate-700">
-                    {googleLoading
-                      ? "Verificando conexao..."
-                      : serviceStatus?.connected
-                        ? "Conta conectada"
-                        : "Nenhuma conta conectada"}
-                  </p>
-                  {serviceStatus?.connected && (
-                    <div className="mt-2 rounded-2xl border border-emerald-100 bg-white px-3 py-2">
-                      <p className="text-xs font-black uppercase text-slate-400">Email conectado</p>
-                      <p className="mt-0.5 break-all text-sm font-black text-emerald-700">
-                        {connectedEmail || "Email nao identificado pelo Google"}
-                      </p>
+                  <div className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-black text-slate-500">
+                        {initial}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-slate-800">
+                          {googleLoading ? "Verificando..." : connectedEmail || (serviceStatus?.connected ? "Email não identificado" : "Nenhuma conta conectada")}
+                        </p>
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">Conectado em {new Date(serviceStatus.connectedAt).toLocaleDateString("pt-BR")}</p>
+                        )}
+                      </div>
                     </div>
-                  )}
-                  {serviceStatus?.connectedAt && (
-                    <p className="mt-1 text-xs font-bold text-slate-400">
-                      Conectado em {new Date(serviceStatus.connectedAt).toLocaleString("pt-BR")}
-                    </p>
-                  )}
-                  {canManageIntegrations && (
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
-                        {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
-                      </button>
-                      {serviceStatus?.connected && (
-                        <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => disconnectGoogle(integration.service)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
-                          Desconectar
+                    {canManageIntegrations && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
+                          {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
                         </button>
-                      )}
-                    </div>
-                  )}
+                        {serviceStatus?.connected && (
+                          <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => disconnectGoogle(integration.service)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                            Desconectar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
-          </div>
-          <div className="mt-4 rounded-[26px] border border-slate-100 bg-slate-50 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-black">TikTok Sandbox</p>
-                <p className="mt-1 text-sm font-bold text-slate-500">
-                  Conexão OAuth em sandbox para ler perfil, estatísticas básicas e vídeos públicos.
-                </p>
-              </div>
-              <span className={`rounded-full px-3 py-1 text-xs font-black ${tiktokStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
-                {tiktokLoading ? "Verificando" : tiktokStatus?.connected ? "Conectado" : "Desconectado"}
-              </span>
-            </div>
-            {tiktokError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{tiktokError}</p>}
-            <div className="mt-3 rounded-2xl border border-slate-100 bg-white px-3 py-2">
-              <p className="text-xs font-black uppercase text-slate-400">Status</p>
-              <div className="mt-1 flex items-center gap-3">
-                {tiktokStatus?.avatarUrl && <img src={tiktokStatus.avatarUrl} alt="" className="h-10 w-10 rounded-full object-cover" />}
-                <div>
-                  <p className="break-all text-sm font-black text-slate-800">
-                    {tiktokLoading
-                      ? "Verificando conexao..."
-                      : tiktokStatus?.connected
-                        ? `Conectado como ${tiktokStatus.displayName || tiktokStatus.openId || "conta TikTok"}`
-                        : "Nenhuma conta TikTok conectada"}
-                  </p>
-                  <p className="text-xs font-bold text-slate-400">
-                    Ambiente: {tiktokStatus?.environment === "production" ? "Produção" : "Sandbox"}
-                  </p>
+
+            {/* YouTube */}
+            {googleIntegrations.filter((i) => i.service === "youtube").map((integration) => {
+              const serviceStatus = googleStatus?.[integration.service];
+              const busy = googleBusy === integration.service;
+              const connectedEmail = serviceStatus?.googleEmail?.trim();
+              const initial = connectedEmail?.[0]?.toUpperCase() ?? "Y";
+              return (
+                <div key={integration.service} className="overflow-hidden rounded-[26px] border border-red-100 bg-white shadow-sm">
+                  <div className="flex items-center gap-3 border-b border-red-100 bg-red-50 px-4 py-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-red-600">
+                      <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white"><path d="M23.5 6.2a3 3 0 00-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 00.5 6.2C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 002.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 002.1-2.1C24 15.9 24 12 24 12s0-3.9-.5-5.8zM9.75 15.5v-7l6.5 3.5-6.5 3.5z"/></svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-black text-slate-800">{integration.title}</p>
+                      <p className="text-xs font-bold text-slate-400 truncate">{integration.description}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${serviceStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-white/70 text-slate-500"}`}>
+                      {googleLoading ? "…" : serviceStatus?.connected ? "Conectado" : "Desconectado"}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100 text-sm font-black text-red-600">
+                        {initial}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-slate-800">
+                          {googleLoading ? "Verificando..." : connectedEmail || (serviceStatus?.connected ? "Email não identificado" : "Nenhuma conta conectada")}
+                        </p>
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">Conectado em {new Date(serviceStatus.connectedAt).toLocaleDateString("pt-BR")}</p>
+                        )}
+                      </div>
+                    </div>
+                    {canManageIntegrations && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-black text-white transition hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400">
+                          {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
+                        </button>
+                        {serviceStatus?.connected && (
+                          <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => disconnectGoogle(integration.service)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                            Desconectar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
+              );
+            })}
+
+            {/* TikTok */}
+            <div className="overflow-hidden rounded-[26px] border border-slate-800 bg-white shadow-sm">
+              <div className="flex items-center gap-3 border-b border-slate-700 bg-slate-950 px-4 py-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-black">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white"><path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V9.02a8.16 8.16 0 004.77 1.52V7.1a4.85 4.85 0 01-1-.41z"/></svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-black text-white">TikTok Sandbox</p>
+                  <p className="text-xs font-bold text-slate-400 truncate">OAuth para perfil, estatísticas e vídeos.</p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${tiktokStatus?.connected ? "bg-emerald-400/20 text-emerald-400" : "bg-white/10 text-slate-400"}`}>
+                  {tiktokLoading ? "…" : tiktokStatus?.connected ? "Conectado" : "Desconectado"}
+                </span>
               </div>
-            </div>
-            {tiktokStatus?.connectedAt && (
-              <p className="mt-1 text-xs font-bold text-slate-400">
-                Conectado em {new Date(tiktokStatus.connectedAt).toLocaleString("pt-BR")}
-              </p>
-            )}
-            {canManageIntegrations ? (
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button type="button" disabled={tiktokBusy || tiktokLoading} onClick={connectTikTok} className="rounded-2xl bg-slate-950 px-4 py-2 text-sm font-black text-white transition hover:bg-slate-700 disabled:bg-slate-200 disabled:text-slate-400">
-                  {tiktokBusy ? "Abrindo..." : tiktokStatus?.connected ? "Reconectar" : "Conectar TikTok Sandbox"}
-                </button>
-                {tiktokStatus?.connected && (
-                  <button type="button" disabled={tiktokBusy || tiktokLoading} onClick={disconnectTikTok} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
-                    Desconectar
-                  </button>
+              <div className="p-4">
+                {tiktokError && <p className="mb-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{tiktokError}</p>}
+                <div className="flex items-center gap-3">
+                  {tiktokStatus?.avatarUrl
+                    ? <img src={tiktokStatus.avatarUrl} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover ring-2 ring-slate-100" />
+                    : <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-sm font-black text-slate-500">{tiktokStatus?.displayName?.[0]?.toUpperCase() ?? "T"}</div>
+                  }
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-800">
+                      {tiktokLoading ? "Verificando..." : tiktokStatus?.connected ? (tiktokStatus.displayName || tiktokStatus.openId || "Conta TikTok") : "Nenhuma conta TikTok conectada"}
+                    </p>
+                    <p className="text-xs font-bold text-slate-400">
+                      {tiktokStatus?.connected ? `Ambiente: ${tiktokStatus.environment === "production" ? "Produção" : "Sandbox"}` : ""}
+                      {tiktokStatus?.connectedAt ? ` · ${new Date(tiktokStatus.connectedAt).toLocaleDateString("pt-BR")}` : ""}
+                    </p>
+                  </div>
+                </div>
+                {canManageIntegrations ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" disabled={tiktokBusy || tiktokLoading} onClick={connectTikTok} className="rounded-2xl bg-slate-950 px-4 py-2 text-sm font-black text-white transition hover:bg-slate-700 disabled:bg-slate-200 disabled:text-slate-400">
+                      {tiktokBusy ? "Abrindo..." : tiktokStatus?.connected ? "Reconectar" : "Conectar TikTok"}
+                    </button>
+                    {tiktokStatus?.connected && (
+                      <button type="button" disabled={tiktokBusy || tiktokLoading} onClick={disconnectTikTok} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                        Desconectar
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar TikTok.</p>
                 )}
               </div>
-            ) : (
-              <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar TikTok.</p>
-            )}
-          </div>
-          <div className="mt-4 rounded-[26px] border border-pink-100 bg-pink-50/60 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-black">Instagram / Meta</p>
-                <p className="mt-1 text-sm font-bold text-slate-500">
-                  Token corporativo para importar comentários e métricas do Instagram.
-                </p>
+            </div>
+
+            {/* Instagram / Meta */}
+            <div className="overflow-hidden rounded-[26px] border border-fuchsia-200 bg-white shadow-sm">
+              <div className="flex items-center gap-3 border-b border-fuchsia-100 bg-gradient-to-r from-purple-50 to-pink-50 px-4 py-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-black text-slate-800">Instagram / Meta</p>
+                  <p className="text-xs font-bold text-slate-400 truncate">Comentários, métricas e publicações.</p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${instagramStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                  {instagramLoading ? "…" : instagramStatus?.connected ? "Conectado" : "Desconectado"}
+                </span>
               </div>
-              <span className={`rounded-full px-3 py-1 text-xs font-black ${instagramStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-500"}`}>
-                {instagramLoading ? "Verificando" : instagramStatus?.connected ? "Conectado" : "Desconectado"}
-              </span>
-            </div>
-            {instagramError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{instagramError}</p>}
-            <div className="mt-3 rounded-2xl border border-pink-100 bg-white px-3 py-2">
-              <p className="text-xs font-black uppercase text-slate-400">Status</p>
-              <p className={`mt-1 break-all text-sm font-black ${instagramStatus?.connected ? "text-emerald-700" : "text-slate-500"}`}>
-                {instagramLoading
-                  ? "Verificando conexão..."
-                  : instagramStatus?.connected
-                    ? `Conectado como ${instagramStatus.username || instagramStatus.instagramAccountId || "conta Instagram"}`
-                    : "Nenhuma conta Instagram conectada"}
-              </p>
-              {instagramStatus?.expiresAt && (
-                <p className="mt-1 text-xs font-bold text-slate-400">
-                  Expira em {new Date(instagramStatus.expiresAt).toLocaleString("pt-BR")}
-                </p>
-              )}
-            </div>
-            {canManageIntegrations ? (
-              <div className="mt-4 flex flex-wrap gap-2">
-                <button type="button" disabled={instagramBusy || instagramLoading} onClick={connectInstagram} className="rounded-2xl bg-[#1877F2] px-4 py-2 text-sm font-black text-white transition hover:bg-[#1464d8] disabled:bg-slate-200 disabled:text-slate-400">
-                  {instagramBusy ? "Abrindo..." : instagramStatus?.connected ? "Reconectar com Facebook" : "Conectar com Facebook"}
-                </button>
-                <button type="button" disabled={instagramBusy || instagramLoading} onClick={() => setInstagramTokenOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-slate-200 disabled:opacity-50">
-                  Token manual
-                </button>
-                {instagramStatus?.connected && (
-                  <button type="button" disabled={instagramBusy || instagramLoading} onClick={disconnectInstagram} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
-                    Desconectar
-                  </button>
+              <div className="p-4">
+                {instagramError && <p className="mb-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{instagramError}</p>}
+                <div className="flex items-center gap-3">
+                  {instagramStatus?.avatarUrl
+                    ? <img src={instagramStatus.avatarUrl} alt="" className="h-10 w-10 shrink-0 rounded-full object-cover ring-2 ring-fuchsia-100" />
+                    : <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-purple-100 to-pink-100 text-sm font-black text-fuchsia-600">{instagramStatus?.username?.[0]?.toUpperCase() ?? "IG"}</div>
+                  }
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-800">
+                      {instagramLoading ? "Verificando..." : instagramStatus?.connected ? `@${instagramStatus.username || instagramStatus.instagramAccountId || "conta Instagram"}` : "Nenhuma conta Instagram conectada"}
+                    </p>
+                    <p className="text-xs font-bold text-slate-400">
+                      {instagramStatus?.displayName ? `${instagramStatus.displayName} · ` : ""}
+                      {instagramStatus?.expiresAt ? `Expira ${new Date(instagramStatus.expiresAt).toLocaleDateString("pt-BR")}` : ""}
+                      {instagramStatus?.connectedAt && !instagramStatus.expiresAt ? `Conectado em ${new Date(instagramStatus.connectedAt).toLocaleDateString("pt-BR")}` : ""}
+                    </p>
+                  </div>
+                </div>
+                {canManageIntegrations ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" disabled={instagramBusy || instagramLoading} onClick={connectInstagram} className="rounded-2xl bg-[#1877F2] px-4 py-2 text-sm font-black text-white transition hover:bg-[#1464d8] disabled:bg-slate-200 disabled:text-slate-400">
+                      {instagramBusy ? "Abrindo..." : instagramStatus?.connected ? "Reconectar com Facebook" : "Conectar com Facebook"}
+                    </button>
+                    <button type="button" disabled={instagramBusy || instagramLoading} onClick={() => setInstagramTokenOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-slate-200 disabled:opacity-50">
+                      Token manual
+                    </button>
+                    {instagramStatus?.connected && (
+                      <button type="button" disabled={instagramBusy || instagramLoading} onClick={disconnectInstagram} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                        Desconectar
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar Instagram / Meta.</p>
                 )}
               </div>
-            ) : (
-              <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar Instagram / Meta.</p>
-            )}
+            </div>
           </div>
         </div>
       </div>
@@ -13046,6 +13101,10 @@ const publishPlatformLabels: Record<string, string> = {
   outros: "Outros",
 };
 
+function isPublishablePlatform(platform: string) {
+  return platform === "youtube" || platform === "instagram";
+}
+
 function PublishModal({
   post,
   postReviewAssets,
@@ -13151,7 +13210,12 @@ function PublishModal({
     }));
   }, [selectedAsset?.id, selectedAssetKind, channelById]);
 
-  const enabledCount = channelConfigs.filter((c) => c.enabled).length;
+  const enabledPublishableConfigs = channelConfigs.filter((config) => {
+    if (!config.enabled) return false;
+    const platform = publishPlatformKey(channelById.get(config.channelId)?.name ?? "");
+    return isPublishablePlatform(platform);
+  });
+  const enabledCount = enabledPublishableConfigs.length;
   const isPublishing  = channelConfigs.some((c) => c.status === "publishing");
   const isDone = channelConfigs.filter((c) => c.enabled).every((c) => c.status === "success" || c.status === "unsupported" || c.status === "error");
 
@@ -13161,9 +13225,15 @@ function PublishModal({
     const token = sessionData?.session?.access_token;
     if (!token) return;
     const scheduledAt = publishMode === "scheduled" ? buildSaoPauloDateTime(scheduledDate, scheduledTime) : null;
-    setChannelConfigs((prev) => prev.map((c) => c.enabled ? { ...c, status: "publishing" } : c));
+    setChannelConfigs((prev) => prev.map((c) => {
+      if (!c.enabled) return c;
+      const platform = publishPlatformKey(channelById.get(c.channelId)?.name ?? "");
+      return isPublishablePlatform(platform)
+        ? { ...c, status: "publishing" }
+        : { ...c, status: "unsupported", errorMessage: undefined };
+    }));
     await Promise.allSettled(
-      channelConfigs.filter((c) => c.enabled).map(async (config) => {
+      enabledPublishableConfigs.map(async (config) => {
         const ch = channelById.get(config.channelId);
         const platform = publishPlatformKey(ch?.name ?? "");
         const allowDuplicateForPlatform = confirmedDuplicatePlatforms.includes(platform);
@@ -13249,32 +13319,6 @@ function PublishModal({
               }
             } else {
               updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar no Instagram." });
-            }
-          } catch {
-            updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
-          }
-        } else if (platform === "tiktok") {
-          try {
-            const res = await fetch("/api/tiktok/publish", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({
-                assetUrl: selectedAsset.url,
-                title: config.title,
-                description: config.description,
-                format: config.format,
-                scheduledAt,
-                privacyLevel: config.privacyLevel ?? "PUBLIC_TO_EVERYONE",
-                postId: post.id,
-                allowDuplicate: allowDuplicateForPlatform,
-              }),
-            });
-            if (res.ok) {
-              updateConfig(config.channelId, { status: "success" });
-              setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, status: "Publicado", publishedAt: new Date().toISOString() } : p));
-            } else {
-              const data = await res.json() as { error?: string };
-              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar no TikTok." });
             }
           } catch {
             updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
@@ -13376,7 +13420,8 @@ function PublishModal({
           const formats = formatsByPlatform[platform] ?? ["Post"];
           const isYoutube = platform === "youtube";
           const isInstagram = platform === "instagram";
-          const supported = platform === "youtube" || platform === "tiktok" || platform === "instagram";
+          const isTikTok = platform === "tiktok";
+          const supported = isPublishablePlatform(platform);
           const instagramEffectiveFormat = isInstagram ? effectiveInstagramFormat(config.format, selectedAssetKind) : config.format;
           const instagramFormatError = isInstagram ? instagramFormatUnavailableReason(config.format, selectedAssetKind) : "";
           const showInstagramCaption = isInstagram && instagramFormatUsesCaption(instagramEffectiveFormat);
@@ -13389,12 +13434,26 @@ function PublishModal({
                   {config.status === "success"    && <span className="text-xs font-black text-emerald-700">✓ Publicado</span>}
                   {config.status === "error"      && <span className="text-xs font-black text-rose-700">✕ Erro</span>}
                   {config.status === "publishing" && <span className="text-xs font-black text-blue-700">Publicando…</span>}
-                  {supported
-                    ? <span className="rounded-xl bg-emerald-100 px-2 py-0.5 text-xs font-black text-emerald-700">✓ API conectada</span>
-                    : <span className="rounded-xl bg-slate-200 px-2 py-0.5 text-xs font-black text-slate-500">Em breve</span>
-                  }
+                  {isTikTok ? (
+                    <span className="rounded-xl bg-amber-100 px-2 py-0.5 text-xs font-black text-amber-700">Falta integrar</span>
+                  ) : supported ? (
+                    <span className="rounded-xl bg-emerald-100 px-2 py-0.5 text-xs font-black text-emerald-700">✓ API conectada</span>
+                  ) : (
+                    <span className="rounded-xl bg-slate-200 px-2 py-0.5 text-xs font-black text-slate-500">Em breve</span>
+                  )}
                 </div>
               </div>
+              {isTikTok ? (
+                <div className="flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-amber-200 bg-amber-50 px-6 py-10 text-center">
+                  <div>
+                    <p className="text-2xl font-black text-amber-800 sm:text-3xl">Publicação no TikTok ainda falta integrar</p>
+                    <p className="mt-3 text-sm font-bold text-amber-700">
+                      A conexão, importação e métricas do TikTok continuam disponíveis. Esta etapa bloqueia apenas publicar ou agendar pelo modal.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+              <>
               {/* Formato */}
               <div className="mb-3">
                 <p className="mb-1 text-xs font-black text-slate-500">Formato</p>
@@ -13502,10 +13561,20 @@ function PublishModal({
               {config.status === "error" && config.errorMessage && (
                 <p className="mt-2 text-xs font-black text-rose-700">{config.errorMessage}</p>
               )}
+              </>
+              )}
             </div>
           );
         })}
       </div>
+      {channelConfigs.some((config) => {
+        const platform = publishPlatformKey(channelById.get(config.channelId)?.name ?? "");
+        return config.enabled && platform === "tiktok";
+      }) && enabledCount === 0 && (
+        <p className="rounded-2xl bg-amber-50 px-4 py-3 text-center text-sm font-black text-amber-700">
+          TikTok ainda não está integrado para publicação. Selecione YouTube ou Instagram para publicar agora.
+        </p>
+      )}
 
       {/* Botão de ação */}
       {!isDone ? (
@@ -15661,7 +15730,7 @@ function ComentariosSection({
     return t.includes(k);
   }
 
-  async function handleImport(items: Array<YouTubeCommentItem | InstagramCommentItem>, updatedItems: YouTubeCommentItem[] = [], source: Comment["source"] = "youtube") {
+  async function handleImport(items: Array<YouTubeCommentItem | InstagramCommentItem | TikTokCommentItem>, updatedItems: YouTubeCommentItem[] = [], source: Comment["source"] = "youtube") {
     // ── ATUALIZAÇÕES: comentários existentes com nova resposta ──
     if (updatedItems.length > 0) {
       const updatedComments = comments.map((c) => {
@@ -16054,7 +16123,7 @@ function ComentariosSection({
         <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center">
           <MessageSquare size={32} className="mx-auto mb-3 text-slate-300" />
           <p className="text-sm text-slate-400">Nenhum comentário encontrado.</p>
-          <p className="mt-1 text-xs text-slate-300">Importe comentários do YouTube ou Instagram para começar.</p>
+          <p className="mt-1 text-xs text-slate-300">Importe comentários do YouTube, Instagram ou TikTok para começar.</p>
         </div>
       )}
       <div className="flex flex-col gap-3">
@@ -16126,6 +16195,7 @@ function ComentariosSection({
           channels={channels}
           onYoutubeImport={(newItems, updatedItems) => handleImport(newItems, updatedItems, "youtube")}
           onInstagramImport={(items) => handleImport(items, [], "instagram")}
+          onTikTokImport={(items) => handleImport(items, [], "tiktok")}
           onClose={() => setCommentImportOpen(false)}
         />
       )}
@@ -16385,6 +16455,7 @@ function CommentImportUnifiedModal({
   channels,
   onYoutubeImport,
   onInstagramImport,
+  onTikTokImport,
   onClose,
 }: {
   existingComments: Comment[];
@@ -16392,29 +16463,41 @@ function CommentImportUnifiedModal({
   channels: Channel[];
   onYoutubeImport: (newItems: YouTubeCommentItem[], updatedItems: YouTubeCommentItem[]) => Promise<void>;
   onInstagramImport: (items: InstagramCommentItem[]) => Promise<void>;
+  onTikTokImport: (items: TikTokCommentItem[]) => Promise<void>;
   onClose: () => void;
 }) {
+  type ImportChannel = "youtube" | "instagram" | "tiktok";
   const hasYoutube = channels.some((c) => c.id === "youtube" || c.name.toLowerCase().includes("youtube"));
   const hasInstagram = channels.some((c) => c.id === "instagram" || c.name.toLowerCase().includes("instagram"));
-  const availableChannels = (["youtube", "instagram"] as const).filter((ch) => ch === "youtube" ? hasYoutube : hasInstagram);
+  const hasTikTok = channels.some((c) => c.id === "tiktok" || c.name.toLowerCase().includes("tiktok"));
+  const availableChannels: ImportChannel[] = (["youtube", "instagram", "tiktok"] as ImportChannel[]).filter((ch) => (
+    ch === "youtube" ? hasYoutube : ch === "instagram" ? hasInstagram : hasTikTok
+  ));
 
   const [phase, setPhase] = useState<"select" | "scanning" | "confirm" | "importing" | "done">("select");
-  const [selected, setSelected] = useState<string[]>([...availableChannels]);
+  const [selected, setSelected] = useState<ImportChannel[]>([...availableChannels]);
   const [scope, setScope] = useState<"recent" | "all">("recent");
   const [progressMsg, setProgressMsg] = useState("");
   const [progressPct, setProgressPct] = useState(0);
-  const [currentChannel, setCurrentChannel] = useState("");
+  const [currentChannel, setCurrentChannel] = useState<ImportChannel | "">("");
   const [ytNew, setYtNew] = useState<YouTubeCommentItem[]>([]);
   const [ytUpdated, setYtUpdated] = useState<YouTubeCommentItem[]>([]);
   const [ytIgnored, setYtIgnored] = useState(0);
-  const [results, setResults] = useState<{ channel: string; count: number; error?: string }[]>([]);
+  const [tiktokItems, setTiktokItems] = useState<TikTokCommentItem[]>([]);
+  const [tiktokIgnored, setTiktokIgnored] = useState(0);
+  const [scanErrorsByChannel, setScanErrorsByChannel] = useState<Partial<Record<ImportChannel, string>>>({});
+  const [results, setResults] = useState<{ channel: ImportChannel; count: number; error?: string }[]>([]);
   const [scanError, setScanError] = useState<string | null>(null);
 
-  function toggleChannel(ch: string) {
+  function toggleChannel(ch: ImportChannel) {
     setSelected((prev) => prev.includes(ch) ? prev.filter((x) => x !== ch) : [...prev, ch]);
   }
 
-  function chLabel(ch: string) { return ch === "youtube" ? "YouTube" : "Instagram"; }
+  function chLabel(ch: ImportChannel | string) {
+    if (ch === "youtube") return "YouTube";
+    if (ch === "instagram") return "Instagram";
+    return "TikTok";
+  }
 
   async function runScan() {
     setPhase("scanning");
@@ -16424,8 +16507,12 @@ function CommentImportUnifiedModal({
     setYtNew([]);
     setYtUpdated([]);
     setYtIgnored(0);
+    setTiktokItems([]);
+    setTiktokIgnored(0);
+    setScanErrorsByChannel({});
 
     try {
+      const nextScanErrors: Partial<Record<ImportChannel, string>> = {};
       if (selected.includes("youtube")) {
         const minDate = new Date();
         minDate.setDate(minDate.getDate() - 30);
@@ -16464,6 +16551,20 @@ function CommentImportUnifiedModal({
         setYtUpdated(allUpdated);
         setYtIgnored(skippedOld);
       }
+      if (selected.includes("tiktok")) {
+        setProgressMsg("Buscando comentários do TikTok...");
+        setProgressPct(0);
+        try {
+          const { comments: tkComments, summary } = await listTikTokComments(scope);
+          setTiktokItems(tkComments);
+          setTiktokIgnored(summary.ignoredByDate ?? 0);
+        } catch (e) {
+          nextScanErrors.tiktok = e instanceof Error ? e.message : "Erro ao importar TikTok.";
+          setTiktokItems([]);
+          setTiktokIgnored(0);
+        }
+      }
+      setScanErrorsByChannel(nextScanErrors);
       setPhase("confirm");
     } catch (e: unknown) {
       setScanError(e instanceof Error ? e.message : String(e));
@@ -16498,12 +16599,31 @@ function CommentImportUnifiedModal({
       }
     }
 
+    if (selected.includes("tiktok")) {
+      setCurrentChannel("tiktok");
+      const scanError = scanErrorsByChannel.tiktok;
+      if (scanError) {
+        collected.push({ channel: "tiktok", count: 0, error: scanError });
+      } else if (tiktokItems.length > 0) {
+        try {
+          await onTikTokImport(tiktokItems);
+          collected.push({ channel: "tiktok", count: tiktokItems.length });
+        } catch (e) {
+          collected.push({ channel: "tiktok", count: 0, error: e instanceof Error ? e.message : "Erro ao importar TikTok." });
+        }
+      } else {
+        collected.push({ channel: "tiktok", count: 0 });
+      }
+    }
+
     setResults(collected);
     setPhase("done");
   }
 
   const isLoading = phase === "scanning" || phase === "importing";
   const ytHasChanges = ytNew.length > 0 || ytUpdated.length > 0;
+  const tiktokHasChanges = tiktokItems.length > 0;
+  const needsScan = selected.includes("youtube") || selected.includes("tiktok");
 
   return (
     <CenteredModal close={isLoading ? undefined : onClose} className="bg-black/40" variant="compact" panelClassName="rounded-3xl border-0">
@@ -16533,16 +16653,16 @@ function CommentImportUnifiedModal({
             ))}
           </div>
 
-          {selected.includes("youtube") && (
+          {needsScan && (
             <div className="grid gap-2">
-              <p className="text-xs font-black uppercase text-slate-500">Escopo do YouTube</p>
+              <p className="text-xs font-black uppercase text-slate-500">Escopo dos comentários</p>
               <button type="button" onClick={() => setScope("recent")} className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "recent" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
                 <span className="block font-black">Últimos 30 dias</span>
-                <span className="text-xs font-bold opacity-75">Busca só comentários dos últimos 30 dias.</span>
+                <span className="text-xs font-bold opacity-75">Busca só comentários dos últimos 30 dias no YouTube/TikTok.</span>
               </button>
               <button type="button" onClick={() => setScope("all")} className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "all" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
                 <span className="block font-black">Todos os comentários</span>
-                <span className="text-xs font-bold opacity-75">Varredura completa do canal.</span>
+                <span className="text-xs font-bold opacity-75">Varredura completa dos canais com busca por data.</span>
               </button>
             </div>
           )}
@@ -16552,7 +16672,7 @@ function CommentImportUnifiedModal({
           <div className="flex gap-2">
             <button onClick={onClose} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancelar</button>
             <button onClick={runScan} disabled={selected.length === 0} className="flex-1 rounded-2xl bg-slate-950 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400">
-              {selected.includes("youtube") ? "Buscar comentários" : "Importar"}
+              {needsScan ? "Buscar comentários" : "Importar"}
             </button>
           </div>
         </div>
@@ -16617,10 +16737,34 @@ function CommentImportUnifiedModal({
             </div>
           )}
 
+          {selected.includes("tiktok") && (
+            <div className="rounded-2xl bg-slate-950 p-4 text-white">
+              <p className="mb-1 text-xs font-black uppercase text-white/60">TikTok</p>
+              {scanErrorsByChannel.tiktok ? (
+                <p className="text-sm font-bold text-rose-100">{scanErrorsByChannel.tiktok}</p>
+              ) : tiktokHasChanges ? (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-xs font-black text-slate-950">{tiktokItems.length}</span>
+                    <span className="font-bold">comentário{tiktokItems.length !== 1 ? "s" : ""} encontrado{tiktokItems.length !== 1 ? "s" : ""}</span>
+                  </div>
+                  {scope === "recent" && tiktokIgnored > 0 && (
+                    <div className="flex items-center gap-2 text-sm text-white/80">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white/15 text-xs font-black">{tiktokIgnored}</span>
+                      <span className="font-bold">ignorado{tiktokIgnored !== 1 ? "s" : ""} por estar fora dos últimos 30 dias</span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-sm font-bold text-white/75">{scope === "recent" ? "Nenhum comentário novo nos últimos 30 dias." : "Nenhum comentário retornado pela API."}</p>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2">
             <button onClick={() => setPhase("select")} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Voltar</button>
             <button onClick={runImport} className="flex-1 rounded-2xl bg-slate-950 py-2 text-sm font-bold text-white hover:bg-slate-800">
-              {selected.includes("instagram") || ytHasChanges ? "Importar" : "Fechar"}
+              {selected.includes("instagram") || ytHasChanges || tiktokHasChanges || scanErrorsByChannel.tiktok ? "Importar" : "Fechar"}
             </button>
           </div>
         </div>
@@ -16630,7 +16774,7 @@ function CommentImportUnifiedModal({
       {phase === "importing" && (
         <div className="flex flex-col items-center gap-4 py-6">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-blue-600" />
-          <p className="text-sm font-bold text-slate-700">Importando {currentChannel === "youtube" ? "YouTube" : "Instagram"}...</p>
+          <p className="text-sm font-bold text-slate-700">Importando {currentChannel ? chLabel(currentChannel) : "comentários"}...</p>
         </div>
       )}
 
