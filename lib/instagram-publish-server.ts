@@ -143,6 +143,29 @@ async function ensurePublicBucket(service: SupabaseClient) {
 
 async function preparePublicAsset(context: MetaRequestContext, payload: InstagramPublishPayload): Promise<PreparedAsset> {
   const isDrive = /drive\.google\.com/i.test(payload.assetUrl);
+
+  // Otimização: URLs já públicas (ex: Supabase storage de revisão) não precisam de re-download/upload.
+  // Apenas Drive requer download + reupload (acesso autenticado).
+  if (!isDrive && payload.assetUrl.startsWith("https://")) {
+    const headRes = await fetch(payload.assetUrl, { method: "HEAD" }).catch(() => null);
+    if (headRes?.ok) {
+      const contentType = (headRes.headers.get("content-type") || "").split(";")[0].trim();
+      if (contentType.startsWith("video/")) {
+        // Vídeos públicos: usar URL diretamente — evita download/reupload que pode exceder timeout
+        return { publicUrl: payload.assetUrl, contentType, buffer: Buffer.alloc(0) };
+      }
+      if (contentType.startsWith("image/")) {
+        // Imagens: baixar apenas os primeiros bytes para validar dimensões de Story
+        const rangeRes = await fetch(payload.assetUrl, { headers: { Range: "bytes=0-65535" } }).catch(() => null);
+        const chunk = rangeRes && (rangeRes.ok || rangeRes.status === 206)
+          ? Buffer.from(await rangeRes.arrayBuffer())
+          : Buffer.alloc(0);
+        return { publicUrl: payload.assetUrl, contentType, buffer: chunk };
+      }
+    }
+  }
+
+  // Drive ou URL não pública: download completo + reupload para Supabase público
   const file = isDrive ? await fetchDriveFile(context, payload.assetUrl) : await fetchDirectFile(payload.assetUrl);
   const contentType = file.contentType.split(";")[0] || "application/octet-stream";
 

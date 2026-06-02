@@ -13318,7 +13318,7 @@ function PublishModal({
                 setPostPublications?.((current) => [newPub, ...current]);
               }
             } else {
-              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar no Instagram." });
+              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? (res.status === 504 ? "Tempo limite excedido. Vídeos do Drive podem demorar — tente enviar o arquivo diretamente na revisão." : `Erro ao publicar no Instagram (HTTP ${res.status}).`) });
             }
           } catch {
             updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
