@@ -90,7 +90,7 @@ import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import { connectInstagramToken, disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
-import { buildSaoPauloDateTime, formatSaoPauloSchedule } from "@/lib/app-time";
+import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
 import {
   type AppData,
   deleteCampaign,
@@ -13146,6 +13146,11 @@ function PublishModal({
   const [scheduledTime, setScheduledTime] = useState(post.publishAt?.slice(11, 16) ?? "09:00");
   const [selectedAssetId, setSelectedAssetId] = useState(approvedAssets[0]?.id ?? "");
 
+  // Detecta se o horário de agendamento é inválido (passado ou < 2 min no futuro)
+  const scheduledAtPreview = publishMode === "scheduled" ? buildSaoPauloDateTime(scheduledDate, scheduledTime) : null;
+  const scheduledDateTimePreview = scheduledAtPreview ? parseSaoPauloDateTime(scheduledAtPreview) : null;
+  const scheduledIsPastPreview = scheduledDateTimePreview !== null && scheduledDateTimePreview.getTime() <= Date.now() + 2 * 60_000;
+
   const selectedAsset = approvedAssets.find((a) => a.id === selectedAssetId) ?? approvedAssets[0];
   const selectedAssetKind = inferPublishAssetKind(selectedAsset);
 
@@ -13225,6 +13230,9 @@ function PublishModal({
     const token = sessionData?.session?.access_token;
     if (!token) return;
     const scheduledAt = publishMode === "scheduled" ? buildSaoPauloDateTime(scheduledDate, scheduledTime) : null;
+    const scheduledDateTime = scheduledAt ? parseSaoPauloDateTime(scheduledAt) : null;
+    const scheduledIsPast = scheduledDateTime !== null && scheduledDateTime.getTime() <= Date.now() + 2 * 60_000;
+    const effectiveScheduledAt = scheduledIsPast ? null : scheduledAt;
     setChannelConfigs((prev) => prev.map((c) => {
       if (!c.enabled) return c;
       const platform = publishPlatformKey(channelById.get(c.channelId)?.name ?? "");
@@ -13242,11 +13250,11 @@ function PublishModal({
             const res = await fetch("/api/google/youtube/publish", {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt, thumbnailUrl: effectiveThumbnailUrl, postId: post.id, allowDuplicate: allowDuplicateForPlatform }),
+              body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt: effectiveScheduledAt, thumbnailUrl: effectiveThumbnailUrl, postId: post.id, allowDuplicate: allowDuplicateForPlatform }),
             });
             if (res.ok) {
               const { videoId, privacyStatus } = await res.json() as { videoId: string; privacyStatus?: string };
-              const newStatus = (privacyStatus === "private" && scheduledAt) ? "Agendado" : "Publicado";
+              const newStatus = (privacyStatus === "private" && effectiveScheduledAt) ? "Agendado" : "Publicado";
               updateConfig(config.channelId, { status: "success" });
               setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishedVideoId: videoId, status: newStatus, publishedAt: new Date().toISOString() } : p));
             } else {
@@ -13275,7 +13283,7 @@ function PublishModal({
                 title: config.title,
                 caption: instagramCaption,
                 format: config.format,
-                scheduledAt,
+                scheduledAt: effectiveScheduledAt,
                 thumbnailUrl: instagramThumbnailUrl,
                 allowDuplicate: allowDuplicateForPlatform,
               }),
@@ -13308,7 +13316,7 @@ function PublishModal({
                   format: data.effectiveFormat ?? config.format,
                   assetUrl: selectedAsset.url,
                   thumbnailUrl: effectiveThumbnailUrl ?? undefined,
-                  scheduledAt: data.scheduledAt ?? scheduledAt ?? undefined,
+                  scheduledAt: data.scheduledAt ?? effectiveScheduledAt ?? undefined,
                   title: config.title ?? "",
                   caption: config.description ?? "",
                   attempts: 0,
@@ -13388,9 +13396,14 @@ function PublishModal({
         {publishMode === "scheduled" && (
           <>
             <div className="flex gap-3">
-              <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
-              <input type="time" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500" />
+              <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} className={`flex-1 rounded-2xl border bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500 ${scheduledIsPastPreview ? "border-amber-300" : "border-slate-200"}`} />
+              <input type="time" value={scheduledTime} onChange={(e) => setScheduledTime(e.target.value)} className={`rounded-2xl border bg-white px-3 py-2 text-sm font-black outline-none focus:border-blue-500 ${scheduledIsPastPreview ? "border-amber-300" : "border-slate-200"}`} />
             </div>
+            {scheduledIsPastPreview && (
+              <p className="mt-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700">
+                ⚠ O horário selecionado já passou ou está muito próximo. Se publicar, o post será publicado agora.
+              </p>
+            )}
           </>
         )}
       </section>

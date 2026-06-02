@@ -165,8 +165,82 @@ async function preparePublicAsset(context: MetaRequestContext, payload: Instagra
     }
   }
 
-  // Drive ou URL não pública: download completo + reupload para Supabase público
-  const file = isDrive ? await fetchDriveFile(context, payload.assetUrl) : await fetchDirectFile(payload.assetUrl);
+  // Drive: busca metadados primeiro para saber o tipo antes de baixar
+  if (isDrive) {
+    const fileId = extractDriveFileId(payload.assetUrl);
+    if (!fileId) throw new Error("Link do Google Drive invalido.");
+
+    let driveToken: string;
+    try {
+      driveToken = await getGoogleAccessToken(context, "drive");
+    } catch (e) {
+      throw new Error(e instanceof Error ? e.message : "Google Drive nao conectado.");
+    }
+
+    const metaRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?fields=name,mimeType`, {
+      headers: { Authorization: `Bearer ${driveToken}` }
+    });
+    const meta = await metaRes.json().catch(() => ({}));
+    if (!metaRes.ok) throw new Error(meta?.error?.message ?? "Erro ao ler arquivo do Drive.");
+
+    const contentType = String(meta?.mimeType || "application/octet-stream").split(";")[0];
+    if (!contentType.startsWith("image/") && !contentType.startsWith("video/")) {
+      throw new Error("O Instagram aceita apenas imagem ou vídeo neste fluxo.");
+    }
+
+    await ensurePublicBucket(context.service);
+    const ext = extensionForContentType(contentType);
+    const filePath = `${context.organizationId}/${Date.now()}-${randomUUID()}.${ext}`;
+
+    if (contentType.startsWith("video/")) {
+      // Vídeos do Drive: streaming direto para o Supabase via HTTP para evitar OOM
+      const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+        headers: { Authorization: `Bearer ${driveToken}` }
+      });
+      if (!fileRes.ok) throw new Error("Erro ao baixar arquivo do Drive.");
+
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
+      const uploadEndpoint = `${supabaseUrl}/storage/v1/object/${PUBLICATION_BUCKET}/${filePath}`;
+
+      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+      // @ts-ignore — duplex necessário para streaming de request body no Node.js
+      const uploadRes = await fetch(uploadEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": contentType, Authorization: `Bearer ${serviceKey}`, apikey: serviceKey },
+        body: fileRes.body,
+        duplex: "half",
+      } as RequestInit);
+
+      if (!uploadRes.ok) {
+        const errData = await uploadRes.json().catch(() => ({})) as { message?: string; error?: string };
+        throw new Error(`Erro ao preparar arquivo publico: ${errData.message || errData.error || `HTTP ${uploadRes.status}`}`);
+      }
+
+      const publicUrl = context.service.storage.from(PUBLICATION_BUCKET).getPublicUrl(filePath).data.publicUrl;
+      if (!publicUrl) throw new Error("Não foi possível gerar URL pública para a Meta.");
+      return { publicUrl, contentType, buffer: Buffer.alloc(0) };
+    }
+
+    // Imagens do Drive: download completo necessário para validar dimensões de Story
+    const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+      headers: { Authorization: `Bearer ${driveToken}` }
+    });
+    if (!fileRes.ok) throw new Error("Erro ao baixar arquivo do Drive.");
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
+
+    const { error } = await context.service.storage
+      .from(PUBLICATION_BUCKET)
+      .upload(filePath, buffer, { contentType, upsert: false });
+    if (error) throw new Error(`Erro ao preparar arquivo publico: ${error.message}`);
+
+    const publicUrl = context.service.storage.from(PUBLICATION_BUCKET).getPublicUrl(filePath).data.publicUrl;
+    if (!publicUrl) throw new Error("Não foi possível gerar URL pública para a Meta.");
+    return { publicUrl, contentType, buffer };
+  }
+
+  // URL não-pública que passou pela verificação HEAD: download + reupload
+  const file = await fetchDirectFile(payload.assetUrl);
   const contentType = file.contentType.split(";")[0] || "application/octet-stream";
 
   if (!contentType.startsWith("image/") && !contentType.startsWith("video/")) {
