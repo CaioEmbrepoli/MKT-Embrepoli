@@ -3050,16 +3050,23 @@ const salesSourceLabel: Record<SalesClientSource, string> = {
 };
 
 const CLIENT_IMPORT_SHEET = "Page1";
-const CLIENT_IMPORT_HEADERS = ["Código", "Nome Cliente", "Tipo", "Telefone", "UF", "Municipio", "Ultima Compra"] as const;
+const CLIENT_IMPORT_HEADERS = [
+  "Código", "Nome Cliente", "Tipo", "Nome do Contato", "CPF/CNPJ",
+  "Email", "Telefone", "UF", "Municipio", "Segmento", "Ultima Compra"
+] as const;
 
 type ImportedSalesClientRow = {
   rowNumber: number;
   externalCode: string;
   name: string;
   clientType: string;
+  contactName?: string;
+  cpfCnpj?: string;
+  email?: string;
   phone: string;
   stateUf: string;
   city: string;
+  segment?: string;
   lastPurchaseAt: string;
   lastPurchaseValue?: number;
   frequency?: CallFrequency;
@@ -3142,53 +3149,50 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
   });
   const header = rows[0]?.map(cleanImportCell) ?? [];
   const coreMatch = CLIENT_IMPORT_HEADERS.every((h, i) => header[i] === h);
-  const hasResponsavelCol = header[header.length - 1] === "Responsável";
-  const effectiveLen = hasResponsavelCol ? header.length - 1 : header.length;
-  const hasValueCol = header[7] === "Valor Ultima Compra";
-  const hasFreqCol =
-    (effectiveLen === 8 && header[7] === "Frequência") ||
-    (effectiveLen === 9 && hasValueCol && header[8] === "Frequência");
-  const validHeaders = coreMatch && (
-    effectiveLen === 7 ||
-    (effectiveLen === 8 && (hasValueCol || header[7] === "Frequência")) ||
-    (effectiveLen === 9 && hasValueCol && header[8] === "Frequência")
-  );
-  if (!validHeaders) {
+  const allowedOptionals = new Set(["Valor Ultima Compra", "Frequência", "Responsável"]);
+  const extraHeaders = header.slice(CLIENT_IMPORT_HEADERS.length).filter(h => h && !allowedOptionals.has(h));
+  if (!coreMatch || extraHeaders.length > 0) {
     throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")} (+ opcionais "Valor Ultima Compra", "Frequência" e "Responsável").`);
   }
 
-  const freqColIndex = hasValueCol ? 8 : 7;
-  const responsavelColIndex = hasFreqCol ? freqColIndex + 1 : (hasValueCol ? 8 : 7);
-  const maxCols = (hasFreqCol ? (hasValueCol ? 9 : 8) : (hasValueCol ? 8 : 7)) + (hasResponsavelCol ? 1 : 0);
+  const valueColIndex       = header.indexOf("Valor Ultima Compra");
+  const freqColIndex        = header.indexOf("Frequência");
+  const responsavelColIndex = header.indexOf("Responsável");
+  const hasValueCol    = valueColIndex >= 0;
+  const hasFreqCol     = freqColIndex >= 0;
+  const hasResponsavelCol = responsavelColIndex >= 0;
+
   const seenCodes = new Set<string>();
   const imported: ImportedSalesClientRow[] = [];
   rows.slice(1).forEach((row, index) => {
     const rowNumber = index + 2;
-    const extraValues = (row as unknown[]).slice(maxCols).some((cell) => cleanImportCell(cell));
-    if (extraValues) throw new Error(`Linha ${rowNumber}: o arquivo tem colunas extras e foi recusado.`);
-    const values = (row as unknown[]).slice(0, 7).map(cleanImportCell);
-    if (values.every((value) => !value)) return;
-    const [externalCode, name, clientType, phone, stateUf, city] = values;
-    if (!externalCode) throw new Error(`Linha ${rowNumber}: Código é obrigatório.`);
+    const cells = row as unknown[];
+    const values = cells.slice(0, CLIENT_IMPORT_HEADERS.length).map(cleanImportCell);
+    if (values.every((v) => !v)) return;
+    const [externalCode, name, clientType, contactName, cpfCnpj, email, phone, stateUf, city, segment] = values;
     if (!name) throw new Error(`Linha ${rowNumber}: Nome Cliente é obrigatório.`);
-    if (seenCodes.has(externalCode)) throw new Error(`Código duplicado no arquivo: ${externalCode}.`);
-    seenCodes.add(externalCode);
-    const valueRaw = hasValueCol ? cleanImportCell((row as unknown[])[7]) : "";
+    if (externalCode && seenCodes.has(externalCode)) throw new Error(`Código duplicado no arquivo: ${externalCode}.`);
+    if (externalCode) seenCodes.add(externalCode);
+    const valueRaw = hasValueCol ? cleanImportCell(cells[valueColIndex]) : "";
     const lastPurchaseValue = valueRaw
       ? parseFloat(valueRaw.replace(/[^\d,.]/g, "").replace(",", ".")) || undefined
       : undefined;
-    const freqRaw = hasFreqCol ? cleanImportCell((row as unknown[])[freqColIndex]) : "";
+    const freqRaw = hasFreqCol ? cleanImportCell(cells[freqColIndex]) : "";
     const frequency = freqRaw ? (parseFrequency(freqRaw) ?? undefined) : undefined;
-    const assignedToName = hasResponsavelCol ? cleanImportCell((row as unknown[])[responsavelColIndex]) : undefined;
+    const assignedToName = hasResponsavelCol ? cleanImportCell(cells[responsavelColIndex]) : undefined;
     imported.push({
       rowNumber,
       externalCode,
       name,
       clientType,
+      contactName: contactName || undefined,
+      cpfCnpj: cpfCnpj || undefined,
+      email: email || undefined,
       phone,
       stateUf: stateUf.toUpperCase(),
       city,
-      lastPurchaseAt: parseClientImportDate((row as unknown[])[6], rowNumber),
+      segment: segment || undefined,
+      lastPurchaseAt: parseClientImportDate(cells[10], rowNumber),
       lastPurchaseValue,
       frequency,
       assignedToName: assignedToName || undefined
@@ -3201,26 +3205,103 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
 
 async function exportClientTemplate(salesProfiles: { id: string; name: string }[]) {
   const { Workbook } = await import("exceljs");
-  const workbook = new Workbook();
-  const sheet = workbook.addWorksheet(CLIENT_IMPORT_SHEET);
+  const wb = new Workbook();
+  const ws = wb.addWorksheet(CLIENT_IMPORT_SHEET);
 
-  const headers = [...CLIENT_IMPORT_HEADERS, "Valor Ultima Compra", "Frequência", "Responsável"];
-  sheet.addRow(headers);
-  sheet.getRow(1).font = { bold: true };
+  // ── Definição de colunas ────────────────────────────────────────────────────
+  type ColDef = { h: string; req: boolean; drop: boolean; width: number };
+  const colDefs: ColDef[] = [
+    { h: "Código",              req: false, drop: false, width: 10 },
+    { h: "Nome Cliente",        req: true,  drop: false, width: 24 },
+    { h: "Tipo",                req: false, drop: true,  width: 8  },
+    { h: "Nome do Contato",     req: false, drop: false, width: 22 },
+    { h: "CPF/CNPJ",            req: false, drop: false, width: 16 },
+    { h: "Email",               req: false, drop: false, width: 26 },
+    { h: "Telefone",            req: false, drop: false, width: 17 },
+    { h: "UF",                  req: false, drop: false, width: 6  },
+    { h: "Municipio",           req: false, drop: false, width: 20 },
+    { h: "Segmento",            req: false, drop: false, width: 20 },
+    { h: "Ultima Compra",       req: false, drop: false, width: 15 },
+    { h: "Valor Ultima Compra", req: false, drop: false, width: 15 },
+    { h: "Frequência",          req: false, drop: true,  width: 13 },
+    { h: "Responsável",         req: false, drop: true,  width: 20 },
+  ];
 
-  if (salesProfiles.length > 0) {
-    const vendSheet = workbook.addWorksheet("Vendedores", { state: "veryHidden" });
-    salesProfiles.forEach((p, i) => { vendSheet.getCell(i + 1, 1).value = p.name; });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (sheet as any).dataValidations.add("J2:J10000", {
-      type: "list",
-      allowBlank: true,
-      formulae: [`Vendedores!$A$1:$A$${salesProfiles.length}`],
-      showErrorMessage: false,
-    });
+  const reqFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFBBF24" } };
+  const optFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFF1F5F9" } };
+  const dropFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFBFDBFE" } };
+  const border   = { style: "thin" as const, color: { argb: "FFD1D5DB" } };
+  const cellBorder = { top: border, left: border, bottom: border, right: border };
+
+  // ── Cabeçalhos com cor ─────────────────────────────────────────────────────
+  ws.addRow(colDefs.map(c => c.h));
+  colDefs.forEach((c, i) => {
+    const cell = ws.getCell(1, i + 1);
+    cell.font = { bold: true, size: 10 };
+    cell.fill = c.req ? reqFill : c.drop ? dropFill : optFill;
+    cell.border = cellBorder;
+    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    ws.getColumn(i + 1).width = c.width;
+  });
+  ws.getRow(1).height = 28;
+
+  // ── Dropdowns ──────────────────────────────────────────────────────────────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dv = (ws as any).dataValidations;
+  dv.add("C2:C10000", { type: "list", allowBlank: true, formulae: ['"PF,PJ"'], showErrorMessage: false });
+  dv.add("M2:M10000", { type: "list", allowBlank: true, formulae: ['"Diário,Semanal,Quinzenal,Mensal"'], showErrorMessage: false });
+
+  // ── Aba oculta + dropdown de Responsável ───────────────────────────────────
+  const allVend = [{ name: "Sem responsável" }, ...salesProfiles];
+  const vendWs = wb.addWorksheet("Vendedores", { state: "veryHidden" });
+  allVend.forEach((p, i) => { vendWs.getCell(i + 1, 1).value = p.name; });
+  dv.add("N2:N10000", {
+    type: "list", allowBlank: true,
+    formulae: [`Vendedores!$A$1:$A$${allVend.length}`],
+    showErrorMessage: false,
+  });
+
+  // ── Painel lateral — Legenda + Dúvidas (col P = 16) ───────────────────────
+  const panelCol = 16;
+  const panelWidth = 52;
+  ws.getColumn(panelCol).width = panelWidth;
+
+  function panelCell(row: number, text: string, opts?: { bold?: boolean; fill?: typeof reqFill; size?: number; color?: string }) {
+    const c = ws.getCell(row, panelCol);
+    c.value = text;
+    c.font = { bold: opts?.bold ?? false, size: opts?.size ?? 10, color: { argb: opts?.color ?? "FF374151" } };
+    if (opts?.fill) c.fill = opts.fill;
+    c.alignment = { vertical: "middle", wrapText: true };
+    c.border = cellBorder;
+    ws.getRow(row).height = 18;
   }
 
-  const buffer = await workbook.xlsx.writeBuffer();
+  // Legenda
+  panelCell(1,  "LEGENDA",                          { bold: true, size: 11, color: "FF111827" });
+  panelCell(2,  "  Obrigatório — deve ser preenchido",        { fill: reqFill });
+  panelCell(3,  "  Opcional — pode deixar em branco",         { fill: optFill });
+  panelCell(4,  "  Tem seleção automática (dropdown)",        { fill: dropFill });
+  panelCell(5,  "");
+
+  // Dúvidas
+  panelCell(6,  "O QUE É CADA COLUNA",              { bold: true, size: 11, color: "FF111827" });
+  panelCell(7,  "Código — ID único no seu sistema. Se deixar vazio, o sistema identifica o cliente pelo Nome + Telefone.");
+  panelCell(8,  "Nome Cliente — Nome da pessoa ou da empresa.");
+  panelCell(9,  "Tipo — PF = Pessoa Física  |  PJ = Pessoa Jurídica");
+  panelCell(10, "Nome do Contato — Para PJ: nome do responsável dentro da empresa que você vai ligar.");
+  panelCell(11, "CPF/CNPJ — Documento do cliente. Pode digitar com ou sem formatação.");
+  panelCell(12, "Email — Endereço de e-mail do cliente.");
+  panelCell(13, "Telefone — Com DDD. Ex: 41 99999-0000");
+  panelCell(14, "UF — Sigla do estado. Ex: PR, SP, SC");
+  panelCell(15, "Municipio — Cidade do cliente.");
+  panelCell(16, "Segmento — Ramo de atuação. Ex: Auto Center, Agro, Indústria");
+  panelCell(17, "Ultima Compra — Data da última compra no formato DD/MM/AAAA. Deixar vazio se nunca comprou.");
+  panelCell(18, "Valor Ultima Compra — Valor em reais da última compra. Ex: 1500.00");
+  panelCell(19, "Frequência — Com que frequência ligar para este cliente: Diário, Semanal, Quinzenal ou Mensal.");
+  panelCell(20, "Responsável — Vendedor responsável pelo acompanhamento deste cliente.");
+
+  // ── Download ───────────────────────────────────────────────────────────────
+  const buffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -3234,15 +3315,18 @@ function importedRowToSalesClient(row: ImportedSalesClientRow, profilesByName?: 
   const assignedTo = row.assignedToName && profilesByName
     ? (profilesByName.get(row.assignedToName.trim().toLowerCase()) ?? "")
     : "";
+  const isPJ = row.clientType?.toUpperCase() === "PJ";
   return {
     id: crypto.randomUUID(),
     externalCode: row.externalCode,
     name: row.name,
     clientType: row.clientType,
-    email: "",
+    email: row.email ?? "",
     phone: row.phone,
-    company: "",
-    segment: "",
+    company: row.contactName ?? "",
+    segment: row.segment ?? "",
+    cpf:  !isPJ ? (row.cpfCnpj ?? undefined) : undefined,
+    cnpj:  isPJ ? (row.cpfCnpj ?? undefined) : undefined,
     stateUf: row.stateUf,
     city: row.city,
     lastPurchaseAt: row.lastPurchaseAt,
@@ -3274,15 +3358,10 @@ function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSal
   const result: SalesClientImportResult = { rows: imported.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0, schedulesCreated: 0 };
   const next = current.map(normalizeSalesClient);
   const indexByKey = new Map(next.map((client, index) => [salesClientImportKey(client), index]));
-  const importFields: (keyof Pick<SalesClient, "externalCode" | "name" | "clientType" | "phone" | "stateUf" | "city" | "lastPurchaseAt" | "lastPurchaseValue">)[] = [
-    "externalCode",
-    "name",
-    "clientType",
-    "phone",
-    "stateUf",
-    "city",
-    "lastPurchaseAt",
-    "lastPurchaseValue"
+  const importFields: (keyof Pick<SalesClient, "externalCode" | "name" | "clientType" | "phone" | "email" | "company" | "segment" | "cpf" | "cnpj" | "stateUf" | "city" | "lastPurchaseAt" | "lastPurchaseValue">)[] = [
+    "externalCode", "name", "clientType", "phone",
+    "email", "company", "segment", "cpf", "cnpj",
+    "stateUf", "city", "lastPurchaseAt", "lastPurchaseValue"
   ];
 
   imported.forEach((row) => {
