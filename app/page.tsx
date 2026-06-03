@@ -3199,30 +3199,35 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
   return imported;
 }
 
-function exportClientTemplate(salesProfiles: { id: string; name: string }[]) {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([[...CLIENT_IMPORT_HEADERS, "Valor Ultima Compra", "Frequência", "Responsável"]]);
-  XLSX.utils.book_append_sheet(wb, ws, CLIENT_IMPORT_SHEET);
+async function exportClientTemplate(salesProfiles: { id: string; name: string }[]) {
+  const { Workbook } = await import("exceljs");
+  const workbook = new Workbook();
+  const sheet = workbook.addWorksheet(CLIENT_IMPORT_SHEET);
+
+  const headers = [...CLIENT_IMPORT_HEADERS, "Valor Ultima Compra", "Frequência", "Responsável"];
+  sheet.addRow(headers);
+  sheet.getRow(1).font = { bold: true };
 
   if (salesProfiles.length > 0) {
-    const vendSheet = XLSX.utils.aoa_to_sheet(salesProfiles.map((p) => [p.name]));
-    XLSX.utils.book_append_sheet(wb, vendSheet, "Vendedores");
-    const wbProps = wb.Workbook ?? {};
-    wb.Workbook = wbProps;
-    if (!wbProps.Sheets) wbProps.Sheets = [];
-    while (wbProps.Sheets.length < wb.SheetNames.length) wbProps.Sheets.push({});
-    wbProps.Sheets[1] = { Hidden: 1 };
+    const vendSheet = workbook.addWorksheet("Vendedores", { state: "veryHidden" });
+    salesProfiles.forEach((p, i) => { vendSheet.getCell(i + 1, 1).value = p.name; });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (ws as any)["!dataValidation"] = [{
+    (sheet as any).dataValidations.add("J2:J10000", {
       type: "list",
-      sqref: "J2:J10000",
-      formula1: `Vendedores!$A$1:$A$${salesProfiles.length}`,
-      showDropDown: false,
+      allowBlank: true,
+      formulae: [`Vendedores!$A$1:$A$${salesProfiles.length}`],
       showErrorMessage: false,
-    }];
+    });
   }
 
-  XLSX.writeFile(wb, "modelo-clientes.xlsx");
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "modelo-clientes.xlsx";
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function importedRowToSalesClient(row: ImportedSalesClientRow, profilesByName?: Map<string, string>): SalesClient {
@@ -3829,7 +3834,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
         <PlanilhaModal
           onImport={importClients}
           onClose={() => setShowImportModal(false)}
-          salesProfiles={profiles.filter((p) => p.active)}
+          salesProfiles={profiles.filter((p) => p.active && profileAreas.some((pa) => pa.profileId === p.id && pa.area === "vendas" && pa.active))}
         />
       )}
     </Panel>
@@ -3961,7 +3966,7 @@ function PlanilhaModal({ onImport, onClose, salesProfiles }: {
             <p className="font-black text-slate-900">Exportar Modelo</p>
             <p className="mt-1 text-sm font-bold text-slate-500">Baixe a planilha template vazia com os cabeçalhos corretos para preenchimento.</p>
           </div>
-          <button type="button" onClick={() => exportClientTemplate(salesProfiles)}
+          <button type="button" onClick={async () => exportClientTemplate(salesProfiles)}
             className="mt-auto w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">
             Baixar modelo .xlsx
           </button>
