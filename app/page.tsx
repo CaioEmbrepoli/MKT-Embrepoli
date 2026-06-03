@@ -3063,6 +3063,7 @@ type ImportedSalesClientRow = {
   lastPurchaseAt: string;
   lastPurchaseValue?: number;
   frequency?: CallFrequency;
+  assignedToName?: string;
 };
 
 type SalesClientImportResult = {
@@ -3129,8 +3130,8 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
 
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
-  if (workbook.SheetNames.length !== 1 || workbook.SheetNames[0] !== CLIENT_IMPORT_SHEET) {
-    throw new Error(`Arquivo inválido. A planilha precisa ter somente a aba "${CLIENT_IMPORT_SHEET}".`);
+  if (!workbook.SheetNames.includes(CLIENT_IMPORT_SHEET)) {
+    throw new Error(`Arquivo inválido. A planilha precisa ter a aba "${CLIENT_IMPORT_SHEET}".`);
   }
 
   const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[CLIENT_IMPORT_SHEET], {
@@ -3141,20 +3142,24 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
   });
   const header = rows[0]?.map(cleanImportCell) ?? [];
   const coreMatch = CLIENT_IMPORT_HEADERS.every((h, i) => header[i] === h);
+  const hasResponsavelCol = header[header.length - 1] === "Responsável";
+  const effectiveLen = hasResponsavelCol ? header.length - 1 : header.length;
   const hasValueCol = header[7] === "Valor Ultima Compra";
   const hasFreqCol =
-    (header.length === 8 && header[7] === "Frequência") ||
-    (header.length === 9 && hasValueCol && header[8] === "Frequência");
+    (effectiveLen === 8 && header[7] === "Frequência") ||
+    (effectiveLen === 9 && hasValueCol && header[8] === "Frequência");
   const validHeaders = coreMatch && (
-    header.length === 7 ||
-    (header.length === 8 && (hasValueCol || header[7] === "Frequência")) ||
-    (header.length === 9 && hasValueCol && header[8] === "Frequência")
+    effectiveLen === 7 ||
+    (effectiveLen === 8 && (hasValueCol || header[7] === "Frequência")) ||
+    (effectiveLen === 9 && hasValueCol && header[8] === "Frequência")
   );
   if (!validHeaders) {
-    throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")} (+ colunas opcionais "Valor Ultima Compra" e/ou "Frequência").`);
+    throw new Error(`Arquivo inválido. Cabeçalhos esperados: ${CLIENT_IMPORT_HEADERS.join(", ")} (+ opcionais "Valor Ultima Compra", "Frequência" e "Responsável").`);
   }
 
-  const maxCols = hasFreqCol ? (hasValueCol ? 9 : 8) : (hasValueCol ? 8 : 7);
+  const freqColIndex = hasValueCol ? 8 : 7;
+  const responsavelColIndex = hasFreqCol ? freqColIndex + 1 : (hasValueCol ? 8 : 7);
+  const maxCols = (hasFreqCol ? (hasValueCol ? 9 : 8) : (hasValueCol ? 8 : 7)) + (hasResponsavelCol ? 1 : 0);
   const seenCodes = new Set<string>();
   const imported: ImportedSalesClientRow[] = [];
   rows.slice(1).forEach((row, index) => {
@@ -3172,9 +3177,9 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
     const lastPurchaseValue = valueRaw
       ? parseFloat(valueRaw.replace(/[^\d,.]/g, "").replace(",", ".")) || undefined
       : undefined;
-    const freqColIndex = hasValueCol ? 8 : 7;
     const freqRaw = hasFreqCol ? cleanImportCell((row as unknown[])[freqColIndex]) : "";
     const frequency = freqRaw ? (parseFrequency(freqRaw) ?? undefined) : undefined;
+    const assignedToName = hasResponsavelCol ? cleanImportCell((row as unknown[])[responsavelColIndex]) : undefined;
     imported.push({
       rowNumber,
       externalCode,
@@ -3185,7 +3190,8 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
       city,
       lastPurchaseAt: parseClientImportDate((row as unknown[])[6], rowNumber),
       lastPurchaseValue,
-      frequency
+      frequency,
+      assignedToName: assignedToName || undefined
     });
   });
 
@@ -3193,14 +3199,36 @@ async function parseSalesClientsWorkbook(file: File): Promise<ImportedSalesClien
   return imported;
 }
 
-function exportClientTemplate() {
+function exportClientTemplate(salesProfiles: { id: string; name: string }[]) {
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([[...CLIENT_IMPORT_HEADERS, "Valor Ultima Compra", "Frequência"]]);
+  const ws = XLSX.utils.aoa_to_sheet([[...CLIENT_IMPORT_HEADERS, "Valor Ultima Compra", "Frequência", "Responsável"]]);
   XLSX.utils.book_append_sheet(wb, ws, CLIENT_IMPORT_SHEET);
+
+  if (salesProfiles.length > 0) {
+    const vendSheet = XLSX.utils.aoa_to_sheet(salesProfiles.map((p) => [p.name]));
+    XLSX.utils.book_append_sheet(wb, vendSheet, "Vendedores");
+    const wbProps = wb.Workbook ?? {};
+    wb.Workbook = wbProps;
+    if (!wbProps.Sheets) wbProps.Sheets = [];
+    while (wbProps.Sheets.length < wb.SheetNames.length) wbProps.Sheets.push({});
+    wbProps.Sheets[1] = { Hidden: 1 };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (ws as any)["!dataValidation"] = [{
+      type: "list",
+      sqref: "J2:J10000",
+      formula1: `Vendedores!$A$1:$A$${salesProfiles.length}`,
+      showDropDown: false,
+      showErrorMessage: false,
+    }];
+  }
+
   XLSX.writeFile(wb, "modelo-clientes.xlsx");
 }
 
-function importedRowToSalesClient(row: ImportedSalesClientRow): SalesClient {
+function importedRowToSalesClient(row: ImportedSalesClientRow, profilesByName?: Map<string, string>): SalesClient {
+  const assignedTo = row.assignedToName && profilesByName
+    ? (profilesByName.get(row.assignedToName.trim().toLowerCase()) ?? "")
+    : "";
   return {
     id: crypto.randomUUID(),
     externalCode: row.externalCode,
@@ -3216,7 +3244,7 @@ function importedRowToSalesClient(row: ImportedSalesClientRow): SalesClient {
     lastPurchaseValue: row.lastPurchaseValue,
     status: row.lastPurchaseAt ? "cliente" : "lead",
     source: "manual",
-    assignedTo: "",
+    assignedTo,
     notes: "",
     proposals: [],
     salesFunnelStage: "lead",
@@ -3237,7 +3265,7 @@ function normalizeSalesClient(client: SalesClient): SalesClient {
   };
 }
 
-function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSalesClientRow[]): { next: SalesClient[]; result: SalesClientImportResult } {
+function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSalesClientRow[], profilesByName?: Map<string, string>): { next: SalesClient[]; result: SalesClientImportResult } {
   const result: SalesClientImportResult = { rows: imported.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0, schedulesCreated: 0 };
   const next = current.map(normalizeSalesClient);
   const indexByKey = new Map(next.map((client, index) => [salesClientImportKey(client), index]));
@@ -3253,7 +3281,7 @@ function mergeImportedSalesClients(current: SalesClient[], imported: ImportedSal
   ];
 
   imported.forEach((row) => {
-    const importedClient = importedRowToSalesClient(row);
+    const importedClient = importedRowToSalesClient(row, profilesByName);
     const key = salesClientImportKey(importedClient);
     const existingIndex = indexByKey.get(key);
     if (existingIndex === undefined) {
@@ -3606,9 +3634,11 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
   }
 
   function importClients(rows: ImportedSalesClientRow[]): SalesClientImportResult {
+    const salesProfiles = profiles.filter((p) => p.active && profileAreas.some((pa) => pa.profileId === p.id && pa.area === "vendas" && pa.active));
+    const profilesByName = new Map(salesProfiles.map((p) => [p.name.trim().toLowerCase(), p.id]));
     let result: SalesClientImportResult = { rows: rows.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0, schedulesCreated: 0 };
     setSalesClients((prev) => {
-      const merged = mergeImportedSalesClients(prev, rows);
+      const merged = mergeImportedSalesClients(prev, rows, profilesByName);
       result = { ...merged.result, schedulesCreated: 0 };
 
       // Criar agendas de ligação para linhas com frequência
@@ -3800,6 +3830,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
         <PlanilhaModal
           onImport={importClients}
           onClose={() => setShowImportModal(false)}
+          salesProfiles={profiles.filter((p) => p.active && profileAreas.some((pa) => pa.profileId === p.id && pa.area === "vendas" && pa.active))}
         />
       )}
     </Panel>
@@ -3884,9 +3915,10 @@ function QuickScheduleModal({ client, currentUser, profiles, onSave, onClose }: 
   );
 }
 
-function PlanilhaModal({ onImport, onClose }: {
+function PlanilhaModal({ onImport, onClose, salesProfiles }: {
   onImport: (rows: ImportedSalesClientRow[]) => SalesClientImportResult;
   onClose: () => void;
+  salesProfiles: { id: string; name: string }[];
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -3930,7 +3962,7 @@ function PlanilhaModal({ onImport, onClose }: {
             <p className="font-black text-slate-900">Exportar Modelo</p>
             <p className="mt-1 text-sm font-bold text-slate-500">Baixe a planilha template vazia com os cabeçalhos corretos para preenchimento.</p>
           </div>
-          <button type="button" onClick={exportClientTemplate}
+          <button type="button" onClick={() => exportClientTemplate(salesProfiles)}
             className="mt-auto w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800">
             Baixar modelo .xlsx
           </button>
