@@ -7,6 +7,7 @@ export const GOOGLE_SCOPES_BY_SERVICE: Record<GoogleService, string[]> = {
   drive: ["https://www.googleapis.com/auth/drive.readonly"],
   youtube: [
     "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
     "https://www.googleapis.com/auth/yt-analytics.readonly"
   ]
