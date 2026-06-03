@@ -71,93 +71,40 @@ export async function POST(request: Request) {
         }
       }
 
-      const isStory = (body.format ?? "").toLowerCase().includes("story");
+      // Todos os formatos (Story, Feed, Reels) usam QStash para agendamento confiável.
+      // O agendamento nativo da Meta para Feed/Reels estava falhando com erros genéricos.
+      const qstashToken = process.env.QSTASH_TOKEN;
+      if (!qstashToken) throw new Error("QSTASH_TOKEN nao configurado. Adicione nas env vars da Vercel.");
 
-      let effectiveFormat: string = body.format ?? "Feed";
-      let externalId: string | null = null;
+      const normalizedFormat = (body.format ?? "Feed");
+      const publicationId = randomUUID();
+      const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
+      const callbackUrl = `${siteUrl}/api/cron/instagram-publications`;
 
-      if (isStory) {
-        // Stories não suportam agendamento nativo da Meta → usa QStash para disparar no horário certo
-        const qstashToken = process.env.QSTASH_TOKEN;
-        if (!qstashToken) throw new Error("QSTASH_TOKEN nao configurado. Adicione nas env vars da Vercel.");
-
-        const publicationId = randomUUID();
-        const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
-        const callbackUrl = `${siteUrl}/api/cron/instagram-publications`;
-
-        // Salva no banco antes de agendar no QStash
-        const { error: insertError } = await context.service.from("post_publications").insert({
-          id: publicationId,
-          organization_id: context.organizationId,
-          post_id: body.postId,
-          platform: "instagram",
-          status: "scheduled",
-          title: body.title ?? "",
-          caption: "",
-          format: "Story",
-          asset_url: body.assetUrl,
-          thumbnail_url: null,
-          scheduled_at: scheduledAt.toISOString(),
-          attempts: 0,
-          created_by: context.userId,
-          updated_at: new Date().toISOString()
-        });
-        if (insertError) throw new Error(insertError.message);
-
-        const qstash = new QStashClient({ token: qstashToken });
-        await qstash.publishJSON({
-          url: callbackUrl,
-          body: { publicationId },
-          notBefore: Math.floor(scheduledAt.getTime() / 1000)
-        });
-
-        await context.service
-          .from("posts")
-          .update({ status: "Agendado" })
-          .eq("organization_id", context.organizationId)
-          .eq("id", body.postId);
-
-        return NextResponse.json({
-          status: "scheduled",
-          publicationId,
-          scheduledAt: scheduledAt.toISOString(),
-          effectiveFormat: "Story",
-          contentType: "video/mp4"
-        });
-      }
-
-      // Feed e Reels: agendamento nativo Meta
-      const scheduled = await scheduleInstagramMedia(context, connection, {
-        assetUrl: body.assetUrl,
-        title: body.title,
-        caption: body.caption,
-        format: body.format ?? "Feed",
-        thumbnailUrl: body.thumbnailUrl ?? null
-      }, scheduledAt);
-
-      effectiveFormat = scheduled.effectiveFormat;
-      externalId = scheduled.containerId;
-
-      const publication = {
-        id: randomUUID(),
+      const { error: insertError } = await context.service.from("post_publications").insert({
+        id: publicationId,
         organization_id: context.organizationId,
         post_id: body.postId,
         platform: "instagram",
         status: "scheduled",
         title: body.title ?? "",
-        caption: shouldPersistInstagramCaption(effectiveFormat) ? (body.caption ?? "") : "",
-        format: effectiveFormat,
+        caption: shouldPersistInstagramCaption(normalizedFormat) ? (body.caption ?? "") : "",
+        format: normalizedFormat,
         asset_url: body.assetUrl,
-        thumbnail_url: shouldPersistInstagramThumbnail(effectiveFormat) ? (body.thumbnailUrl ?? null) : null,
-        external_id: externalId,
+        thumbnail_url: shouldPersistInstagramThumbnail(normalizedFormat) ? (body.thumbnailUrl ?? null) : null,
         scheduled_at: scheduledAt.toISOString(),
         attempts: 0,
         created_by: context.userId,
         updated_at: new Date().toISOString()
-      };
-
-      const { error: insertError } = await context.service.from("post_publications").insert(publication);
+      });
       if (insertError) throw new Error(insertError.message);
+
+      const qstash = new QStashClient({ token: qstashToken });
+      await qstash.publishJSON({
+        url: callbackUrl,
+        body: { publicationId },
+        notBefore: Math.floor(scheduledAt.getTime() / 1000)
+      });
 
       await context.service
         .from("posts")
@@ -167,10 +114,10 @@ export async function POST(request: Request) {
 
       return NextResponse.json({
         status: "scheduled",
-        publicationId: publication.id,
-        scheduledAt: publication.scheduled_at,
-        effectiveFormat: scheduled.effectiveFormat,
-        contentType: scheduled.contentType
+        publicationId,
+        scheduledAt: scheduledAt.toISOString(),
+        effectiveFormat: normalizedFormat,
+        contentType: "video/mp4"
       });
     }
 
