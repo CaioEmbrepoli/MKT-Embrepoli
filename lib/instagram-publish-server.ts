@@ -464,7 +464,12 @@ async function waitForContainer(connection: InstagramPublishConnection, creation
     });
     if (status.status_code === "FINISHED") return;
     if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
-      throw new Error(status.status || "A Meta nao conseguiu processar o video.");
+      const raw = status.status || "";
+      const isGeneric = !raw || raw.toLowerCase().includes("unknown error");
+      const msg = isGeneric
+        ? "A Meta não conseguiu processar o vídeo. Verifique: formato MP4, duração mínima de 3s, áudio AAC e proporção vertical 9:16 para Reels."
+        : raw;
+      throw new Error(msg);
     }
     await new Promise((resolve) => setTimeout(resolve, 2500));
   }
@@ -547,7 +552,11 @@ export async function scheduleInstagramMedia(
   const params: Record<string, string> = { ...plan.params, published: "false", scheduled_publish_time: scheduledUnix };
 
   if (plan.effectiveFormat === "Reels" && payload.thumbnailUrl) {
-    try { params.cover_url = await prepareCoverUrl(context, payload.thumbnailUrl); } catch { /* opcional */ }
+    try {
+      const coverPublicUrl = await prepareCoverUrl(context, payload.thumbnailUrl);
+      await assertMetaCanReadUrl(coverPublicUrl);
+      params.cover_url = coverPublicUrl;
+    } catch { /* capa é opcional */ }
   }
 
   const creation = await graphPost<{ id?: string }>(
@@ -576,19 +585,39 @@ export async function publishInstagramMedia(
 
   if (plan.effectiveFormat === "Reels" && payload.thumbnailUrl) {
     try {
-      plan.params.cover_url = await prepareCoverUrl(context, payload.thumbnailUrl);
+      const coverPublicUrl = await prepareCoverUrl(context, payload.thumbnailUrl);
+      await assertMetaCanReadUrl(coverPublicUrl);
+      plan.params.cover_url = coverPublicUrl;
     } catch {
       // A capa e opcional; se falhar, continua sem cover_url.
     }
   }
 
-  const creation = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, plan.params);
+  let creation = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, plan.params);
   if (!creation.id) throw new Error("A Meta nao retornou o container de publicacao.");
-  if (plan.kind === "video") await waitForContainer(connection, creation.id);
-  else if (plan.effectiveFormat === "Story") await waitForImageStoryContainer(connection, creation.id);
+
+  if (plan.kind === "video") {
+    try {
+      await waitForContainer(connection, creation.id);
+    } catch (containerErr) {
+      // Se havia cover_url e o processamento falhou, tenta novamente sem a capa
+      if (plan.params.cover_url) {
+        const withoutCover: Record<string, string> = { ...plan.params };
+        delete withoutCover.cover_url;
+        const creation2 = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, withoutCover);
+        if (!creation2.id) throw containerErr;
+        await waitForContainer(connection, creation2.id);
+        creation = creation2;
+      } else {
+        throw containerErr;
+      }
+    }
+  } else if (plan.effectiveFormat === "Story") {
+    await waitForImageStoryContainer(connection, creation.id);
+  }
 
   const published = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media_publish`, {
-    creation_id: creation.id
+    creation_id: creation.id ?? ""
   });
   if (!published.id) throw new Error("A Meta nao retornou o ID da publicacao.");
 
