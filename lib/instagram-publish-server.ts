@@ -580,8 +580,28 @@ export async function scheduleInstagramMedia(
   });
   if (!creation.id) throw new Error("A Meta não retornou o container de agendamento.");
 
+  // Aguarda a Meta processar o vídeo antes de confirmar o agendamento.
+  // Sem isso, o container pode ir para ERROR silenciosamente e o post nunca é publicado.
+  if (plan.kind === "video") {
+    try {
+      await waitForContainer(connection, creation.id);
+    } catch (containerErr) {
+      // Se falhou com capa, tenta recriar sem ela
+      if (params.cover_url) {
+        const withoutCover: Record<string, string> = { ...params };
+        delete withoutCover.cover_url;
+        const creation2 = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, withoutCover);
+        if (!creation2.id) throw containerErr;
+        await waitForContainer(connection, creation2.id);
+        creation = creation2;
+      } else {
+        throw containerErr;
+      }
+    }
+  }
+
   return {
-    containerId: creation.id,
+    containerId: creation.id ?? "",
     scheduledPublishTime: scheduledAt.toISOString(),
     effectiveFormat: plan.effectiveFormat,
     contentType: asset.contentType
