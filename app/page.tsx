@@ -3634,8 +3634,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
   }
 
   function importClients(rows: ImportedSalesClientRow[]): SalesClientImportResult {
-    const salesProfiles = profiles.filter((p) => p.active && profileAreas.some((pa) => pa.profileId === p.id && pa.area === "vendas" && pa.active));
-    const profilesByName = new Map(salesProfiles.map((p) => [p.name.trim().toLowerCase(), p.id]));
+    const profilesByName = new Map(profiles.filter((p) => p.active).map((p) => [p.name.trim().toLowerCase(), p.id]));
     let result: SalesClientImportResult = { rows: rows.length, created: 0, updated: 0, unchanged: 0, updatedFields: 0, schedulesCreated: 0 };
     setSalesClients((prev) => {
       const merged = mergeImportedSalesClients(prev, rows, profilesByName);
@@ -3830,7 +3829,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
         <PlanilhaModal
           onImport={importClients}
           onClose={() => setShowImportModal(false)}
-          salesProfiles={profiles.filter((p) => p.active && profileAreas.some((pa) => pa.profileId === p.id && pa.area === "vendas" && pa.active))}
+          salesProfiles={profiles.filter((p) => p.active)}
         />
       )}
     </Panel>
