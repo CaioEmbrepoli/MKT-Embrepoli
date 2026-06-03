@@ -567,9 +567,17 @@ export async function scheduleInstagramMedia(
     } catch { /* capa é opcional */ }
   }
 
-  const creation = await graphPost<{ id?: string }>(
+  let creation = await graphPost<{ id?: string }>(
     connection, `/${connection.instagram_account_id}/media`, params
-  );
+  ).catch(async (err) => {
+    // Se havia cover_url e a criação falhou, tenta sem a capa
+    if (params.cover_url) {
+      const withoutCover: Record<string, string> = { ...params };
+      delete withoutCover.cover_url;
+      return graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, withoutCover);
+    }
+    throw err;
+  });
   if (!creation.id) throw new Error("A Meta não retornou o container de agendamento.");
 
   return {
