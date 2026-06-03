@@ -12590,7 +12590,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
               if (p.status === "scheduled") acc[p.platform] = (acc[p.platform] ?? 0) + 1;
               return acc;
             }, {} as Record<string, number>);
-            const canCancelPublication = (status: PostPublication["status"]) => status === "scheduled" || status === "pending" || status === "processing";
+            const canCancelPublication = (status: PostPublication["status"]) => status === "scheduled" || status === "pending" || status === "processing" || status === "error";
             return (
               <div className="md:col-span-2 space-y-2">
                 <p className="text-xs font-black uppercase tracking-wide text-slate-400">Publicações</p>
@@ -12681,7 +12681,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
         const platText: Record<string, string> = { youtube: "text-red-700", tiktok: "text-slate-700", instagram: "text-purple-700", facebook: "text-blue-700", linkedin: "text-sky-700" };
         const statLabel: Record<string, string> = { published: "Publicado", scheduled: "Agendado", processing: "Processando", pending: "Pendente", error: "Erro", cancelled: "Cancelado" };
         const statColor: Record<string, string> = { published: "text-emerald-700", scheduled: "text-blue-600", processing: "text-amber-600", pending: "text-amber-600", error: "text-rose-600", cancelled: "text-slate-500" };
-        const canCancel = pub.status === "scheduled" || pub.status === "pending" || pub.status === "processing";
+        const canCancel = pub.status === "scheduled" || pub.status === "pending" || pub.status === "processing" || pub.status === "error";
         const isQStash = pub.format === "Story" || (pub.status === "scheduled" && !pub.externalId);
         const PubRow = ({ label, value }: { label: string; value: string }) => (
           <div>
@@ -12745,7 +12745,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                       <button type="button"
                         onClick={() => { cancelScheduledPublication(pub); closeDetail(); }}
                         className="flex-1 rounded-2xl bg-rose-100 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-200">
-                        Cancelar agendamento
+                        {pub.status === "error" ? "Descartar erro e tentar novamente" : "Cancelar agendamento"}
                       </button>
                     )}
                   </div>

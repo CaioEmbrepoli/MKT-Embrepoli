@@ -19,7 +19,7 @@ type ReviewAssetRow = {
   is_cover: boolean | null;
 };
 
-const cancellableStatuses = new Set(["scheduled", "pending", "processing"]);
+const cancellableStatuses = new Set(["scheduled", "pending", "processing", "error"]);
 const activeStatuses = ["scheduled", "pending", "processing"];
 
 async function cancelYoutubePublication(context: GoogleRequestContext, publication: PublicationRow) {

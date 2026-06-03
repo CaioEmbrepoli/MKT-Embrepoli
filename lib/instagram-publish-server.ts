@@ -471,6 +471,20 @@ async function waitForContainer(connection: InstagramPublishConnection, creation
   throw new Error("A Meta ainda esta processando o video. Tente novamente em alguns minutos.");
 }
 
+/** Verifica o status de containers de imagem (Story image) antes de publicar.
+ *  Imagens processam rápido, mas o container pode levar alguns milliseconds.
+ *  Máx 5s de espera — se não confirmar FINISHED, tenta publicar mesmo assim. */
+async function waitForImageStoryContainer(connection: InstagramPublishConnection, creationId: string) {
+  for (let i = 0; i < 5; i++) {
+    const status = await graphGet<{ status_code?: string }>(connection, `/${creationId}`, { fields: "status_code" });
+    if (status.status_code === "FINISHED" || !status.status_code) return;
+    if (status.status_code === "ERROR" || status.status_code === "EXPIRED") {
+      throw new Error("Erro ao processar o Story na Meta. Tente novamente em instantes.");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+}
+
 export function assertInstagramPublishPermission(connection: InstagramPublishConnection) {
   const scopes = connection.scopes ?? [];
   const hasPublishScope =
@@ -571,6 +585,7 @@ export async function publishInstagramMedia(
   const creation = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, plan.params);
   if (!creation.id) throw new Error("A Meta nao retornou o container de publicacao.");
   if (plan.kind === "video") await waitForContainer(connection, creation.id);
+  else if (plan.effectiveFormat === "Story") await waitForImageStoryContainer(connection, creation.id);
 
   const published = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media_publish`, {
     creation_id: creation.id
