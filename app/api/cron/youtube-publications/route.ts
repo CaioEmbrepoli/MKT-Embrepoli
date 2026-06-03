@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getGoogleAccessToken } from "@/lib/google-server";
 import type { GoogleRequestContext } from "@/lib/google-server";
+import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -11,6 +12,8 @@ type PublicationRow = {
   organization_id: string;
   post_id: string | null;
   external_id: string | null;
+  title: string | null;
+  format: string | null;
   attempts: number | null;
 };
 
@@ -33,7 +36,7 @@ export async function GET(request: Request) {
   // Busca publicações YouTube agendadas (privadas) ou em upload ainda não confirmadas
   const { data: publications, error } = await service
     .from("post_publications")
-    .select("id, organization_id, post_id, external_id, attempts")
+    .select("id, organization_id, post_id, external_id, title, format, attempts")
     .eq("platform", "youtube")
     .eq("status", "scheduled")
     .not("external_id", "is", null)
@@ -90,6 +93,22 @@ export async function GET(request: Request) {
             .eq("organization_id", pub.organization_id)
             .eq("id", pub.post_id);
         }
+
+        try {
+          await createMetricAfterPublish(service, {
+            organizationId: pub.organization_id,
+            platform: "youtube",
+            externalId: `yt:${pub.external_id}`,
+            postId: pub.post_id,
+            postTitle: pub.title,
+            permalink: `https://www.youtube.com/watch?v=${pub.external_id}`,
+            publishedAt: now,
+            format: pub.format,
+          });
+        } catch {
+          // Falha na métrica não reverte a publicação
+        }
+
         results.push({ id: pub.id, status: "published" });
       } else {
         // Ainda agendado/processando — atualiza apenas o attempt

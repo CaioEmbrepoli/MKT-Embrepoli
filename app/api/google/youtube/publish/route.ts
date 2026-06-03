@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
+import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 
 /** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
@@ -260,6 +261,18 @@ export async function POST(request: Request) {
           published_at: isScheduled ? null : new Date().toISOString(),
           created_by: context.userId,
         });
+        if (!isScheduled) {
+          await createMetricAfterPublish(context.service, {
+            organizationId: context.organizationId,
+            platform: "youtube",
+            externalId: `yt:${videoId}`,
+            postId: body.postId,
+            postTitle: body.title,
+            permalink: `https://www.youtube.com/watch?v=${videoId}`,
+            publishedAt: new Date().toISOString(),
+            format: body.format,
+          });
+        }
       } catch {
         // Falha no registro não impede o retorno de sucesso
       }

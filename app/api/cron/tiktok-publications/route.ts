@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getTikTokAccessToken } from "@/lib/tiktok-server";
 import type { TikTokRequestContext } from "@/lib/tiktok-server";
+import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -11,6 +12,8 @@ type PublicationRow = {
   organization_id: string;
   post_id: string | null;
   external_id: string | null;
+  title: string | null;
+  format: string | null;
   attempts: number | null;
 };
 
@@ -34,7 +37,7 @@ export async function GET(request: Request) {
   const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   const { data: publications, error } = await service
     .from("post_publications")
-    .select("id, organization_id, post_id, external_id, attempts")
+    .select("id, organization_id, post_id, external_id, title, format, attempts")
     .eq("platform", "tiktok")
     .eq("status", "processing")
     .not("external_id", "is", null)
@@ -96,6 +99,23 @@ export async function GET(request: Request) {
             .eq("organization_id", pub.organization_id)
             .eq("id", pub.post_id);
         }
+
+        const tiktokVideoId = videoId ?? pub.external_id;
+        try {
+          await createMetricAfterPublish(service, {
+            organizationId: pub.organization_id,
+            platform: "tiktok",
+            externalId: `tiktok:${tiktokVideoId}`,
+            postId: pub.post_id,
+            postTitle: pub.title,
+            permalink: tiktokVideoId ? `https://www.tiktok.com/video/${tiktokVideoId}` : null,
+            publishedAt: now,
+            format: pub.format,
+          });
+        } catch {
+          // Falha na métrica não reverte a publicação
+        }
+
         results.push({ id: pub.id, status: "published" });
       } else if (tikStatus === "FAILED") {
         await service.from("post_publications").update({

@@ -4,6 +4,7 @@ import { Client as QStashClient } from "@upstash/qstash";
 import { getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
 import { publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
+import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -226,6 +227,21 @@ export async function POST(request: Request) {
         .update({ status: "Publicado", published_at: result.publishedAt })
         .eq("organization_id", context.organizationId)
         .eq("id", body.postId);
+
+      try {
+        await createMetricAfterPublish(context.service, {
+          organizationId: context.organizationId,
+          platform: "instagram",
+          externalId: `instagram:${result.instagramMediaId}`,
+          postId: body.postId,
+          postTitle: body.title,
+          permalink: result.permalink,
+          publishedAt: result.publishedAt ?? new Date().toISOString(),
+          format: result.effectiveFormat,
+        });
+      } catch {
+        // Falha na métrica não impede o retorno de sucesso
+      }
     }
 
     return NextResponse.json(result);

@@ -10918,7 +10918,15 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
         impressionClickThroughRate: v.impressionClickThroughRate,
       };
     });
-    if (supabase) await replaceMetrics(supabase, importedRows, metrics);
+    if (supabase) {
+      const notInState = importedRows.filter(r => r.externalId && !byExt.has(r.externalId));
+      if (notInState.length) {
+        const { data: dbRows } = await supabase.from("post_metrics").select("id, external_id").in("external_id", notInState.map(r => r.externalId!));
+        const dbMap = new Map((dbRows ?? []).map(r => [r.external_id as string, r.id as string]));
+        notInState.forEach(r => { if (r.externalId && dbMap.has(r.externalId)) r.id = dbMap.get(r.externalId)!; });
+      }
+      await replaceMetrics(supabase, importedRows, metrics);
+    }
     setMetrics((prev) => {
       const byId = new Map(prev.map((m) => [m.id, m]));
       importedRows.forEach((m) => byId.set(m.id, m));
@@ -10971,8 +10979,16 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
         embedUrl: video.embedLink || existing?.embedUrl,
       };
     });
-    const previousRows = importedRows.map((r) => metrics.find((m) => m.id === r.id)).filter((r): r is PostMetric => Boolean(r));
-    if (supabase && importedRows.length) await replaceMetrics(supabase, importedRows, previousRows);
+    if (supabase && importedRows.length) {
+      const notInState = importedRows.filter(r => r.externalId && !byExt.has(r.externalId));
+      if (notInState.length) {
+        const { data: dbRows } = await supabase.from("post_metrics").select("id, external_id").in("external_id", notInState.map(r => r.externalId!));
+        const dbMap = new Map((dbRows ?? []).map(r => [r.external_id as string, r.id as string]));
+        notInState.forEach(r => { if (r.externalId && dbMap.has(r.externalId)) r.id = dbMap.get(r.externalId)!; });
+      }
+      const previousRows = importedRows.map((r) => metrics.find((m) => m.id === r.id)).filter((r): r is PostMetric => Boolean(r));
+      await replaceMetrics(supabase, importedRows, previousRows);
+    }
     setMetrics((prev) => {
       const byId = new Map(prev.map((m) => [m.id, m]));
       importedRows.forEach((m) => byId.set(m.id, m));
@@ -11027,8 +11043,16 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
         embedUrl: item.permalink || existing?.embedUrl,
       };
     });
-    const previousRows = importedRows.map((r) => metrics.find((m) => m.id === r.id)).filter((r): r is PostMetric => Boolean(r));
-    if (supabase && importedRows.length) await replaceMetrics(supabase, importedRows, previousRows);
+    if (supabase && importedRows.length) {
+      const notInState = importedRows.filter(r => r.externalId && !byExt.has(r.externalId));
+      if (notInState.length) {
+        const { data: dbRows } = await supabase.from("post_metrics").select("id, external_id").in("external_id", notInState.map(r => r.externalId!));
+        const dbMap = new Map((dbRows ?? []).map(r => [r.external_id as string, r.id as string]));
+        notInState.forEach(r => { if (r.externalId && dbMap.has(r.externalId)) r.id = dbMap.get(r.externalId)!; });
+      }
+      const previousRows = importedRows.map((r) => metrics.find((m) => m.id === r.id)).filter((r): r is PostMetric => Boolean(r));
+      await replaceMetrics(supabase, importedRows, previousRows);
+    }
     setMetrics((prev) => {
       const byId = new Map(prev.map((m) => [m.id, m]));
       importedRows.forEach((m) => byId.set(m.id, m));

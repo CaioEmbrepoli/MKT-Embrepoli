@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Receiver } from "@upstash/qstash";
 import { getMetaConnection, type MetaRequestContext } from "@/lib/meta-server";
 import { publishInstagramMedia } from "@/lib/instagram-publish-server";
+import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -136,6 +137,21 @@ async function processPublication(publicationId: string) {
         .update({ status: "Publicado", published_at: published.publishedAt })
         .eq("organization_id", publication.organization_id)
         .eq("id", publication.post_id);
+    }
+
+    try {
+      await createMetricAfterPublish(service, {
+        organizationId: publication.organization_id,
+        platform: "instagram",
+        externalId: `instagram:${published.instagramMediaId}`,
+        postId: publication.post_id,
+        postTitle: publication.title,
+        permalink: published.permalink,
+        publishedAt: published.publishedAt ?? new Date().toISOString(),
+        format: published.effectiveFormat,
+      });
+    } catch {
+      // Falha na métrica não reverte a publicação
     }
 
     return NextResponse.json({ ok: true, status: "published", permalink: published.permalink });
