@@ -3051,7 +3051,7 @@ const salesSourceLabel: Record<SalesClientSource, string> = {
 
 const CLIENT_IMPORT_SHEET = "Page1";
 const CLIENT_IMPORT_HEADERS = [
-  "Código", "Nome Cliente", "Tipo", "Nome do Contato", "CPF/CNPJ",
+  "Código", "Nome Cliente/Empresa", "Tipo", "Nome do Contato", "CPF/CNPJ",
   "Email", "Telefone", "UF", "Municipio", "Segmento", "Ultima Compra"
 ] as const;
 
@@ -3212,7 +3212,7 @@ async function exportClientTemplate(salesProfiles: { id: string; name: string }[
   type ColDef = { h: string; req: boolean; drop: boolean; width: number };
   const colDefs: ColDef[] = [
     { h: "Código",              req: false, drop: false, width: 10 },
-    { h: "Nome Cliente",        req: true,  drop: false, width: 24 },
+    { h: "Nome Cliente/Empresa", req: true,  drop: false, width: 26 },
     { h: "Tipo",                req: false, drop: true,  width: 8  },
     { h: "Nome do Contato",     req: false, drop: false, width: 22 },
     { h: "CPF/CNPJ",            req: false, drop: false, width: 16 },
@@ -3227,23 +3227,62 @@ async function exportClientTemplate(salesProfiles: { id: string; name: string }[
     { h: "Responsável",         req: false, drop: true,  width: 20 },
   ];
 
-  const reqFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFBBF24" } };
+  // Cores dos headers (escuras — fonte branca)
+  const reqHeaderFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFB45309" } }; // âmbar escuro
+  const optHeaderFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF334155" } }; // slate escuro
+  const dropHeaderFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF1D4ED8" } }; // azul escuro
+  // Cores do painel lateral (claras — para legenda)
+  const reqFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFEF08A" } };
   const optFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFF1F5F9" } };
   const dropFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFBFDBFE" } };
-  const border   = { style: "thin" as const, color: { argb: "FFD1D5DB" } };
-  const cellBorder = { top: border, left: border, bottom: border, right: border };
+  // Bordas
+  const thinBorder  = { style: "thin"   as const, color: { argb: "FFD1D5DB" } };
+  const medBorder   = { style: "medium" as const, color: { argb: "FF64748B" } };
+  const cellBorder  = { top: thinBorder, left: thinBorder, bottom: thinBorder, right: thinBorder };
+  // Linhas de dados alternadas
+  const rowEven = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFF8FAFC" } };
+  const rowOdd  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFFFFFF" } };
+  const DATA_ROWS = 200;
 
   // ── Cabeçalhos com cor ─────────────────────────────────────────────────────
   ws.addRow(colDefs.map(c => c.h));
   colDefs.forEach((c, i) => {
     const cell = ws.getCell(1, i + 1);
-    cell.font = { bold: true, size: 10 };
-    cell.fill = c.req ? reqFill : c.drop ? dropFill : optFill;
+    cell.font = { bold: true, size: 10, color: { argb: "FFFFFFFF" } };
+    cell.fill = c.req ? reqHeaderFill : c.drop ? dropHeaderFill : optHeaderFill;
     cell.border = cellBorder;
     cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
     ws.getColumn(i + 1).width = c.width;
   });
-  ws.getRow(1).height = 28;
+  ws.getRow(1).height = 32;
+
+  // ── Linhas de dados alternadas ─────────────────────────────────────────────
+  for (let r = 2; r <= DATA_ROWS + 1; r++) {
+    const fill = r % 2 === 0 ? rowEven : rowOdd;
+    for (let c = 1; c <= colDefs.length; c++) {
+      const cell = ws.getCell(r, c);
+      cell.fill = fill;
+      cell.border = cellBorder;
+      cell.alignment = { vertical: "middle" };
+    }
+    ws.getRow(r).height = 18;
+  }
+
+  // ── Borda externa grossa em toda a área da tabela ──────────────────────────
+  const lastRow = DATA_ROWS + 1;
+  const lastCol = colDefs.length;
+  for (let c = 1; c <= lastCol; c++) {
+    ws.getCell(1, c).border = { ...cellBorder, top: medBorder, left: c === 1 ? medBorder : thinBorder, right: c === lastCol ? medBorder : thinBorder };
+    ws.getCell(lastRow, c).border = { ...cellBorder, bottom: medBorder, left: c === 1 ? medBorder : thinBorder, right: c === lastCol ? medBorder : thinBorder };
+  }
+  for (let r = 2; r <= lastRow; r++) {
+    ws.getCell(r, 1).border      = { ...cellBorder, left: medBorder };
+    ws.getCell(r, lastCol).border = { ...cellBorder, right: medBorder };
+  }
+
+  // ── Freeze + auto-filter ───────────────────────────────────────────────────
+  ws.views = [{ state: "frozen", xSplit: 0, ySplit: 1, topLeftCell: "A2", activeCell: "A2" }];
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: lastCol } };
 
   // ── Dropdowns ──────────────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3286,7 +3325,7 @@ async function exportClientTemplate(salesProfiles: { id: string; name: string }[
   // Dúvidas
   panelCell(6,  "O QUE É CADA COLUNA",              { bold: true, size: 11, color: "FF111827" });
   panelCell(7,  "Código — ID único no seu sistema. Se deixar vazio, o sistema identifica o cliente pelo Nome + Telefone.");
-  panelCell(8,  "Nome Cliente — Nome da pessoa ou da empresa.");
+  panelCell(8,  "Nome Cliente/Empresa — Nome da pessoa (PF) ou da empresa (PJ).");
   panelCell(9,  "Tipo — PF = Pessoa Física  |  PJ = Pessoa Jurídica");
   panelCell(10, "Nome do Contato — Para PJ: nome do responsável dentro da empresa que você vai ligar.");
   panelCell(11, "CPF/CNPJ — Documento do cliente. Pode digitar com ou sem formatação.");
