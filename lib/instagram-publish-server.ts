@@ -432,14 +432,10 @@ async function graphPost<T>(connection: InstagramPublishConnection, path: string
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.error) {
-    const paramsCopy = { ...params };
-    if (paramsCopy.access_token) paramsCopy.access_token = "***";
-    console.error("[instagram-publish] graphPost error", JSON.stringify({
-      path,
-      status: response.status,
-      params: paramsCopy,
-      error: data?.error
-    }));
+    const code = data?.error?.code ?? "?";
+    const sub  = data?.error?.error_subcode ?? "?";
+    const msg  = String(data?.error?.message ?? data?.error?.error_user_msg ?? "no_msg").slice(0, 80);
+    console.error(`IG_ERR code=${code} sub=${sub} status=${response.status} msg="${msg}" path=${path}`);
     const errMsg = typeof data?.error === "string"
       ? data.error
       : (data?.error?.message ?? data?.error?.error_user_msg ?? `Erro ao publicar no Instagram (HTTP ${response.status}).`);
