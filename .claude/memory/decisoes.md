@@ -67,6 +67,36 @@ Depois, testar o fluxo completo de reconexão.
 
 ---
 
+### ⚠️ ATUALIZAÇÃO IMPORTANTE 2026-06-08 (mesmo dia, ~16h) — "Token has been expired or revoked." NÃO É do Instagram
+
+Depois de toda a migração acima funcionar (token `IGAA...` válido, todas as permissões
+`instagram_business_*` ativas e usadas — confirmado com prints do painel Meta), o Caio continuou
+recebendo **"Token has been expired or revoked."** ao tentar publicar um Story. Passamos a tarde
+caçando esse erro como se fosse do Instagram (cheguei a adicionar log `IG_ERR` em `graphGet`,
+commit `9b97698`) — e o log NUNCA apareceu, porque **o erro não vem da Meta**.
+
+**Causa raiz real:** essa frase é a mensagem padrão (`error_description`) que o **Google OAuth2**
+retorna quando um `refresh_token` está expirado/revogado (`invalid_grant`). Em
+`lib/google-server.ts`, `exchangeRefreshToken()` (linha ~117-140) repassa `data.error_description`
+sem alteração. Quando a arte do post é um link do **Google Drive**, `preparePublicAsset()` em
+`lib/instagram-publish-server.ts` chama `getGoogleAccessToken(context, "drive")` → que chama
+`exchangeRefreshToken()` → que estoura essa mensagem do Google, repassada verbatim (linha 175-178).
+Resultado: o usuário vê "Token has been expired or revoked." pensando que é o Instagram, quando
+na real é a **conexão do Google Drive (`google_connections`, service="drive") com refresh_token
+expirado/revogado**.
+
+**Lição:** essa string é uma mensagem GENÉRICA de OAuth2 usada tanto pelo Google quanto pela Meta —
+nunca assumir o provedor só pelo texto do erro. A ausência do log `IG_ERR` foi, na verdade, a pista
+certa (provava que o erro nascia ANTES de qualquer chamada à Meta).
+
+**Ação corretiva:** Caio precisa reconectar o Google Drive em Configurações → Conta e Permissões
+(gera novo `refresh_token`). Considerar também adicionar log de diagnóstico equivalente
+(`GOOGLE_ERR` ou similar) em `exchangeRefreshToken`/`getGoogleAccessToken`, e diferenciar as
+mensagens de erro de "token do Google Drive expirado" vs "token do Instagram expirado" para evitar
+essa confusão de novo.
+
+---
+
 ## 2025-05 — Detecção de Shorts vs Vídeos
 
 **Decisão:** Detectar YouTube Shorts pela duração do vídeo (≤ 60 segundos via `contentDetails.duration`).

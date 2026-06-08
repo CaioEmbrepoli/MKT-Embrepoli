@@ -131,6 +131,9 @@ export async function exchangeRefreshToken(refreshToken: string) {
   });
   const data = await response.json();
   if (!response.ok || !data.access_token) {
+    const code = data?.error ?? "?";
+    const desc = String(data?.error_description ?? "no_description").slice(0, 120);
+    console.error(`GOOGLE_ERR code=${code} status=${response.status} desc="${desc}"`);
     throw new Error(data.error_description || data.error || "Nao foi possivel renovar a conexao Google.");
   }
   return {
@@ -160,7 +163,16 @@ export async function getGoogleAccessToken(context: GoogleRequestContext, google
     return connection.access_token;
   }
 
-  const refreshed = await exchangeRefreshToken(connection.refresh_token);
+  let refreshed: { accessToken: string; expiresAt: string };
+  try {
+    refreshed = await exchangeRefreshToken(connection.refresh_token);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : "erro desconhecido";
+    // A mensagem do Google ("Token has been expired or revoked.") e identica a usada por outras
+    // integracoes (ex.: Instagram) — deixamos explicito qual conexao precisa ser refeita para
+    // nao confundir com expiracao do token do Instagram/Meta.
+    throw new Error(`Conexao do ${serviceLabel} expirada ou revogada (Google: "${reason}"). Reconecte em Configuracoes > Conta e Permissoes > ${serviceLabel}.`);
+  }
   const { error } = await context.service
     .from("google_connections")
     .update({

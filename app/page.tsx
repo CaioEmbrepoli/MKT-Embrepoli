@@ -9948,6 +9948,36 @@ function CalendarDateModal({ date, setCalendarDates, close }: { date?: CalendarD
   );
 }
 
+/** Estima quando o refresh_token do Google deve expirar.
+ *  Enquanto o app Google estiver em modo "Teste" (não verificado), o Google revoga
+ *  o refresh_token automaticamente após 7 dias da concessão — sem aviso e sem
+ *  possibilidade de renovação automática (diferente do Instagram). Avisamos o admin
+ *  com antecedência para reconectar manualmente antes de quebrar a integração. */
+function googleTokenExpiryWarning(connectedAt?: string | null): { daysLeft: number; urgent: boolean } | null {
+  if (!connectedAt) return null;
+  const grantedAt = new Date(connectedAt).getTime();
+  if (Number.isNaN(grantedAt)) return null;
+  const estimatedExpiry = grantedAt + 7 * 24 * 60 * 60 * 1000;
+  const msLeft = estimatedExpiry - Date.now();
+  const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+  if (daysLeft > 2) return null;
+  return { daysLeft, urgent: daysLeft <= 1 };
+}
+
+function GoogleTokenExpiryAlert({ label, connectedAt }: { label: string; connectedAt?: string | null }) {
+  const warning = googleTokenExpiryWarning(connectedAt);
+  if (!warning) return null;
+  const { daysLeft, urgent } = warning;
+  const text = daysLeft <= 0
+    ? `O token do ${label} já deve ter expirado (limite de 7 dias do app em modo de teste no Google). Reconecte agora para não interromper a integração.`
+    : `O token do ${label} deve expirar em ${daysLeft} ${daysLeft === 1 ? "dia" : "dias"} (limite de 7 dias do app em modo de teste no Google). Reconecte com antecedência — não há renovação automática.`;
+  return (
+    <p className={`mt-3 rounded-2xl px-3 py-2 text-xs font-bold ${urgent ? "bg-rose-50 text-rose-700" : "bg-amber-50 text-amber-700"}`}>
+      ⚠️ {text}
+    </p>
+  );
+}
+
 function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>>; canManageIntegrations: boolean }) {
   const [googleStatus, setGoogleStatus] = useState<GoogleConnectionStatus | null>(null);
   const [googleLoading, setGoogleLoading] = useState(true);
@@ -10160,6 +10190,9 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                         )}
                       </div>
                     </div>
+                    {currentUser.role === "admin" && serviceStatus?.connected && (
+                      <GoogleTokenExpiryAlert label="Google Drive" connectedAt={serviceStatus?.connectedAt} />
+                    )}
                     {canManageIntegrations && (
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
@@ -10211,6 +10244,9 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                         )}
                       </div>
                     </div>
+                    {currentUser.role === "admin" && serviceStatus?.connected && (
+                      <GoogleTokenExpiryAlert label="YouTube" connectedAt={serviceStatus?.connectedAt} />
+                    )}
                     {canManageIntegrations && (
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-black text-white transition hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400">
