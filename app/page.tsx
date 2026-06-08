@@ -89,7 +89,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
-import { connectInstagramToken, disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
+import { disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
 import {
   type AppData,
@@ -9961,9 +9961,6 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
   const [instagramLoading, setInstagramLoading] = useState(true);
   const [instagramBusy, setInstagramBusy] = useState(false);
   const [instagramError, setInstagramError] = useState("");
-  const [instagramTokenOpen, setInstagramTokenOpen] = useState(false);
-  const [instagramAccessToken, setInstagramAccessToken] = useState("");
-  const [instagramExpiresAt, setInstagramExpiresAt] = useState("");
 
   async function loadGoogleStatus() {
     setGoogleLoading(true);
@@ -10067,26 +10064,6 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
       await startInstagramOAuth();
     } catch (error) {
       setInstagramError(error instanceof Error ? error.message : "Erro ao iniciar OAuth Instagram.");
-      setInstagramBusy(false);
-    }
-  }
-
-  async function submitInstagramToken() {
-    if (!instagramAccessToken.trim()) return;
-    setInstagramBusy(true);
-    setInstagramError("");
-    try {
-      const nextStatus = await connectInstagramToken({
-        accessToken: instagramAccessToken.trim(),
-        expiresAt: instagramExpiresAt ? new Date(instagramExpiresAt).toISOString() : undefined,
-      });
-      setInstagramStatus(nextStatus);
-      setInstagramTokenOpen(false);
-      setInstagramAccessToken("");
-      setInstagramExpiresAt("");
-    } catch (error) {
-      setInstagramError(error instanceof Error ? error.message : "Erro ao cadastrar token Instagram / Meta.");
-    } finally {
       setInstagramBusy(false);
     }
   }
@@ -10333,11 +10310,8 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                 </div>
                 {canManageIntegrations ? (
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" disabled={instagramBusy || instagramLoading} onClick={connectInstagram} className="rounded-2xl bg-[#1877F2] px-4 py-2 text-sm font-black text-white transition hover:bg-[#1464d8] disabled:bg-slate-200 disabled:text-slate-400">
-                      {instagramBusy ? "Abrindo..." : instagramStatus?.connected ? "Reconectar com Facebook" : "Conectar com Facebook"}
-                    </button>
-                    <button type="button" disabled={instagramBusy || instagramLoading} onClick={() => setInstagramTokenOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-slate-200 disabled:opacity-50">
-                      Token manual
+                    <button type="button" disabled={instagramBusy || instagramLoading} onClick={connectInstagram} className="rounded-2xl bg-gradient-to-r from-fuchsia-600 to-pink-600 px-4 py-2 text-sm font-black text-white transition hover:from-fuchsia-700 hover:to-pink-700 disabled:bg-slate-200 disabled:text-slate-400">
+                      {instagramBusy ? "Abrindo..." : instagramStatus?.connected ? "Reconectar Instagram" : "Conectar Instagram"}
                     </button>
                     {instagramStatus?.connected && (
                       <button type="button" disabled={instagramBusy || instagramLoading} onClick={disconnectInstagram} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
@@ -10354,44 +10328,6 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
         </div>
       </div>
     </Panel>
-    {instagramTokenOpen && (
-      <CenteredModal close={() => !instagramBusy && setInstagramTokenOpen(false)} closeOnOverlay={!instagramBusy} variant="compact" zClass="z-[120]" className="bg-slate-950/75" panelClassName="rounded-[28px] border-0">
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <div className="mb-2 inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-pink-100 text-pink-700">
-              <Camera size={18} />
-            </div>
-            <h3 className="text-2xl font-black text-slate-950">Cadastrar token Instagram / Meta</h3>
-            <p className="mt-1 text-sm font-bold text-slate-500">
-              Cole aqui o token gerado no Meta Developer. Ele será salvo no Supabase pelo servidor.
-            </p>
-          </div>
-          <button type="button" onClick={() => !instagramBusy && setInstagramTokenOpen(false)} className="rounded-2xl bg-slate-100 p-2 text-slate-500 transition hover:bg-slate-200">
-            <X size={18} />
-          </button>
-        </div>
-        <div className="space-y-4">
-          <div className="rounded-2xl bg-pink-50 p-4 text-sm font-bold text-pink-900">
-            Use o token da conta Instagram conectada ao app. Se ele tiver prazo, informe a expiração para o sistema avisar quando precisar renovar.
-          </div>
-          <label className="block text-sm font-bold text-slate-600">
-            Token de acesso
-            <textarea value={instagramAccessToken} onChange={(event) => setInstagramAccessToken(event.target.value)} rows={5} className="mt-1 w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 font-mono text-xs outline-none focus:border-pink-300" placeholder="Cole o token aqui..." />
-          </label>
-          <label className="block text-sm font-bold text-slate-600">
-            Expiração opcional
-            <input type="datetime-local" value={instagramExpiresAt} onChange={(event) => setInstagramExpiresAt(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-pink-300" />
-          </label>
-          {instagramError && <p className="rounded-2xl bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700">{instagramError}</p>}
-          <div className="flex flex-wrap justify-end gap-2">
-            <button type="button" disabled={instagramBusy} onClick={() => setInstagramTokenOpen(false)} className="rounded-2xl bg-slate-100 px-5 py-3 text-sm font-black text-slate-600 transition hover:bg-slate-200 disabled:opacity-50">Cancelar</button>
-            <button type="button" disabled={instagramBusy || !instagramAccessToken.trim()} onClick={submitInstagramToken} className="rounded-2xl bg-pink-600 px-5 py-3 text-sm font-black text-white transition hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400">
-              {instagramBusy ? "Validando..." : "Salvar conexão"}
-            </button>
-          </div>
-        </div>
-      </CenteredModal>
-    )}
     </>
   );
 }

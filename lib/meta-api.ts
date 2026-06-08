@@ -96,14 +96,6 @@ export async function startInstagramOAuth(): Promise<void> {
   window.location.href = data.url;
 }
 
-export async function connectInstagramToken(input: { accessToken: string; expiresAt?: string }): Promise<InstagramConnectionStatus> {
-  return fetchJson<InstagramConnectionStatus>("/api/meta/instagram/connect-token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input)
-  }, 45000);
-}
-
 export async function disconnectInstagramConnection(): Promise<void> {
   await fetchJson<{ ok: true }>("/api/meta/instagram/disconnect", { method: "POST" });
 }

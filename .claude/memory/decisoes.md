@@ -33,10 +33,22 @@ e o token manual colado nunca passava pela troca de long-lived token.
    expirar (e têm ≥24h desde a última atualização) via `GET https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token`
    — elimina de vez a necessidade de reconectar manualmente a cada ~60 dias
 
-**Compatibilidade:** A opção de token manual (`connect-token`) e os scopes antigos (`INSTAGRAM_SCOPES`,
-Facebook Login) **foram mantidos no código** como fallback/legado — só remover depois de validar que
-o novo fluxo OAuth funciona ponta a ponta em produção (conectar → token `IGAA...` salvo com `expires_at`
-~60 dias → publicação de teste bem-sucedida).
+**Atualização 2026-06-08 (mesmo dia):** Caio confirmou que o redeploy com `INSTAGRAM_APP_ID`/`INSTAGRAM_APP_SECRET`
+funcionou — o botão novo abriu a tela de OAuth do Instagram corretamente. A pedido dele, a opção de
+**token manual foi REMOVIDA** da UI e do backend (não ficou só como fallback):
+- `app/page.tsx`: removido botão "Token manual", modal "Cadastrar token Instagram / Meta", states
+  `instagramTokenOpen`/`instagramAccessToken`/`instagramExpiresAt` e função `submitInstagramToken`;
+  botão principal renomeado de "Conectar/Reconectar com Facebook" (azul `#1877F2`) para
+  "Conectar/Reconectar Instagram" (gradiente fuchsia→pink, condizente com a marca do Instagram)
+- `app/api/meta/instagram/connect-token/route.ts` — **deletado** (`git rm`)
+- `lib/meta-api.ts` — removida função `connectInstagramToken` e seu import em `page.tsx`
+- `INSTAGRAM_SCOPES` (legado Facebook Login) permanece em `lib/meta-server.ts` apenas porque ainda
+  é referenciado como fallback de tipos/scopes em código legado — pode ser removido depois se
+  confirmado que nada mais o usa.
+
+**Validação pendente:** confirmar no Supabase que o token salvo em `meta_connections` para o Instagram
+começa com `IGAA` e tem `expires_at` ~60 dias à frente; depois, fazer uma publicação de teste para
+validar ponta a ponta.
 
 **Arquivos alterados:**
 - `lib/meta-server.ts` — `INSTAGRAM_BUSINESS_SCOPES`, `INSTAGRAM_OAUTH_AUTHORIZE_URL`,
