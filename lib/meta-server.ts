@@ -3,14 +3,23 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type MetaService = "instagram";
 
-// Scopes para Facebook Login (graph.facebook.com/dialog/oauth)
-// Os scopes instagram_business_* são exclusivos do Instagram Business Login
+// Scopes para Facebook Login (graph.facebook.com/dialog/oauth) — produto LEGADO, não usado pelo OAuth atual.
+// Mantido apenas como referência/compatibilidade (ex: connect-token aceita conexões antigas).
 export const INSTAGRAM_SCOPES = [
   "instagram_basic",
   "instagram_manage_comments",
   "instagram_content_publish",
   "pages_show_list",
   "pages_read_engagement"
+];
+
+// Scopes do Instagram Business Login (www.instagram.com/oauth/authorize → tokens IGAA...).
+// É o produto que o app da Embrepoli tem habilitado/aprovado no Meta Developer.
+export const INSTAGRAM_BUSINESS_SCOPES = [
+  "instagram_business_basic",
+  "instagram_business_content_publish",
+  "instagram_business_manage_comments",
+  "instagram_business_manage_messages"
 ];
 
 type MetaConnectionRow = {
@@ -144,13 +153,26 @@ export function requireMetaManager(context: MetaRequestContext) {
 }
 
 // --- OAuth Instagram Business Login helpers ---
-
-export function instagramAppId() { return process.env.META_APP_ID || ""; }
-export function instagramAppSecret() { return process.env.META_APP_SECRET || ""; }
+// O produto "Instagram Business Login" do Meta Developer expõe um App ID / App Secret
+// PRÓPRIOS (em Instagram > API setup with Instagram login), diferentes do App ID/Secret
+// do Facebook Login. Preferimos INSTAGRAM_APP_ID/SECRET quando configurados, e caímos
+// para META_APP_ID/SECRET (mesmo app, caso o painel exiba as mesmas credenciais).
+export function instagramAppId() { return process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID || ""; }
+export function instagramAppSecret() { return process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET || ""; }
 
 export function instagramOAuthRedirectUri(request: Request) {
   const origin = (process.env.NEXT_PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/$/, "");
   return `${origin}/api/meta/instagram/oauth/callback`;
+}
+
+// --- Endpoints nativos do Instagram Business Login (não passam por graph.facebook.com) ---
+export const INSTAGRAM_OAUTH_AUTHORIZE_URL = "https://www.instagram.com/oauth/authorize";
+export const INSTAGRAM_OAUTH_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
+export function instagramGraphAccessTokenUrl() {
+  return `https://graph.instagram.com/access_token`;
+}
+export function instagramGraphRefreshTokenUrl() {
+  return `https://graph.instagram.com/refresh_access_token`;
 }
 
 function metaStateSecret() {

@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/tiktok-publications",
       "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/cron/instagram-token-refresh",
+      "schedule": "0 9 * * *"
     }
   ]
 }

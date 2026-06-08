@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
-import { metaRequestContext, requireMetaManager, signMetaState, instagramAppId, instagramOAuthRedirectUri, metaGraphVersion, INSTAGRAM_SCOPES } from "@/lib/meta-server";
+import {
+  metaRequestContext,
+  requireMetaManager,
+  signMetaState,
+  instagramAppId,
+  instagramOAuthRedirectUri,
+  INSTAGRAM_BUSINESS_SCOPES,
+  INSTAGRAM_OAUTH_AUTHORIZE_URL
+} from "@/lib/meta-server";
 
 export async function GET(request: Request) {
   try {
@@ -16,12 +24,13 @@ export async function GET(request: Request) {
       createdAt: Date.now()
     });
 
-    // Facebook Login para acesso à Instagram Business API
-    const url = new URL(`https://www.facebook.com/${metaGraphVersion()}/dialog/oauth`);
+    // Instagram Business Login (login direto pela conta do Instagram, gera tokens IGAA...)
+    // Doc: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login/
+    const url = new URL(INSTAGRAM_OAUTH_AUTHORIZE_URL);
     url.searchParams.set("client_id", appId);
     url.searchParams.set("redirect_uri", instagramOAuthRedirectUri(request));
     url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", INSTAGRAM_SCOPES.join(","));
+    url.searchParams.set("scope", INSTAGRAM_BUSINESS_SCOPES.join(","));
     url.searchParams.set("state", state);
 
     return NextResponse.json({ url: url.toString() });
