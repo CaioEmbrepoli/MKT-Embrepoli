@@ -453,6 +453,10 @@ async function graphGet<T>(connection: InstagramPublishConnection, path: string,
   const response = await fetch(url);
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.error) {
+    const code = data?.error?.code ?? "?";
+    const sub  = data?.error?.error_subcode ?? "?";
+    const msg  = String(data?.error?.message ?? data?.error?.error_user_msg ?? "no_msg").slice(0, 80);
+    console.error(`IG_ERR code=${code} sub=${sub} status=${response.status} msg="${msg}" path=${path}`);
     const errMsg = typeof data?.error === "string"
       ? data.error
       : (data?.error?.message ?? data?.error?.error_user_msg ?? `Erro ao consultar publicacao do Instagram (HTTP ${response.status}).`);
