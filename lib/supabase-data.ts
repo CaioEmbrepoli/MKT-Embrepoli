@@ -531,7 +531,9 @@ export async function replacePostReviewAssets(client: SupabaseClient, assets: Po
     status: item.status,
     uploaded_at: item.uploadedAt,
     reviewed_at: item.reviewedAt || null,
-    is_cover: item.isCover ?? false
+    is_cover: item.isCover ?? false,
+    carousel_group_id: item.carouselGroupId || null,
+    carousel_order: item.carouselOrder ?? null
   }));
   await replaceChildRows(client, "post_review_comments", "asset_id", organizationId, assets.map((asset) => asset.id), assets.flatMap((asset) => asset.comments.map((comment) => ({
     id: comment.id,
@@ -878,6 +880,8 @@ function mapReviewAsset(row: any, comments: any[]): PostReviewAsset {
     uploadedAt: row.uploaded_at ?? row.created_at,
     reviewedAt: row.reviewed_at ?? "",
     isCover: row.is_cover ?? false,
+    carouselGroupId: row.carousel_group_id ?? "",
+    carouselOrder: row.carousel_order ?? undefined,
     comments: comments.map((item): PostReviewComment => ({
       id: item.id,
       assetId: item.asset_id,
@@ -1172,6 +1176,7 @@ function mapYtComment(row: any): Comment {
     isRelevant: row.is_relevant ?? undefined,
     classificationStatus: row.classification_status ?? undefined,
     classificationReason: row.classification_reason ?? undefined,
+    suggestedReply: row.suggested_reply ?? undefined,
     createdAt: row.created_at ?? new Date().toISOString()
   };
 }
@@ -1237,6 +1242,7 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
     is_relevant: isRelevant,
     classification_status: classificationStatus,
     classification_reason: existing?.classification_reason ?? comment.classificationReason ?? null,
+    suggested_reply: existing?.suggested_reply ?? comment.suggestedReply ?? null,
     created_at: createdAt
   };
 }

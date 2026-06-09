@@ -226,6 +226,8 @@ export type PostReviewAsset = {
   reviewedAt: string;
   comments: PostReviewComment[];
   isCover?: boolean;
+  carouselGroupId?: string;
+  carouselOrder?: number;
 };
 
 export type Idea = {
@@ -403,6 +405,7 @@ export type Comment = {
   isRelevant?: boolean;
   classificationStatus?: CommentClassificationStatus;
   classificationReason?: string;
+  suggestedReply?: string;
   createdAt: string;
 };
 

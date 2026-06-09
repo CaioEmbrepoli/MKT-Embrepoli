@@ -241,6 +241,8 @@ create table if not exists public.post_review_assets (
   compressed_size bigint not null default 0,
   mime_type text not null default '',
   status text not null default 'Aguardando revisão',
+  carousel_group_id text,
+  carousel_order integer,
   uploaded_at timestamptz not null default now(),
   reviewed_at timestamptz,
   created_at timestamptz not null default now()
@@ -575,6 +577,11 @@ alter table public.post_review_assets add column if not exists original_size big
 alter table public.post_review_assets add column if not exists compressed_size bigint not null default 0;
 alter table public.post_review_assets add column if not exists mime_type text not null default '';
 alter table public.post_review_assets add column if not exists is_cover boolean default false;
+alter table public.post_review_assets add column if not exists carousel_group_id text;
+alter table public.post_review_assets add column if not exists carousel_order integer;
+create index if not exists post_review_assets_carousel_idx
+  on public.post_review_assets (organization_id, post_id, carousel_group_id, carousel_order)
+  where carousel_group_id is not null;
 alter table public.task_attachments add column if not exists source text not null default 'upload';
 alter table public.task_attachments add column if not exists preview_url text not null default '';
 alter table public.task_attachments add column if not exists original_size bigint not null default 0;
@@ -1342,6 +1349,7 @@ create table if not exists public.comments (
   is_relevant boolean,
   classification_status text,
   classification_reason text,
+  suggested_reply text,
   created_at timestamptz not null default now(),
   unique (organization_id, external_id)
 );
@@ -1353,6 +1361,7 @@ alter table public.comments add column if not exists processed_at timestamptz;
 alter table public.comments add column if not exists is_relevant boolean;
 alter table public.comments add column if not exists classification_status text;
 alter table public.comments add column if not exists classification_reason text;
+alter table public.comments add column if not exists suggested_reply text;
 alter table public.comments drop constraint if exists comments_source_check;
 alter table public.comments add constraint comments_source_check check (source in ('youtube', 'instagram', 'facebook', 'tiktok'));
 alter table public.comments drop constraint if exists comments_status_check;
@@ -1389,6 +1398,33 @@ alter table public.customer_questions enable row level security;
 alter table public.comments enable row level security;
 alter table public.auto_filters enable row level security;
 
+create table if not exists public.comment_webhook_events (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  source text not null check (source in ('youtube', 'instagram', 'facebook', 'tiktok')),
+  event_id text,
+  external_comment_id text,
+  external_media_id text,
+  event_type text not null default 'comment',
+  payload jsonb not null default '{}'::jsonb,
+  processed_at timestamptz,
+  error text,
+  created_at timestamptz not null default now()
+);
+
+drop index if exists comment_webhook_events_org_source_event_uidx;
+create unique index if not exists comment_webhook_events_org_source_event_uidx
+on public.comment_webhook_events (organization_id, source, event_id);
+
+create index if not exists comment_webhook_events_org_source_created_idx
+on public.comment_webhook_events (organization_id, source, created_at desc);
+
+create index if not exists comment_webhook_events_unprocessed_idx
+on public.comment_webhook_events (organization_id, source, created_at)
+where processed_at is null;
+
+alter table public.comment_webhook_events enable row level security;
+
 drop policy if exists "org members can manage questions" on public.customer_questions;
 create policy "org members can manage questions"
 on public.customer_questions for all
@@ -1400,6 +1436,11 @@ create policy "org members can manage comments"
 on public.comments for all
 using (organization_id::text = public.current_organization_id())
 with check (organization_id::text = public.current_organization_id());
+
+drop policy if exists "org members can read comment webhook events" on public.comment_webhook_events;
+create policy "org members can read comment webhook events"
+on public.comment_webhook_events for select
+using (organization_id::text = public.current_organization_id());
 
 drop policy if exists "org members can manage auto filters" on public.auto_filters;
 create policy "org members can manage auto filters"

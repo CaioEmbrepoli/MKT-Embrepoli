@@ -166,6 +166,7 @@ import type {
   Channel,
   ChecklistItem,
   Comment,
+  CommentClassificationStatus,
   CommentStatus,
   ContentType,
   EditorialPost,
@@ -243,6 +244,7 @@ type ModalState =
   | null;
 
 type MediaPreviewItem = Pick<FileAttachment, "name" | "type" | "source" | "url" | "previewUrl" | "mimeType">;
+type PostReviewUploadOptions = { carousel?: boolean };
 
 type AuthMode = "login" | "signup" | "forgot" | "reset" | "checkEmail" | "pending";
 type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
@@ -898,6 +900,7 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
     isRelevant: existing.isRelevant ?? incoming.isRelevant ?? addedToBank,
     classificationStatus: existing.classificationStatus && existing.classificationStatus !== "pendente" ? existing.classificationStatus : incoming.classificationStatus,
     classificationReason: existing.classificationReason ?? incoming.classificationReason,
+    suggestedReply: existing.suggestedReply ?? incoming.suggestedReply,
     createdAt: existing.createdAt
   };
 }
@@ -2079,9 +2082,21 @@ export default function Home() {
     return (assignedManagers.length ? assignedManagers : fallbackManagers).filter((profileId) => profileId !== currentUser.id);
   }
 
-  async function addPostReviewAssets(post: EditorialPost, files: FileList | File[], isCover = false) {
+  async function addPostReviewAssets(post: EditorialPost, files: FileList | File[], isCover = false, options: PostReviewUploadOptions = {}) {
+    const inputFiles = Array.from(files);
+    const carouselGroupId = options.carousel && !isCover ? crypto.randomUUID() : "";
+    if (carouselGroupId) {
+      if (inputFiles.length < 2) {
+        window.alert("Selecione pelo menos 2 imagens para criar um carrossel.");
+        return;
+      }
+      if (inputFiles.some((file) => !file.type.startsWith("image/"))) {
+        window.alert("Carrossel aceita apenas imagens. Para vídeos, envie como arte principal normal.");
+        return;
+      }
+    }
     const uploaded: PostReviewAsset[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of inputFiles) {
       setSaveStatus("saving");
       setSaveError(file.type.startsWith("image/") && file.size > maxImageBytes ? "Comprimindo imagem..." : "");
       try {
@@ -2108,6 +2123,8 @@ export default function Home() {
           reviewedAt: "",
           comments: [],
           isCover,
+          carouselGroupId: carouselGroupId || undefined,
+          carouselOrder: carouselGroupId ? uploaded.length + 1 : undefined,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Erro ao enviar arquivo.";
@@ -2122,6 +2139,24 @@ export default function Home() {
       syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
       createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
     }
+  }
+
+  function reorderPostReviewCarousel(groupId: string, activeId: string, overId: string) {
+    if (!groupId || activeId === overId) return;
+    syncPostReviewAssets((current) => {
+      const group = current
+        .filter((asset) => asset.carouselGroupId === groupId)
+        .sort(compareReviewCarouselAssets);
+      const oldIndex = group.findIndex((asset) => asset.id === activeId);
+      const newIndex = group.findIndex((asset) => asset.id === overId);
+      if (oldIndex < 0 || newIndex < 0) return current;
+      const ordered = arrayMove(group, oldIndex, newIndex).map((asset, index) => ({
+        ...asset,
+        carouselOrder: index + 1,
+      }));
+      const orderedById = new Map(ordered.map((asset) => [asset.id, asset]));
+      return current.map((asset) => orderedById.get(asset.id) ?? asset);
+    });
   }
 
   function addPostReviewExternalAsset(post: EditorialPost, url: string, previewUrlOverride?: string, mimeType?: string, isCover?: boolean) {
@@ -2462,6 +2497,7 @@ export default function Home() {
               setReviewAssetStatus={setReviewAssetStatus}
               addReviewComment={addReviewComment}
               deletePostReviewAsset={deletePostReviewAsset}
+              reorderPostReviewCarousel={reorderPostReviewCarousel}
             />
           )}
           {activeSection === "marketing-campanhas" && (
@@ -2675,6 +2711,7 @@ export default function Home() {
         addPostReviewAssets={addPostReviewAssets}
         addPostReviewExternalAsset={addPostReviewExternalAsset}
         deletePostReviewAsset={deletePostReviewAsset}
+        reorderPostReviewCarousel={reorderPostReviewCarousel}
         setReviewAssetStatus={setReviewAssetStatus}
         addReviewComment={addReviewComment}
         ideas={ideas}
@@ -6385,6 +6422,27 @@ function driveFileId(url: string): string | null {
  * - Assets externos (Google Drive): busca a miniatura pela rota server-side.
  * - Assets carregados (upload): exibe <img> diretamente.
  */
+function compareReviewCarouselAssets(a: PostReviewAsset, b: PostReviewAsset) {
+  return (a.carouselOrder ?? 9999) - (b.carouselOrder ?? 9999)
+    || new Date(a.uploadedAt).getTime() - new Date(b.uploadedAt).getTime()
+    || a.id.localeCompare(b.id);
+}
+
+function carouselGroupForAsset(asset: PostReviewAsset, assets: PostReviewAsset[]) {
+  if (!asset.carouselGroupId) return [asset];
+  return assets.filter((item) => item.carouselGroupId === asset.carouselGroupId).sort(compareReviewCarouselAssets);
+}
+
+function dedupeCarouselAssets(assets: PostReviewAsset[]) {
+  const seen = new Set<string>();
+  return assets.filter((asset) => {
+    if (!asset.carouselGroupId) return true;
+    if (seen.has(asset.carouselGroupId)) return false;
+    seen.add(asset.carouselGroupId);
+    return true;
+  });
+}
+
 function ReviewThumb({ asset }: { asset: PostReviewAsset }) {
   const [failed, setFailed] = useState(false);
   const [driveSrc, setDriveSrc] = useState("");
@@ -6441,34 +6499,233 @@ function ReviewThumb({ asset }: { asset: PostReviewAsset }) {
   );
 }
 
+function SortableCarouselThumb({
+  asset,
+  index,
+  active,
+  onSelect,
+}: {
+  asset: PostReviewAsset;
+  index: number;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: asset.id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.55 : 1 }}
+      className={`relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border-2 bg-white ${active ? "border-blue-600 shadow-md" : "border-slate-200"}`}
+    >
+      <button type="button" onClick={onSelect} className="h-full w-full">
+        <ReviewThumb asset={asset} />
+      </button>
+      <span className="absolute left-1 top-1 rounded-full bg-slate-950/80 px-1.5 py-0.5 text-[10px] font-black text-white">{index + 1}</span>
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        className="absolute right-1 top-1 grid h-6 w-6 cursor-grab place-items-center rounded-full bg-white/90 text-slate-600 shadow-sm active:cursor-grabbing"
+        title="Arrastar para ordenar"
+      >
+        <GripVertical size={13} />
+      </button>
+    </div>
+  );
+}
+
+function CarouselReviewCard({
+  groupId,
+  assets,
+  profileById,
+  canReview,
+  openMediaPreview,
+  setReviewAssetStatus,
+  addReviewComment,
+  deletePostReviewAsset,
+  reorderPostReviewCarousel,
+}: {
+  groupId: string;
+  assets: PostReviewAsset[];
+  profileById: Map<string, Profile>;
+  canReview: boolean;
+  openMediaPreview: (item: MediaPreviewItem) => void;
+  setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
+  addReviewComment: (assetId: string, message: string) => void;
+  deletePostReviewAsset: (assetId: string) => void;
+  reorderPostReviewCarousel: (groupId: string, activeId: string, overId: string) => void;
+}) {
+  const orderedAssets = useMemo(() => [...assets].sort(compareReviewCarouselAssets), [assets]);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [adjustmentMessage, setAdjustmentMessage] = useState("");
+  const [showAdjustInput, setShowAdjustInput] = useState(false);
+  const [comment, setComment] = useState("");
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const activeAsset = orderedAssets[Math.min(activeIndex, Math.max(orderedAssets.length - 1, 0))] ?? orderedAssets[0];
+  const groupStatus: ReviewAssetStatus = orderedAssets.every((asset) => asset.status === "Aprovado")
+    ? "Aprovado"
+    : orderedAssets.some((asset) => asset.status === "Ajustes solicitados")
+      ? "Ajustes solicitados"
+      : "Aguardando revisão";
+
+  useEffect(() => {
+    setActiveIndex((current) => Math.min(current, Math.max(orderedAssets.length - 1, 0)));
+  }, [orderedAssets.length]);
+
+  function approveCarousel() {
+    orderedAssets.forEach((asset) => setReviewAssetStatus(asset.id, "Aprovado"));
+  }
+
+  function requestCarouselAdjustments() {
+    if (!adjustmentMessage.trim()) return;
+    orderedAssets.forEach((asset) => setReviewAssetStatus(asset.id, "Ajustes solicitados", adjustmentMessage.trim()));
+    setAdjustmentMessage("");
+    setShowAdjustInput(false);
+  }
+
+  function submitComment(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!comment.trim() || !activeAsset) return;
+    addReviewComment(activeAsset.id, comment.trim());
+    setComment("");
+  }
+
+  function removeActiveAsset() {
+    if (!activeAsset) return;
+    if (!window.confirm("Excluir esta imagem do carrossel?")) return;
+    deletePostReviewAsset(activeAsset.id);
+    setActiveIndex((current) => Math.max(0, current - 1));
+  }
+
+  if (!activeAsset) return null;
+
+  return (
+    <div className="overflow-hidden rounded-3xl border border-blue-100 bg-white">
+      <button type="button" onClick={() => openMediaPreview(activeAsset)} className="block w-full">
+        <MediaPreviewContent item={activeAsset} />
+      </button>
+      <div className="space-y-3 p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge tone="blue">Carrossel</Badge>
+          <Badge tone={groupStatus === "Aprovado" ? "green" : groupStatus === "Ajustes solicitados" ? "red" : "amber"}>{groupStatus}</Badge>
+          <Badge tone="slate">{orderedAssets.length} imagens</Badge>
+          <span className="text-xs font-bold text-slate-500">Enviado por {profileById.get(activeAsset.uploadedBy)?.name ?? "Equipe"}</span>
+          <div className="ml-auto flex items-center gap-1">
+            <FileActionButtons item={activeAsset} />
+            <button type="button" onClick={removeActiveAsset} className="rounded-2xl bg-rose-100 px-3 py-1.5 text-xs font-black text-rose-700 hover:bg-rose-200">Excluir imagem</button>
+          </div>
+        </div>
+
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragEnd={(event) => {
+            const activeId = String(event.active.id);
+            const overId = event.over?.id ? String(event.over.id) : "";
+            if (overId) reorderPostReviewCarousel(groupId, activeId, overId);
+          }}
+        >
+          <SortableContext items={orderedAssets.map((asset) => asset.id)} strategy={horizontalListSortingStrategy}>
+            <div className="flex gap-2 overflow-x-auto rounded-2xl bg-slate-50 p-2">
+              {orderedAssets.map((asset, index) => (
+                <SortableCarouselThumb
+                  key={asset.id}
+                  asset={asset}
+                  index={index}
+                  active={asset.id === activeAsset.id}
+                  onSelect={() => setActiveIndex(index)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+
+        {canReview && (
+          <div className="rounded-2xl bg-slate-50 p-3">
+            {groupStatus === "Aprovado" ? (
+              showAdjustInput ? (
+                <>
+                  <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="O que precisa ajustar no carrossel?" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                  <div className="mt-2 flex gap-2">
+                    <button type="button" onClick={() => { setShowAdjustInput(false); setAdjustmentMessage(""); }} className="flex-1 rounded-2xl bg-slate-100 px-3 py-2 text-sm font-black text-slate-600 hover:bg-slate-200">Cancelar</button>
+                    <button type="button" onClick={requestCarouselAdjustments} disabled={!adjustmentMessage.trim()} className="flex-1 rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Enviar</button>
+                  </div>
+                </>
+              ) : (
+                <button type="button" onClick={() => setShowAdjustInput(true)} className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-black text-rose-700 hover:bg-rose-100">Solicitar ajuste no carrossel</button>
+              )
+            ) : (
+              <div className="space-y-2">
+                <button type="button" onClick={approveCarousel} className="w-full rounded-2xl bg-emerald-600 px-3 py-2 text-sm font-black text-white">Aprovar carrossel</button>
+                <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="O que precisa ajustar no carrossel?" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+                <button type="button" onClick={requestCarouselAdjustments} disabled={!adjustmentMessage.trim()} className="w-full rounded-2xl bg-rose-600 px-3 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <form onSubmit={submitComment} className="flex gap-2">
+          <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário sobre a imagem selecionada" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+          <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-3 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
+        </form>
+        {activeAsset.comments.length > 0 && (
+          <div className="space-y-2">
+            {activeAsset.comments.map((item) => (
+              <div key={item.id} className="rounded-2xl bg-slate-50 p-3">
+                <p className="text-sm font-black">{profileById.get(item.authorId)?.name ?? "Equipe"}</p>
+                <p className="mt-1 text-sm text-slate-600">{item.message}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ReviewDetailPanel({
   selectedAsset,
+  allAssets,
   selectedPost,
   profileById,
   openMediaPreview,
   setReviewAssetStatus,
   addReviewComment,
   deletePostReviewAsset,
+  reorderPostReviewCarousel,
   setModal,
   onDeleted,
 }: {
   selectedAsset: PostReviewAsset;
+  allAssets: PostReviewAsset[];
   selectedPost: EditorialPost | undefined;
   profileById: Map<string, Profile>;
   openMediaPreview: (item: MediaPreviewItem) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
   deletePostReviewAsset: (assetId: string) => void;
+  reorderPostReviewCarousel: (groupId: string, activeId: string, overId: string) => void;
   setModal: Dispatch<SetStateAction<ModalState>>;
   onDeleted: () => void;
 }) {
   const [adjustmentMessage, setAdjustmentMessage] = useState("");
   const [showAdjustInput, setShowAdjustInput] = useState(false);
   const [comment, setComment] = useState("");
+  const [carouselIndex, setCarouselIndex] = useState(0);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const carouselAssets = selectedAsset.carouselGroupId ? carouselGroupForAsset(selectedAsset, allAssets) : [];
+  const isCarousel = carouselAssets.length > 1;
+  const targetAsset = isCarousel ? carouselAssets[Math.min(carouselIndex, Math.max(carouselAssets.length - 1, 0))] : selectedAsset;
+  const reviewTargets = isCarousel ? carouselAssets : [targetAsset];
+
+  useEffect(() => {
+    setCarouselIndex(0);
+  }, [selectedAsset.id, selectedAsset.carouselGroupId]);
 
   function requestAdjustments() {
     if (!adjustmentMessage.trim()) return;
-    setReviewAssetStatus(selectedAsset.id, "Ajustes solicitados", adjustmentMessage.trim());
+    reviewTargets.forEach((asset) => setReviewAssetStatus(asset.id, "Ajustes solicitados", adjustmentMessage.trim()));
     setAdjustmentMessage("");
     setShowAdjustInput(false);
   }
@@ -6476,13 +6733,13 @@ function ReviewDetailPanel({
   function submitComment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!comment.trim()) return;
-    addReviewComment(selectedAsset.id, comment);
+    addReviewComment(targetAsset.id, comment);
     setComment("");
   }
 
   function removeAsset() {
-    if (!window.confirm("Excluir esta arte de revisão?")) return;
-    deletePostReviewAsset(selectedAsset.id);
+    if (!window.confirm(isCarousel ? "Excluir esta imagem do carrossel?" : "Excluir esta arte de revisão?")) return;
+    deletePostReviewAsset(targetAsset.id);
     onDeleted();
   }
 
@@ -6491,22 +6748,48 @@ function ReviewDetailPanel({
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-black text-blue-700">Arte para revisão</p>
-          <h3 className="mt-1 text-xl font-black">{selectedPost?.title ?? selectedAsset.name}</h3>
-          <p className="mt-1 text-sm font-bold text-slate-500">Enviado por {profileById.get(selectedAsset.uploadedBy)?.name ?? "Equipe"} em {formatDate(selectedAsset.uploadedAt)}</p>
+          <h3 className="mt-1 text-xl font-black">{selectedPost?.title ?? targetAsset.name}</h3>
+          <p className="mt-1 text-sm font-bold text-slate-500">Enviado por {profileById.get(targetAsset.uploadedBy)?.name ?? "Equipe"} em {formatDate(targetAsset.uploadedAt)}</p>
+          {isCarousel && <p className="mt-1 text-xs font-black uppercase text-blue-600">Carrossel com {carouselAssets.length} imagens</p>}
         </div>
         <div className="flex flex-wrap gap-2">
           {selectedPost && <button type="button" onClick={() => setModal({ kind: "post", id: selectedPost.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Abrir post</button>}
           <button type="button" onClick={removeAsset} title="Excluir" className="rounded-2xl bg-rose-100 p-2 text-rose-700"><Trash2 size={16} /></button>
         </div>
       </div>
-      <button type="button" onClick={() => openMediaPreview(selectedAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
-        <MediaPreviewContent item={selectedAsset} />
+      <button type="button" onClick={() => openMediaPreview(targetAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
+        <MediaPreviewContent item={targetAsset} />
       </button>
+      {isCarousel && (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCorners}
+          onDragEnd={(event) => {
+            const activeId = String(event.active.id);
+            const overId = event.over?.id ? String(event.over.id) : "";
+            if (overId && selectedAsset.carouselGroupId) reorderPostReviewCarousel(selectedAsset.carouselGroupId, activeId, overId);
+          }}
+        >
+          <SortableContext items={carouselAssets.map((asset) => asset.id)} strategy={horizontalListSortingStrategy}>
+            <div className="mt-3 flex gap-2 overflow-x-auto rounded-2xl bg-white p-2">
+              {carouselAssets.map((asset, index) => (
+                <SortableCarouselThumb
+                  key={asset.id}
+                  asset={asset}
+                  index={index}
+                  active={asset.id === targetAsset.id}
+                  onSelect={() => setCarouselIndex(index)}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      )}
       <div className="mt-2 flex justify-end">
-        <FileActionButtons item={selectedAsset} />
+        <FileActionButtons item={targetAsset} />
       </div>
       <div className="mt-4">
-        {selectedAsset.status === "Aprovado" ? (
+        {reviewTargets.every((asset) => asset.status === "Aprovado") ? (
           showAdjustInput ? (
             <div className="rounded-3xl bg-white p-3">
               <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="Descreva os ajustes necessários" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
@@ -6520,7 +6803,7 @@ function ReviewDetailPanel({
           )
         ) : (
           <div className="grid gap-3 lg:grid-cols-2">
-            <button type="button" onClick={() => setReviewAssetStatus(selectedAsset.id, "Aprovado")} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar</button>
+            <button type="button" onClick={() => reviewTargets.forEach((asset) => setReviewAssetStatus(asset.id, "Aprovado"))} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar{isCarousel ? " carrossel" : ""}</button>
             <div className="rounded-3xl bg-white p-3">
               <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="Descreva os ajustes necessários" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
               <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
@@ -6533,7 +6816,7 @@ function ReviewDetailPanel({
         <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-4 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
       </form>
       <div className="mt-4 space-y-2">
-        {selectedAsset.comments.map((item) => (
+        {targetAsset.comments.map((item) => (
           <div key={item.id} className="rounded-2xl bg-white p-3">
             <p className="text-sm font-black">{profileById.get(item.authorId)?.name ?? "Equipe"}</p>
             <p className="mt-1 text-sm text-slate-600">{item.message}</p>
@@ -6553,7 +6836,8 @@ function ReviewsPage({
   openMediaPreview,
   setReviewAssetStatus,
   addReviewComment,
-  deletePostReviewAsset
+  deletePostReviewAsset,
+  reorderPostReviewCarousel
 }: {
   assets: PostReviewAsset[];
   posts: EditorialPost[];
@@ -6565,6 +6849,7 @@ function ReviewsPage({
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
   deletePostReviewAsset: (assetId: string) => void;
+  reorderPostReviewCarousel: (groupId: string, activeId: string, overId: string) => void;
 }) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -6580,9 +6865,9 @@ function ReviewsPage({
 
   const days = makeWeek(weekStart);
 
-  const filteredAssets = assets
+  const filteredAssets = dedupeCarouselAssets(assets
     .filter((asset) => !asset.isCover && (viewMode === "Todos" || asset.status === viewMode))
-    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()));
 
   const selectedAsset =
     assets.find((asset) => asset.id === selectedAssetId) ??
@@ -6642,11 +6927,11 @@ function ReviewsPage({
                   ))}
                   {/* Células com thumbnails */}
                   {days.map((day) => {
-                    const dayAssets = assets.filter((asset) => {
+                    const dayAssets = dedupeCarouselAssets(assets.filter((asset) => {
                       if (asset.isCover) return false;
                       const post = posts.find((p) => p.id === asset.postId);
                       return post?.publishAt && sameDay(new Date(post.publishAt), day);
-                    });
+                    }));
                     return (
                       <div key={day.toISOString()} className={`min-h-[90px] rounded-2xl p-1.5 space-y-1.5 ${sameDay(day, today) ? "bg-blue-50 ring-1 ring-blue-200" : "bg-slate-50"}`}>
                         {dayAssets.map((asset) => (
@@ -6680,11 +6965,11 @@ function ReviewsPage({
 
               {/* Assets sem data */}
               {(() => {
-                const undated = assets.filter((a) => {
+                const undated = dedupeCarouselAssets(assets.filter((a) => {
                   if (a.isCover) return false;
                   const post = posts.find((p) => p.id === a.postId);
                   return !post?.publishAt;
-                });
+                }));
                 if (!undated.length) return null;
                 return (
                   <div className="mt-4">
@@ -6717,12 +7002,14 @@ function ReviewsPage({
             {selectedAsset ? (
               <ReviewDetailPanel
                 selectedAsset={selectedAsset}
+                allAssets={assets}
                 selectedPost={selectedPost}
                 profileById={profileById}
                 openMediaPreview={openMediaPreview}
                 setReviewAssetStatus={setReviewAssetStatus}
                 addReviewComment={addReviewComment}
                 deletePostReviewAsset={deletePostReviewAsset}
+                reorderPostReviewCarousel={reorderPostReviewCarousel}
                 setModal={setModal}
                 onDeleted={handleDeleted}
               />
@@ -6755,12 +7042,14 @@ function ReviewsPage({
             {selectedAsset ? (
               <ReviewDetailPanel
                 selectedAsset={selectedAsset}
+                allAssets={assets}
                 selectedPost={selectedPost}
                 profileById={profileById}
                 openMediaPreview={openMediaPreview}
                 setReviewAssetStatus={setReviewAssetStatus}
                 addReviewComment={addReviewComment}
                 deletePostReviewAsset={deletePostReviewAsset}
+                reorderPostReviewCarousel={reorderPostReviewCarousel}
                 setModal={setModal}
                 onDeleted={handleDeleted}
               />
@@ -10397,9 +10686,10 @@ function EntityModal(props: {
   posts: EditorialPost[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   postReviewAssets: PostReviewAsset[];
-  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean, options?: PostReviewUploadOptions) => void;
   addPostReviewExternalAsset: (post: EditorialPost, url: string, previewUrl?: string, mimeType?: string, isCover?: boolean) => void;
   deletePostReviewAsset: (assetId: string) => void;
+  reorderPostReviewCarousel: (groupId: string, activeId: string, overId: string) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
   ideas: Idea[];
@@ -12469,7 +12759,7 @@ function applyTimeToDateTimeLocal(currentValue: string, time: string) {
   return `${datePart}T${time}`;
 }
 
-function PostModalV2({ modal, setModal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, postPublications, setPostPublications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
+function PostModalV2({ modal, setModal, currentUser, profiles, profileById, channels, productLines, vehicleTypes, contentTypes, funnelStages, campaigns, postTemplates, posts, setPosts, postReviewAssets, addPostReviewAssets, addPostReviewExternalAsset, deletePostReviewAsset, reorderPostReviewCarousel, openMediaPreview, setReviewAssetStatus, addReviewComment, createNotifications, ideas, profileAreas, profileModulePermissions, postPublications, setPostPublications, close }: Parameters<typeof EntityModal>[0] & { close: () => void }) {
   const editing = modal?.kind === "post" && modal.id ? posts.find((post) => post.id === modal.id) : undefined;
   const initialIdea = editing?.ideaId ?? (modal?.kind === "post" ? modal.ideaId ?? "" : "");
   const ideaPrefill = ideas.find((idea) => idea.id === initialIdea);
@@ -12826,6 +13116,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
           addPostReviewAssets={addPostReviewAssets}
           addPostReviewExternalAsset={addPostReviewExternalAsset}
           deletePostReviewAsset={deletePostReviewAsset}
+          reorderPostReviewCarousel={reorderPostReviewCarousel}
           openMediaPreview={openMediaPreview}
           setReviewAssetStatus={setReviewAssetStatus}
           addReviewComment={addReviewComment}
@@ -12927,6 +13218,7 @@ function PostReviewPanel({
   addPostReviewAssets,
   addPostReviewExternalAsset,
   deletePostReviewAsset,
+  reorderPostReviewCarousel,
   openMediaPreview,
   setReviewAssetStatus,
   addReviewComment,
@@ -12936,9 +13228,10 @@ function PostReviewPanel({
   assets: PostReviewAsset[];
   profileById: Map<string, Profile>;
   canReview: boolean;
-  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean, options?: PostReviewUploadOptions) => void;
   addPostReviewExternalAsset: (post: EditorialPost, url: string, previewUrl?: string, mimeType?: string, isCover?: boolean) => void;
   deletePostReviewAsset: (assetId: string) => void;
+  reorderPostReviewCarousel: (groupId: string, activeId: string, overId: string) => void;
   openMediaPreview: (item: MediaPreviewItem) => void;
   setReviewAssetStatus: (assetId: string, status: ReviewAssetStatus, message?: string) => void;
   addReviewComment: (assetId: string, message: string) => void;
@@ -12955,6 +13248,7 @@ function PostReviewPanel({
   const [comments, setComments] = useState<Record<string, string>>({});
 
   const [externalUrl, setExternalUrl] = useState("");
+  const [carouselMode, setCarouselMode] = useState(false);
   const [driveOpen, setDriveOpen] = useState(false);
   const [replaceTarget, setReplaceTarget] = useState<PostReviewAsset | null>(null);
   const [replaceUploadOpen, setReplaceUploadOpen] = useState(false);
@@ -13036,13 +13330,26 @@ function PostReviewPanel({
       </div>
 
       {canUploadMain && (
-        <FileDropZone
-          className="mb-4"
-          icon="file"
-          title="Enviar arte principal"
-          hint="Imagens até 2 MB, vídeos até 100 MB"
-          onFiles={(files) => addPostReviewAssets(post, files, false)}
-        />
+        <div className="mb-4 rounded-3xl border border-blue-100 bg-white p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-slate-800">Arte principal</p>
+              <p className="text-xs font-bold text-slate-500">{carouselMode ? "Envie várias imagens juntas e arraste para ordenar." : "Imagem única, vídeo único ou carrossel de imagens."}</p>
+            </div>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-sm font-black text-blue-700">
+              <input type="checkbox" checked={carouselMode} onChange={(event) => setCarouselMode(event.target.checked)} className="h-4 w-4 accent-blue-700" />
+              Carrossel
+            </label>
+          </div>
+          <FileDropZone
+            icon={carouselMode ? "image" : "file"}
+            title={carouselMode ? "Enviar imagens do carrossel" : "Enviar arte principal"}
+            hint={carouselMode ? "Selecione ou solte 2+ imagens" : "Imagens até 2 MB, vídeos até 100 MB"}
+            multiple={carouselMode}
+            accept={carouselMode ? "image/*" : undefined}
+            onFiles={(files) => addPostReviewAssets(post, files, false, { carousel: carouselMode })}
+          />
+        </div>
       )}
       {canUploadCover && (
         <FileDropZone
@@ -13089,7 +13396,24 @@ function PostReviewPanel({
 
       {assets.length > 0 ? (
         <div className="space-y-3">
-          {assets.map((asset) => {
+          {dedupeCarouselAssets(assets).map((asset) => {
+            const carouselAssets = asset.carouselGroupId ? carouselGroupForAsset(asset, assets) : [];
+            if (carouselAssets.length > 1) {
+              return (
+                <CarouselReviewCard
+                  key={asset.carouselGroupId}
+                  groupId={asset.carouselGroupId!}
+                  assets={carouselAssets}
+                  profileById={profileById}
+                  canReview={canReview}
+                  openMediaPreview={openMediaPreview}
+                  setReviewAssetStatus={setReviewAssetStatus}
+                  addReviewComment={addReviewComment}
+                  deletePostReviewAsset={deletePostReviewAsset}
+                  reorderPostReviewCarousel={reorderPostReviewCarousel}
+                />
+              );
+            }
             const adjMsg = adjustmentMessages[asset.id] ?? "";
             const showAdj = showAdjustInputs[asset.id] ?? false;
             const commentText = comments[asset.id] ?? "";
@@ -13281,7 +13605,7 @@ function PublishModal({
   postPublications?: PostPublication[];
   setPostPublications?: Dispatch<SetStateAction<PostPublication[]>>;
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
-  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean) => void;
+  addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean, options?: PostReviewUploadOptions) => void;
   close: () => void;
 }) {
   const channelById = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
@@ -15855,6 +16179,68 @@ function BancoDeDuvidas({
 
 // ─── ComentariosSection ───────────────────────────────────────────────────────
 
+const commentSourceBadgeConfig: Record<Comment["source"], { label: string; className: string; icon: ReactNode }> = {
+  youtube: {
+    label: "YouTube",
+    className: "bg-red-100 text-red-700",
+    icon: (
+      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
+        <path fill="currentColor" d="M14.7 4.2a1.9 1.9 0 0 0-1.3-1.3C12.2 2.6 8 2.6 8 2.6s-4.2 0-5.4.3a1.9 1.9 0 0 0-1.3 1.3A19.7 19.7 0 0 0 1 8a19.7 19.7 0 0 0 .3 3.8 1.9 1.9 0 0 0 1.3 1.3c1.2.3 5.4.3 5.4.3s4.2 0 5.4-.3a1.9 1.9 0 0 0 1.3-1.3A19.7 19.7 0 0 0 15 8a19.7 19.7 0 0 0-.3-3.8ZM6.6 10.3V5.7L10.4 8l-3.8 2.3Z" />
+      </svg>
+    )
+  },
+  instagram: {
+    label: "Instagram",
+    className: "bg-fuchsia-100 text-fuchsia-700",
+    icon: (
+      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
+        <path fill="currentColor" d="M5 1.5h6A3.5 3.5 0 0 1 14.5 5v6a3.5 3.5 0 0 1-3.5 3.5H5A3.5 3.5 0 0 1 1.5 11V5A3.5 3.5 0 0 1 5 1.5Zm0 1.4A2.1 2.1 0 0 0 2.9 5v6A2.1 2.1 0 0 0 5 13.1h6a2.1 2.1 0 0 0 2.1-2.1V5A2.1 2.1 0 0 0 11 2.9H5Zm3 2.4A2.7 2.7 0 1 1 8 10.7 2.7 2.7 0 0 1 8 5.3Zm0 1.4A1.3 1.3 0 1 0 8 9.3 1.3 1.3 0 0 0 8 6.7Zm3.1-2.1a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4Z" />
+      </svg>
+    )
+  },
+  tiktok: {
+    label: "TikTok",
+    className: "bg-slate-900 text-white",
+    icon: (
+      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
+        <path fill="currentColor" d="M10.2 1.5c.2 1.8 1.2 3 3 3.2v2a5.4 5.4 0 0 1-3-1v4.7a4 4 0 1 1-4-4c.3 0 .7 0 1 .1v2.1a1.8 1.8 0 1 0 1 1.6V1.5h2Z" />
+      </svg>
+    )
+  },
+  facebook: {
+    label: "Facebook",
+    className: "bg-blue-100 text-blue-700",
+    icon: (
+      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
+        <path fill="currentColor" d="M9.2 14.5V8.8h1.9l.3-2.2H9.2V5.2c0-.6.2-1.1 1.1-1.1h1.2v-2a15 15 0 0 0-1.8-.1C8 2 6.8 3.1 6.8 5v1.6H4.9v2.2h1.9v5.7h2.4Z" />
+      </svg>
+    )
+  }
+};
+
+function CommentSourceBadge({ source }: { source: Comment["source"] }) {
+  const config = commentSourceBadgeConfig[source] ?? commentSourceBadgeConfig.youtube;
+  return (
+    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${config.className}`}>
+      {config.icon}
+      {config.label}
+    </span>
+  );
+}
+
+const commentClassificationBadgeConfig: Record<CommentClassificationStatus, { label: string; className: string }> = {
+  pendente: { label: "Pendente", className: "bg-amber-100 text-amber-700" },
+  relevante: { label: "Relevante", className: "bg-emerald-100 text-emerald-700" },
+  normal: { label: "Normal", className: "bg-slate-100 text-slate-600" },
+  erro: { label: "Erro", className: "bg-rose-100 text-rose-700" }
+};
+
+function CommentClassificationBadge({ status }: { status?: CommentClassificationStatus }) {
+  if (!status) return null;
+  const config = commentClassificationBadgeConfig[status] ?? commentClassificationBadgeConfig.pendente;
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${config.className}`}>{config.label}</span>;
+}
+
 function ComentariosSection({
   comments,
   setComments,
@@ -16304,7 +16690,10 @@ function ComentariosSection({
           <div key={comment.id} className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="mb-2 flex items-start justify-between gap-2">
               <div>
-                <span className="text-sm font-black text-slate-800">{comment.authorName}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-black text-slate-800">{comment.authorName}</span>
+                  <CommentSourceBadge source={comment.source} />
+                </div>
                 {comment.videoTitle && <span className="ml-2 text-xs text-slate-400">· {comment.videoTitle}</span>}
                 {comment.likes > 0 && <span className="ml-2 text-xs text-slate-400">· {comment.likes} ❤</span>}
               </div>
@@ -16322,6 +16711,29 @@ function ComentariosSection({
               </div>
             </div>
             <p className="mb-3 text-sm text-slate-700">{comment.text}</p>
+            {(comment.classificationReason || comment.suggestedReply) && (
+              <div className="mb-3 rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <CommentClassificationBadge status={comment.classificationStatus} />
+                  {comment.classificationReason && (
+                    <span className="text-xs italic text-slate-500">{comment.classificationReason}</span>
+                  )}
+                </div>
+                {comment.suggestedReply && (
+                  <div className="mt-2 rounded-xl bg-white/80 p-3">
+                    <p className="text-xs font-black uppercase text-blue-700">Sugestão de resposta</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm font-semibold text-slate-700">{comment.suggestedReply}</p>
+                    <button
+                      type="button"
+                      onClick={() => setResponses((prev) => ({ ...prev, [comment.id]: comment.suggestedReply ?? "" }))}
+                      className="mt-2 rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
+                    >
+                      Usar sugestão
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             {comment.response && (
               <div className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
                 <span className="font-bold">Resposta: </span>{comment.response}

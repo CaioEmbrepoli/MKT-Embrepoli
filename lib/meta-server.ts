@@ -217,7 +217,7 @@ export async function getInstagramConnection(context: MetaRequestContext) {
   return connection;
 }
 
-async function graphGet<T>(pathOrUrl: string, accessToken: string, params: Record<string, string> = {}): Promise<T> {
+export async function graphGet<T>(pathOrUrl: string, accessToken: string, params: Record<string, string> = {}): Promise<T> {
   const url = pathOrUrl.startsWith("http")
     ? new URL(pathOrUrl)
     : new URL(`${metaGraphBase()}${pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`}`);
@@ -229,6 +229,23 @@ async function graphGet<T>(pathOrUrl: string, accessToken: string, params: Recor
   const data = await response.json().catch(() => ({}));
   if (!response.ok || data?.error) {
     throw new Error(data?.error?.message || "Erro ao consultar a API da Meta.");
+  }
+  return data as T;
+}
+
+export async function graphPost<T>(pathOrUrl: string, accessToken: string, body: Record<string, string> = {}): Promise<T> {
+  const url = pathOrUrl.startsWith("http")
+    ? new URL(pathOrUrl)
+    : new URL(`${metaGraphBase()}${pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`}`);
+  const payload = new URLSearchParams({ ...body, access_token: accessToken });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: payload
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || data?.error) {
+    throw new Error(data?.error?.message || "Erro ao enviar dados para a API da Meta.");
   }
   return data as T;
 }
@@ -365,6 +382,31 @@ export async function fetchInstagramCommentsForMedia(accessToken: string, media:
     pages += 1;
   }
   return comments.filter((item) => item.commentId && item.text);
+}
+
+export async function fetchInstagramCommentById(accessToken: string, commentId: string, fallbackMediaId = "") {
+  const cleanId = commentId.replace(/^instagram:/, "");
+  const data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
+    fields: "id,text,username,timestamp,like_count,media{id,caption,timestamp}"
+  });
+  const media = data?.media ?? {};
+  const mediaId = String(media.id || fallbackMediaId || "");
+  return {
+    commentId: `instagram:${String(data.id || cleanId)}`,
+    videoId: mediaId,
+    videoTitle: sanitizeText(String(media.caption || "Post Instagram")).slice(0, 140) || "Post Instagram",
+    authorName: sanitizeText(String(data.username || "Instagram")),
+    text: sanitizeText(String(data.text || "")),
+    likes: Number(data.like_count || 0),
+    publishedAt: String(data.timestamp || media.timestamp || new Date().toISOString())
+  } satisfies InstagramCommentItem;
+}
+
+export async function replyToInstagramComment(accessToken: string, commentId: string, message: string) {
+  const cleanId = commentId.replace(/^instagram:/, "");
+  return graphPost<{ id?: string }>(`${igApiBase(accessToken)}/${cleanId}/replies`, accessToken, {
+    message
+  });
 }
 
 export async function fetchInstagramInsightsForMedia(accessToken: string, media: InstagramMediaItem) {
