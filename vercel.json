@@ -27,6 +27,10 @@
     {
       "path": "/api/cron/instagram-token-refresh",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/cron/google-token-expiry-check",
+      "schedule": "30 9 * * *"
     }
   ]
 }

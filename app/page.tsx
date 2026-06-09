@@ -10188,6 +10188,11 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                         {serviceStatus?.connectedAt && (
                           <p className="text-xs font-bold text-slate-400">Conectado em {new Date(serviceStatus.connectedAt).toLocaleDateString("pt-BR")}</p>
                         )}
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">
+                            Expira ~{new Date(new Date(serviceStatus.connectedAt).getTime() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("pt-BR")} (estimativa)
+                          </p>
+                        )}
                       </div>
                     </div>
                     {currentUser.role === "admin" && serviceStatus?.connected && (
@@ -10241,6 +10246,11 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                         </p>
                         {serviceStatus?.connectedAt && (
                           <p className="text-xs font-bold text-slate-400">Conectado em {new Date(serviceStatus.connectedAt).toLocaleDateString("pt-BR")}</p>
+                        )}
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">
+                            Expira ~{new Date(new Date(serviceStatus.connectedAt).getTime() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("pt-BR")} (estimativa)
+                          </p>
                         )}
                       </div>
                     </div>
