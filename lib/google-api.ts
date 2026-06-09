@@ -52,7 +52,7 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 20000):
   }
 }
 
-export type GoogleService = "drive" | "youtube";
+export type GoogleService = "drive" | "youtube" | "sheets";
 
 export type GoogleServiceConnectionStatus = {
   connected: boolean;
@@ -65,6 +65,7 @@ export type GoogleServiceConnectionStatus = {
 export type GoogleConnectionStatus = {
   drive: GoogleServiceConnectionStatus;
   youtube: GoogleServiceConnectionStatus;
+  sheets: GoogleServiceConnectionStatus;
   canManage: boolean;
 };
 

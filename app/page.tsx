@@ -158,6 +158,12 @@ import {
   deleteFeedback
 } from "@/lib/supabase-data";
 import type {
+  Ad,
+  AdAccount,
+  AdAlert,
+  AdCampaign,
+  AdInsightDaily,
+  AdSet,
   AutoFilter,
   AppArea,
   Campaign,
@@ -1058,6 +1064,12 @@ export default function Home() {
   const [calendarDates, setCalendarDates] = useState<CalendarDate[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [metrics, setMetrics] = useState<PostMetric[]>([]);
+  const [adAccounts, setAdAccounts] = useState<AdAccount[]>([]);
+  const [adCampaigns, setAdCampaigns] = useState<AdCampaign[]>([]);
+  const [adSets, setAdSets] = useState<AdSet[]>([]);
+  const [ads, setAds] = useState<Ad[]>([]);
+  const [adInsightsDaily, setAdInsightsDaily] = useState<AdInsightDaily[]>([]);
+  const [adAlerts, setAdAlerts] = useState<AdAlert[]>([]);
   const [customerQuestions, setCustomerQuestions] = useState<CustomerQuestion[]>([]);
   const [ytComments, setYtComments] = useState<Comment[]>([]);
   const [autoFilters, setAutoFilters] = useState<AutoFilter[]>([]);
@@ -1377,6 +1389,12 @@ export default function Home() {
     setCalendarDates(data.calendarDates);
     setTasks(data.tasks);
     setMetrics(data.metrics);
+    setAdAccounts(data.adAccounts);
+    setAdCampaigns(data.adCampaigns);
+    setAdSets(data.adSets);
+    setAds(data.ads);
+    setAdInsightsDaily(data.adInsightsDaily);
+    setAdAlerts(data.adAlerts);
     setCustomerQuestions(data.customerQuestions);
     setYtComments(data.ytComments);
     setAutoFilters(data.autoFilters);
@@ -1435,6 +1453,12 @@ export default function Home() {
       "task_comments",
       "task_attachments",
       "post_metrics",
+      "ad_accounts",
+      "ad_campaigns",
+      "ad_sets",
+      "ads",
+      "ad_insights_daily",
+      "ad_alerts",
       "notifications",
       "comments",
       "auto_filters"
@@ -2514,6 +2538,12 @@ export default function Home() {
               vehicleTypes={vehicleTypes}
               contentTypes={contentTypes}
               funnelStages={funnelStages}
+              adAccounts={adAccounts}
+              adCampaigns={adCampaigns}
+              adSets={adSets}
+              ads={ads}
+              adInsightsDaily={adInsightsDaily}
+              adAlerts={adAlerts}
               currentUser={currentUser}
               taskColumns={taskColumns}
               setTasks={syncTasks}
@@ -8799,6 +8829,12 @@ function Metrics({
   vehicleTypes,
   contentTypes,
   funnelStages,
+  adAccounts,
+  adCampaigns,
+  adSets,
+  ads,
+  adInsightsDaily,
+  adAlerts,
   currentUser,
   taskColumns,
   setTasks,
@@ -8820,6 +8856,12 @@ function Metrics({
   vehicleTypes: VehicleType[];
   contentTypes: ContentType[];
   funnelStages: FunnelStage[];
+  adAccounts: AdAccount[];
+  adCampaigns: AdCampaign[];
+  adSets: AdSet[];
+  ads: Ad[];
+  adInsightsDaily: AdInsightDaily[];
+  adAlerts: AdAlert[];
   currentUser: Profile;
   taskColumns: TaskColumn[];
   setTasks: Dispatch<SetStateAction<Task[]>>;
@@ -8833,6 +8875,7 @@ function Metrics({
   reloadData?: () => Promise<void>;
 }) {
   const [period, setPeriod] = useState("all");
+  const [metricsMode, setMetricsMode] = useState<"organic" | "ads">("organic");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
   const [allVideosOpen, setAllVideosOpen] = useState(false);
@@ -9103,13 +9146,46 @@ function Metrics({
 
   return (
     <Panel title="Métricas" action={
-      <div className="flex items-center gap-2">
-        <button type="button" onClick={() => setMetricImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition">
-          <Download size={16} /> Importar
+      metricsMode === "organic" ? (
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setMetricImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition">
+            <Download size={16} /> Importar
+          </button>
+          <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
+        </div>
+      ) : (
+        <button type="button" className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-500" title="A conexão Meta Ads entra na próxima etapa">
+          <Megaphone size={16} /> Meta Ads em breve
         </button>
-        <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
-      </div>
+      )
     }>
+      <div className="mb-5 flex w-fit rounded-2xl bg-slate-100 p-1">
+        {[
+          ["organic", "Orgânico"],
+          ["ads", "Anúncios"]
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setMetricsMode(id as "organic" | "ads")}
+            className={`rounded-xl px-4 py-2 text-sm font-black transition ${metricsMode === id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {metricsMode === "ads" ? (
+        <AdsMetricsDashboard
+          adAccounts={adAccounts}
+          adCampaigns={adCampaigns}
+          adSets={adSets}
+          ads={ads}
+          adInsightsDaily={adInsightsDaily}
+          adAlerts={adAlerts}
+        />
+      ) : (
+      <>
       <div className="mb-4 -mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1">
         {[{ id: "all", name: "Geral", color: "#0f172a" } as Channel, ...channels].map((ch) => {
           const count = ch.id === "all" ? resolvedMetrics.length : (channelCounts.get(ch.id) ?? 0);
@@ -9596,8 +9672,417 @@ function Metrics({
           onPick={(id) => { setAllVideosOpen(false); setModal({ kind: "metric", id }); }}
         />
       )}
+      </>
+      )}
     </Panel>
   );
+}
+
+function AdsMetricsDashboard({
+  adAccounts,
+  adCampaigns,
+  adSets,
+  ads,
+  adInsightsDaily,
+  adAlerts
+}: {
+  adAccounts: AdAccount[];
+  adCampaigns: AdCampaign[];
+  adSets: AdSet[];
+  ads: Ad[];
+  adInsightsDaily: AdInsightDaily[];
+  adAlerts: AdAlert[];
+}) {
+  const [period, setPeriod] = useState("30");
+  const [platformFilter, setPlatformFilter] = useState("all");
+  const [accountFilter, setAccountFilter] = useState("all");
+  const [campaignFilter, setCampaignFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  const accountById = useMemo(() => new Map(adAccounts.map((account) => [account.id, account])), [adAccounts]);
+  const campaignById = useMemo(() => new Map(adCampaigns.map((campaign) => [campaign.id, campaign])), [adCampaigns]);
+
+  const filteredInsights = useMemo(() => {
+    const now = new Date();
+    const days = period === "all" ? null : Number(period);
+    return adInsightsDaily.filter((insight) => {
+      if (days !== null) {
+        const date = new Date(`${insight.date}T12:00:00`);
+        const diffDays = Math.floor((now.getTime() - date.getTime()) / 86400000);
+        if (diffDays > days) return false;
+      }
+      if (platformFilter !== "all" && insight.platform !== platformFilter) return false;
+      if (accountFilter !== "all" && insight.accountId !== accountFilter) return false;
+      if (campaignFilter !== "all" && insight.campaignId !== campaignFilter) return false;
+      const campaign = insight.campaignId ? campaignById.get(insight.campaignId) : undefined;
+      if (statusFilter !== "all" && (campaign?.status ?? "unknown") !== statusFilter) return false;
+      return true;
+    });
+  }, [adInsightsDaily, period, platformFilter, accountFilter, campaignFilter, statusFilter, campaignById]);
+
+  const campaignRows = useMemo(() => {
+    const grouped = new Map<string, {
+      campaign: AdCampaign | undefined;
+      spend: number;
+      impressions: number;
+      reach: number;
+      clicks: number;
+      linkClicks: number;
+      landingPageViews: number;
+      leads: number;
+      conversations: number;
+      purchases: number;
+      purchaseValue: number;
+      engagements: number;
+      videoViews: number;
+    }>();
+
+    for (const insight of filteredInsights) {
+      const key = insight.campaignId || `account:${insight.accountId}`;
+      const current = grouped.get(key) ?? {
+        campaign: insight.campaignId ? campaignById.get(insight.campaignId) : undefined,
+        spend: 0,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
+        linkClicks: 0,
+        landingPageViews: 0,
+        leads: 0,
+        conversations: 0,
+        purchases: 0,
+        purchaseValue: 0,
+        engagements: 0,
+        videoViews: 0
+      };
+      current.spend += insight.spend;
+      current.impressions += insight.impressions;
+      current.reach += insight.reach;
+      current.clicks += insight.clicks;
+      current.linkClicks += insight.linkClicks;
+      current.landingPageViews += insight.landingPageViews;
+      current.leads += insight.leads;
+      current.conversations += insight.conversations;
+      current.purchases += insight.purchases;
+      current.purchaseValue += insight.purchaseValue;
+      current.engagements += insight.engagements;
+      current.videoViews += insight.videoViews;
+      grouped.set(key, current);
+    }
+
+    return Array.from(grouped.entries()).map(([id, row]) => {
+      const results = row.leads + row.conversations + row.purchases;
+      const costPerResult = results ? row.spend / results : 0;
+      return {
+        id,
+        campaignId: row.campaign?.id ?? id,
+        name: row.campaign?.name ?? "Sem campanha vinculada",
+        objective: row.campaign?.objective ?? "Sem objetivo",
+        status: row.campaign?.status ?? "unknown",
+        accountName: row.campaign?.accountId ? accountById.get(row.campaign.accountId)?.name ?? "Conta" : "Conta",
+        spend: row.spend,
+        impressions: row.impressions,
+        reach: row.reach,
+        frequency: row.reach ? row.impressions / row.reach : 0,
+        cpm: row.impressions ? (row.spend / row.impressions) * 1000 : 0,
+        clicks: row.clicks,
+        linkClicks: row.linkClicks,
+        ctr: row.impressions ? (row.linkClicks / row.impressions) * 100 : 0,
+        cpc: row.linkClicks ? row.spend / row.linkClicks : 0,
+        landingPageViews: row.landingPageViews,
+        leads: row.leads,
+        costPerLead: row.leads ? row.spend / row.leads : 0,
+        conversations: row.conversations,
+        costPerConversation: row.conversations ? row.spend / row.conversations : 0,
+        purchases: row.purchases,
+        purchaseValue: row.purchaseValue,
+        roas: row.spend ? row.purchaseValue / row.spend : 0,
+        engagements: row.engagements,
+        videoViews: row.videoViews,
+        results,
+        costPerResult
+      };
+    }).sort((a, b) => b.spend - a.spend);
+  }, [filteredInsights, campaignById, accountById]);
+
+  const totals = useMemo(() => {
+    const base = filteredInsights.reduce((acc, insight) => {
+      acc.spend += insight.spend;
+      acc.impressions += insight.impressions;
+      acc.reach += insight.reach;
+      acc.linkClicks += insight.linkClicks;
+      acc.landingPageViews += insight.landingPageViews;
+      acc.leads += insight.leads;
+      acc.conversations += insight.conversations;
+      acc.purchases += insight.purchases;
+      acc.purchaseValue += insight.purchaseValue;
+      acc.engagements += insight.engagements;
+      return acc;
+    }, { spend: 0, impressions: 0, reach: 0, linkClicks: 0, landingPageViews: 0, leads: 0, conversations: 0, purchases: 0, purchaseValue: 0, engagements: 0 });
+    return {
+      ...base,
+      ctr: base.impressions ? (base.linkClicks / base.impressions) * 100 : 0,
+      frequency: base.reach ? base.impressions / base.reach : 0,
+      cpl: base.leads ? base.spend / base.leads : 0,
+      costPerConversation: base.conversations ? base.spend / base.conversations : 0,
+      roas: base.spend ? base.purchaseValue / base.spend : 0
+    };
+  }, [filteredInsights]);
+
+  const dailyEvolution = useMemo(() => Object.values(filteredInsights.reduce<Record<string, { date: string; spend: number; leads: number; conversations: number; purchases: number }>>((acc, insight) => {
+    const key = insight.date || todayIso();
+    acc[key] = acc[key] ?? { date: key.slice(5), spend: 0, leads: 0, conversations: 0, purchases: 0 };
+    acc[key].spend += insight.spend;
+    acc[key].leads += insight.leads;
+    acc[key].conversations += insight.conversations;
+    acc[key].purchases += insight.purchases;
+    return acc;
+  }, {})).sort((a, b) => a.date.localeCompare(b.date)), [filteredInsights]);
+
+  const generatedAlerts = useMemo(() => {
+    if (!campaignRows.length) return [] as AdAlert[];
+    const avgCtr = campaignRows.reduce((sum, row) => sum + row.ctr, 0) / campaignRows.length;
+    const avgCpm = campaignRows.reduce((sum, row) => sum + row.cpm, 0) / campaignRows.length;
+    const rowsWithCpl = campaignRows.filter((row) => row.leads >= 3 && row.costPerLead > 0);
+    const avgCpl = rowsWithCpl.length ? rowsWithCpl.reduce((sum, row) => sum + row.costPerLead, 0) / rowsWithCpl.length : 0;
+    const avgResults = campaignRows.reduce((sum, row) => sum + row.results, 0) / campaignRows.length;
+    const rowsWithCost = campaignRows.filter((row) => row.costPerResult > 0);
+    const avgCostPerResult = rowsWithCost.length ? rowsWithCost.reduce((sum, row) => sum + row.costPerResult, 0) / rowsWithCost.length : 0;
+
+    const alerts: AdAlert[] = [];
+    const pushAlert = (row: (typeof campaignRows)[number], severity: AdAlert["severity"], title: string, description: string, recommendation: string, metricKey: string, metricValue?: number, benchmarkValue?: number) => {
+      alerts.push({
+        id: `generated:${row.campaignId}:${metricKey}`,
+        platform: "meta",
+        severity,
+        status: "open",
+        entityType: "campaign",
+        entityId: row.campaignId,
+        title,
+        description: `${row.name}: ${description}`,
+        recommendation,
+        metricKey,
+        metricValue,
+        benchmarkValue,
+        date: todayIso()
+      });
+    };
+
+    for (const row of campaignRows) {
+      if (row.ctr > 0 && (row.ctr < 0.8 || (avgCtr > 0 && row.ctr < avgCtr * 0.7))) {
+        pushAlert(row, "atencao", "CTR baixo", `CTR em ${formatPercent(row.ctr)} no período.`, "Revisar gancho, criativo e primeira linha do anúncio.", "ctr_low", row.ctr, avgCtr);
+      }
+      if (row.frequency >= 3.5) {
+        pushAlert(row, "atencao", "Frequência alta", `Frequência em ${row.frequency.toFixed(1)}.`, "Renovar criativos ou ampliar público para reduzir saturação.", "frequency_high", row.frequency, 3.5);
+      }
+      if (row.spend >= 50 && row.results === 0) {
+        pushAlert(row, "critico", "Gastou sem resultado", `${formatCurrency(row.spend)} gastos sem leads, conversas ou compras.`, "Pausar ou revisar público, oferta e destino antes de aumentar verba.", "spend_no_result", row.spend, 50);
+      }
+      if (avgCpl > 0 && row.leads >= 3 && row.costPerLead > avgCpl * 1.3) {
+        pushAlert(row, "atencao", "CPL alto", `CPL em ${formatCurrency(row.costPerLead)}.`, "Comparar com campanhas de CPL menor e testar uma oferta mais direta.", "cpl_high", row.costPerLead, avgCpl);
+      }
+      if (avgCpm > 0 && row.cpm > avgCpm * 1.3) {
+        pushAlert(row, "atencao", "CPM alto", `CPM em ${formatCurrency(row.cpm)}.`, "Revisar segmentação e qualidade do criativo para baratear entrega.", "cpm_high", row.cpm, avgCpm);
+      }
+      if (avgResults > 0 && avgCostPerResult > 0 && row.results > avgResults && row.costPerResult > 0 && row.costPerResult < avgCostPerResult * 0.8) {
+        pushAlert(row, "bom", "Bom para escalar", `${row.results} resultados com custo abaixo da média.`, "Aumentar verba gradualmente e manter monitoramento de frequência.", "scale_candidate", row.costPerResult, avgCostPerResult);
+      }
+      if (avgCtr > 0 && avgCostPerResult > 0 && row.ctr > avgCtr && row.costPerResult > 0 && row.costPerResult < avgCostPerResult) {
+        pushAlert(row, "bom", "Criativo vencedor", `CTR acima da média e custo por resultado competitivo.`, "Criar variações desse criativo para validar o padrão vencedor.", "creative_winner", row.ctr, avgCtr);
+      }
+      if ((row.linkClicks >= 20 || row.landingPageViews >= 20) && row.results === 0) {
+        pushAlert(row, "critico", "Revisar oferta/página", `${row.linkClicks} cliques e ${row.landingPageViews} visitas sem conversão.`, "Conferir página, WhatsApp, formulário e clareza da oferta.", "landing_review", row.linkClicks || row.landingPageViews);
+      }
+    }
+    return alerts.slice(0, 12);
+  }, [campaignRows]);
+
+  const visibleAlerts = useMemo(() => {
+    const persisted = adAlerts.filter((alert) => alert.status === "open");
+    return [...persisted, ...generatedAlerts].slice(0, 12);
+  }, [adAlerts, generatedAlerts]);
+
+  const bestCampaigns = useMemo(() => campaignRows.filter((row) => row.results > 0).sort((a, b) => a.costPerResult - b.costPerResult).slice(0, 5), [campaignRows]);
+  const weakCampaigns = useMemo(() => campaignRows.filter((row) => row.spend > 0).sort((a, b) => (b.costPerResult || b.spend) - (a.costPerResult || a.spend)).slice(0, 5), [campaignRows]);
+  const attentionCampaigns = useMemo(() => campaignRows.filter((row) => row.frequency >= 3.5 || row.ctr < 0.8 || (row.spend >= 50 && row.results === 0)).slice(0, 5), [campaignRows]);
+
+  const empty = !adAccounts.length && !adCampaigns.length && !adInsightsDaily.length;
+  const platformOptions = [["all", "Todas"], ["meta", "Meta Ads"], ["google", "Google Ads"], ["tiktok", "TikTok Ads"], ["outros", "Outros"]];
+  const statusOptions = [["all", "Todos"], ["active", "Ativas"], ["paused", "Pausadas"], ["archived", "Arquivadas"], ["deleted", "Excluídas"], ["unknown", "Sem status"]];
+
+  return (
+    <div className="grid gap-5">
+      {empty ? (
+        <div className="rounded-[32px] border border-dashed border-blue-200 bg-blue-50/60 p-8 text-center">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-blue-700 shadow-sm">
+            <Megaphone size={26} />
+          </div>
+          <h3 className="mt-4 text-xl font-black text-slate-950">Conecte uma conta de anúncios para começar a importar dados</h3>
+          <p className="mx-auto mt-2 max-w-2xl text-sm font-bold text-slate-500">
+            A estrutura de Meta Ads já está preparada. Quando a API for conectada, este painel vai mostrar investimento, resultados, campanhas em atenção e recomendações automáticas.
+          </p>
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-end gap-3 rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+        <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
+        <FilterSelect label="Plataforma" value={platformFilter} onChange={setPlatformFilter} options={platformOptions} />
+        <FilterSelect label="Conta" value={accountFilter} onChange={setAccountFilter} options={[["all", "Todas"], ...adAccounts.map((account) => [account.id, account.name])]} />
+        <FilterSelect label="Campanha" value={campaignFilter} onChange={setCampaignFilter} options={[["all", "Todas"], ...adCampaigns.map((campaign) => [campaign.id, campaign.name])]} />
+        <FilterSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={statusOptions} />
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <MetricKpiCard label="Investimento" value={formatCurrency(totals.spend)} />
+        <MetricKpiCard label="Leads" value={formatNumber(totals.leads)} />
+        <MetricKpiCard label="CPL" value={totals.leads ? formatCurrency(totals.cpl) : "—"} />
+        <MetricKpiCard label="Conversas" value={formatNumber(totals.conversations)} />
+        <MetricKpiCard label="Custo/conversa" value={totals.conversations ? formatCurrency(totals.costPerConversation) : "—"} />
+        <MetricKpiCard label="Compras" value={formatNumber(totals.purchases)} />
+        <MetricKpiCard label="ROAS" value={totals.roas ? `${totals.roas.toFixed(2).replace(".", ",")}x` : "—"} />
+        <MetricKpiCard label="CTR" value={formatPercent(totals.ctr)} />
+        <MetricKpiCard label="Frequência" value={totals.frequency ? totals.frequency.toFixed(1).replace(".", ",") : "—"} />
+        <MetricKpiCard label="Landing views" value={formatNumber(totals.landingPageViews)} />
+      </div>
+
+      <section className="grid gap-5 xl:grid-cols-[1fr_0.9fr]">
+        <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="font-black">Campanhas em atenção</h3>
+              <p className="text-xs font-bold text-slate-400">Alertas calculados por regra fixa</p>
+            </div>
+            <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-700">{visibleAlerts.length} alertas</span>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {visibleAlerts.map((alert) => (
+              <div key={alert.id} className={`rounded-2xl border p-3 ${alert.severity === "bom" ? "border-emerald-100 bg-emerald-50" : alert.severity === "critico" ? "border-rose-100 bg-rose-50" : "border-amber-100 bg-amber-50"}`}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-black uppercase ${alert.severity === "bom" ? "bg-emerald-600 text-white" : alert.severity === "critico" ? "bg-rose-600 text-white" : "bg-amber-500 text-white"}`}>
+                    {alert.severity === "bom" ? "bom" : alert.severity === "critico" ? "crítico" : "atenção"}
+                  </span>
+                  <p className="text-sm font-black text-slate-900">{alert.title}</p>
+                </div>
+                <p className="mt-2 text-sm font-bold text-slate-600">{alert.description}</p>
+                <p className="mt-2 text-xs font-black text-slate-800">Recomendação: {alert.recommendation}</p>
+              </div>
+            ))}
+            {!visibleAlerts.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Sem alertas no período selecionado.</p>}
+          </div>
+        </div>
+
+        <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+          <h3 className="font-black">Evolução diária</h3>
+          <p className="text-xs font-bold text-slate-400">Investimento e resultados por dia</p>
+          <div className="mt-4 h-80">
+            {dailyEvolution.length ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={dailyEvolution}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                  <YAxis tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} tickFormatter={(value) => formatNumber(Number(value))} />
+                  <Tooltip formatter={(value: number, name: string) => [name === "spend" ? formatCurrency(Number(value)) : formatNumber(Number(value)), name === "spend" ? "Investimento" : name === "leads" ? "Leads" : name === "conversations" ? "Conversas" : "Compras"]} />
+                  <Area type="monotone" dataKey="spend" stroke="#2563eb" fill="#dbeafe" strokeWidth={2} name="Investimento" />
+                  <Area type="monotone" dataKey="leads" stroke="#059669" fill="#d1fae5" strokeWidth={2} name="Leads" />
+                  <Area type="monotone" dataKey="conversations" stroke="#f59e0b" fill="#fef3c7" strokeWidth={2} name="Conversas" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-full items-center justify-center rounded-3xl bg-slate-50 text-sm font-bold text-slate-400">Sem dados diários importados ainda.</div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-3">
+        <AdCampaignMiniList title="Melhores campanhas" rows={bestCampaigns} empty="Nenhuma campanha com resultado ainda." positive />
+        <AdCampaignMiniList title="Piores campanhas" rows={weakCampaigns} empty="Nenhuma campanha com gasto no período." />
+        <AdCampaignMiniList title="Atenção rápida" rows={attentionCampaigns} empty="Nada crítico pelos critérios atuais." />
+      </section>
+
+      <section className="overflow-hidden rounded-[28px] border border-slate-100 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+          <div>
+            <h3 className="font-black">Tabela de campanhas</h3>
+            <p className="text-xs font-bold text-slate-400">{adSets.length} conjuntos · {ads.length} anúncios cadastrados</p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">{campaignRows.length} campanhas no filtro</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-[980px] w-full text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-black uppercase text-slate-400">
+              <tr>
+                <th className="px-4 py-3">Campanha</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Investimento</th>
+                <th className="px-4 py-3">Impressões</th>
+                <th className="px-4 py-3">CTR</th>
+                <th className="px-4 py-3">Leads</th>
+                <th className="px-4 py-3">CPL</th>
+                <th className="px-4 py-3">Conversas</th>
+                <th className="px-4 py-3">ROAS</th>
+              </tr>
+            </thead>
+            <tbody>
+              {campaignRows.map((row) => (
+                <tr key={row.id} className="border-t border-slate-100">
+                  <td className="px-4 py-3">
+                    <p className="font-black text-slate-900">{row.name}</p>
+                    <p className="text-xs font-bold text-slate-400">{row.objective} · {row.accountName}</p>
+                  </td>
+                  <td className="px-4 py-3"><span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-black text-slate-600">{adStatusLabel(row.status)}</span></td>
+                  <td className="px-4 py-3 font-black">{formatCurrency(row.spend)}</td>
+                  <td className="px-4 py-3 font-bold text-slate-600">{formatNumber(row.impressions)}</td>
+                  <td className="px-4 py-3 font-bold text-slate-600">{formatPercent(row.ctr)}</td>
+                  <td className="px-4 py-3 font-bold text-slate-600">{formatNumber(row.leads)}</td>
+                  <td className="px-4 py-3 font-bold text-slate-600">{row.leads ? formatCurrency(row.costPerLead) : "—"}</td>
+                  <td className="px-4 py-3 font-bold text-slate-600">{formatNumber(row.conversations)}</td>
+                  <td className="px-4 py-3 font-bold text-slate-600">{row.roas ? `${row.roas.toFixed(2).replace(".", ",")}x` : "—"}</td>
+                </tr>
+              ))}
+              {!campaignRows.length && (
+                <tr>
+                  <td colSpan={9} className="px-4 py-10 text-center text-sm font-bold text-slate-400">Nenhuma campanha encontrada com os filtros atuais.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AdCampaignMiniList({ title, rows, empty, positive = false }: { title: string; rows: Array<{ id: string; name: string; spend: number; results: number; costPerResult: number; ctr: number; frequency: number }>; empty: string; positive?: boolean }) {
+  return (
+    <div className="rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
+      <h3 className="font-black">{title}</h3>
+      <div className="mt-3 grid gap-2">
+        {rows.map((row) => (
+          <div key={row.id} className="rounded-2xl bg-slate-50 p-3">
+            <p className="line-clamp-1 text-sm font-black text-slate-900">{row.name}</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs font-black">
+              <span className="rounded-xl bg-white px-2 py-1 text-slate-600">{formatCurrency(row.spend)}</span>
+              <span className={`rounded-xl px-2 py-1 ${positive ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{row.results} result.</span>
+              <span className="rounded-xl bg-white px-2 py-1 text-slate-600">CTR {formatPercent(row.ctr)}</span>
+              <span className="rounded-xl bg-white px-2 py-1 text-slate-600">Freq. {row.frequency ? row.frequency.toFixed(1).replace(".", ",") : "—"}</span>
+            </div>
+          </div>
+        ))}
+        {!rows.length && <p className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">{empty}</p>}
+      </div>
+    </div>
+  );
+}
+
+function adStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    active: "Ativa",
+    paused: "Pausada",
+    archived: "Arquivada",
+    deleted: "Excluída",
+    unknown: "Sem status"
+  };
+  return labels[status] ?? status;
 }
 
 function FilterSelect({ label, value, options, onChange }: { label: string; value: string; options: string[][]; onChange: (value: string) => void }) {
@@ -10335,8 +10820,14 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     }
   }
 
+  const googleServiceLabels: Record<GoogleService, string> = {
+    drive: "Google Drive",
+    youtube: "YouTube",
+    sheets: "Google Planilhas"
+  };
+
   async function disconnectGoogle(service: GoogleService) {
-    const label = service === "youtube" ? "YouTube" : "Google Drive";
+    const label = googleServiceLabels[service];
     if (!window.confirm(`Desconectar ${label} para toda a equipe?`)) return;
     setGoogleBusy(service);
     setGoogleError("");
@@ -10411,6 +10902,11 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
       service: "youtube",
       title: "YouTube",
       description: "Importacao de videos e metricas do canal conectado."
+    },
+    {
+      service: "sheets",
+      title: "Google Planilhas",
+      description: "Leitura e edição de planilhas autorizadas pela conta corporativa."
     }
   ];
 
@@ -10434,7 +10930,7 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
           <div>
             <p className="font-black">Integrações Google corporativas</p>
             <p className="mt-1 text-sm font-bold text-slate-500">
-              Conecte Drive e YouTube separadamente. Cada integracao fica salva para toda a equipe.
+              Conecte Drive, YouTube e Google Planilhas separadamente. Cada integracao fica salva para toda a equipe.
             </p>
             {!canManageIntegrations && (
               <p className="mt-2 text-xs font-bold text-slate-400">
@@ -10549,6 +11045,67 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                     {canManageIntegrations && (
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-black text-white transition hover:bg-red-700 disabled:bg-slate-200 disabled:text-slate-400">
+                          {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
+                        </button>
+                        {serviceStatus?.connected && (
+                          <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => disconnectGoogle(integration.service)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                            Desconectar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Google Planilhas */}
+            {googleIntegrations.filter((i) => i.service === "sheets").map((integration) => {
+              const serviceStatus = googleStatus?.[integration.service];
+              const busy = googleBusy === integration.service;
+              const connectedEmail = serviceStatus?.googleEmail?.trim();
+              const initial = connectedEmail?.[0]?.toUpperCase() ?? "P";
+              return (
+                <div key={integration.service} className="overflow-hidden rounded-[26px] border border-emerald-100 bg-white shadow-sm">
+                  <div className="flex items-center gap-3 border-b border-emerald-100 bg-emerald-50 px-4 py-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600">
+                      <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white" aria-hidden="true">
+                        <path d="M6 2h8l5 5v15H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm7 1.5V8h4.5L13 3.5ZM7 11v7h10v-7H7Zm2 2h2v1.5H9V13Zm4 0h2v1.5h-2V13Zm-4 3h2v1.5H9V16Zm4 0h2v1.5h-2V16Z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-black text-slate-800">{integration.title}</p>
+                      <p className="text-xs font-bold text-slate-400 truncate">{integration.description}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${serviceStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-white/70 text-slate-500"}`}>
+                      {googleLoading ? "…" : serviceStatus?.connected ? "Conectado" : "Desconectado"}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-black text-emerald-700">
+                        {initial}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-slate-800">
+                          {googleLoading ? "Verificando..." : connectedEmail || (serviceStatus?.connected ? "Email não identificado" : "Nenhuma conta conectada")}
+                        </p>
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">Conectado em {new Date(serviceStatus.connectedAt).toLocaleDateString("pt-BR")}</p>
+                        )}
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">
+                            Expira ~{new Date(new Date(serviceStatus.connectedAt).getTime() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("pt-BR")} (estimativa)
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {currentUser.role === "admin" && serviceStatus?.connected && (
+                      <GoogleTokenExpiryAlert label="Google Planilhas" connectedAt={serviceStatus?.connectedAt} />
+                    )}
+                    {canManageIntegrations && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-black text-white transition hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400">
                           {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
                         </button>
                         {serviceStatus?.connected && (

@@ -25,7 +25,7 @@ begin
       and conrelid = 'public.google_connections'::regclass
   ) then
     alter table public.google_connections
-      add constraint google_connections_service_check check (service in ('drive', 'youtube'));
+      add constraint google_connections_service_check check (service in ('drive', 'youtube', 'sheets'));
   end if;
 end $$;
 

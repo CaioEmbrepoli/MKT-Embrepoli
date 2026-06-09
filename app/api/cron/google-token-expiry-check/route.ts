@@ -3,7 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
-// Avisa os admins quando o token OAuth do Google (Drive/YouTube) estiver perto de expirar.
+// Avisa os admins quando o token OAuth do Google (Drive/YouTube/Planilhas) estiver perto de expirar.
 //
 // Diferente do Instagram, o Google nao oferece um endpoint que "estenda" a validade do
 // refresh_token: enquanto o app estiver em modo "Teste" no Google Cloud Console, o
@@ -23,7 +23,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 const SERVICE_LABEL: Record<string, string> = {
   drive: "Google Drive",
-  youtube: "YouTube"
+  youtube: "YouTube",
+  sheets: "Google Planilhas"
 };
 
 export async function GET(request: Request) {

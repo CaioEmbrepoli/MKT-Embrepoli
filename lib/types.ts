@@ -371,6 +371,125 @@ export type PostMetricSnapshot = {
   leads: number;
 };
 
+export type AdPlatform = "meta" | "google" | "tiktok" | "outros";
+export type AdEntityStatus = "active" | "paused" | "archived" | "deleted" | "unknown";
+export type AdBudgetType = "daily" | "lifetime" | "unknown";
+export type AdAlertSeverity = "bom" | "atencao" | "critico";
+export type AdAlertStatus = "open" | "reviewed" | "dismissed";
+export type AdAlertEntityType = "account" | "campaign" | "ad_set" | "ad";
+
+export type AdAccount = {
+  id: string;
+  platform: AdPlatform;
+  externalId?: string;
+  name: string;
+  currency: string;
+  status: AdEntityStatus;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdCampaign = {
+  id: string;
+  accountId: string;
+  internalCampaignId?: string;
+  externalId?: string;
+  name: string;
+  objective: string;
+  status: AdEntityStatus;
+  budgetAmount?: number;
+  budgetType?: AdBudgetType;
+  startsAt?: string;
+  endsAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdSet = {
+  id: string;
+  accountId: string;
+  campaignId: string;
+  externalId?: string;
+  name: string;
+  audienceName?: string;
+  status: AdEntityStatus;
+  budgetAmount?: number;
+  budgetType?: AdBudgetType;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type Ad = {
+  id: string;
+  accountId: string;
+  campaignId: string;
+  adSetId?: string;
+  externalId?: string;
+  name: string;
+  creativeName?: string;
+  status: AdEntityStatus;
+  thumbnailUrl?: string;
+  sourceUrl?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdInsightDaily = {
+  id: string;
+  platform: AdPlatform;
+  accountId: string;
+  campaignId?: string;
+  adSetId?: string;
+  adId?: string;
+  date: string;
+  spend: number;
+  impressions: number;
+  reach: number;
+  frequency: number;
+  cpm: number;
+  clicks: number;
+  linkClicks: number;
+  ctr: number;
+  cpc: number;
+  landingPageViews: number;
+  leads: number;
+  costPerLead: number;
+  conversations: number;
+  costPerConversation: number;
+  purchases: number;
+  purchaseValue: number;
+  costPerPurchase: number;
+  roas: number;
+  engagements: number;
+  videoViews: number;
+  costPerEngagement: number;
+  breakdownPlacement?: string;
+  breakdownAge?: string;
+  breakdownGender?: string;
+  breakdownRegion?: string;
+  breakdownDevice?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdAlert = {
+  id: string;
+  platform: AdPlatform;
+  severity: AdAlertSeverity;
+  status: AdAlertStatus;
+  entityType: AdAlertEntityType;
+  entityId: string;
+  title: string;
+  description: string;
+  recommendation: string;
+  metricKey: string;
+  metricValue?: number;
+  benchmarkValue?: number;
+  date: string;
+  createdAt?: string;
+  reviewedAt?: string;
+};
+
 export type Notification = {
   id: string;
   userId: string;

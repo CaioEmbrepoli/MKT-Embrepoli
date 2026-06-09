@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-export type GoogleService = "drive" | "youtube";
+export type GoogleService = "drive" | "youtube" | "sheets";
 
 export const GOOGLE_SCOPES_BY_SERVICE: Record<GoogleService, string[]> = {
   drive: ["https://www.googleapis.com/auth/drive.readonly"],
@@ -10,12 +10,21 @@ export const GOOGLE_SCOPES_BY_SERVICE: Record<GoogleService, string[]> = {
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
     "https://www.googleapis.com/auth/yt-analytics.readonly"
-  ]
+  ],
+  sheets: ["https://www.googleapis.com/auth/spreadsheets"]
 };
 
 export function normalizeGoogleService(value: string | null | undefined): GoogleService {
-  return value === "youtube" ? "youtube" : "drive";
+  if (value === "youtube") return "youtube";
+  if (value === "sheets") return "sheets";
+  return "drive";
 }
+
+export const GOOGLE_SERVICE_LABELS: Record<GoogleService, string> = {
+  drive: "Google Drive",
+  youtube: "YouTube",
+  sheets: "Google Planilhas"
+};
 
 type GoogleConnectionRow = {
   id: string;
@@ -155,7 +164,7 @@ export async function getGoogleConnection(supabaseClient: SupabaseClient, organi
 
 export async function getGoogleAccessToken(context: GoogleRequestContext, googleService: GoogleService) {
   const connection = await getGoogleConnection(context.service, context.organizationId, googleService);
-  const serviceLabel = googleService === "youtube" ? "YouTube" : "Google Drive";
+  const serviceLabel = GOOGLE_SERVICE_LABELS[googleService];
   if (!connection?.refresh_token) throw new Error(`${serviceLabel} nao conectado. Peca para um Gestor conectar a conta corporativa.`);
 
   const expiresAt = new Date(connection.expires_at || 0).getTime();

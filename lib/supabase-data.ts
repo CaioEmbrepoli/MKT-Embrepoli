@@ -1,6 +1,12 @@
 ﻿import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   AutoFilter,
+  Ad,
+  AdAccount,
+  AdAlert,
+  AdCampaign,
+  AdInsightDaily,
+  AdSet,
   Campaign,
   CampaignAudience,
   CalendarDate,
@@ -56,6 +62,12 @@ export type AppData = {
   ideas: Idea[];
   tasks: Task[];
   metrics: PostMetric[];
+  adAccounts: AdAccount[];
+  adCampaigns: AdCampaign[];
+  adSets: AdSet[];
+  ads: Ad[];
+  adInsightsDaily: AdInsightDaily[];
+  adAlerts: AdAlert[];
   notifications: Notification[];
   calendarDates: CalendarDate[];
   customerQuestions: CustomerQuestion[];
@@ -132,7 +144,13 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     salesClientsData,
     salesFunnelStagesData,
     callSchedulesData,
-    postPublicationsData
+    postPublicationsData,
+    adAccountsData,
+    adCampaignsData,
+    adSetsData,
+    adsData,
+    adInsightsDailyData,
+    adAlertsData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("profile_areas").select("*").eq("organization_id", organizationId),
@@ -168,7 +186,13 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }),
     client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("post_publications").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false })
+    client.from("post_publications").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
+    client.from("ad_accounts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("ad_campaigns").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("ad_sets").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("ads").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
+    client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }),
+    client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false })
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -199,6 +223,12 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     ideas: (ideas.data ?? []).map((item) => mapIdea(item, ideaAttachmentMap.get(item.id) ?? [])),
     tasks: (tasks.data ?? []).map((item) => mapTask(item, taskAssigneeMap.get(item.id) ?? [], checklistMap.get(item.id) ?? [], commentsMap.get(item.id) ?? [], attachmentsMap.get(item.id) ?? [])),
     metrics: (metrics.data ?? []).map(mapMetric),
+    adAccounts: (adAccountsData.data ?? []).map(mapAdAccount),
+    adCampaigns: (adCampaignsData.data ?? []).map(mapAdCampaign),
+    adSets: (adSetsData.data ?? []).map(mapAdSet),
+    ads: (adsData.data ?? []).map(mapAd),
+    adInsightsDaily: (adInsightsDailyData.data ?? []).map(mapAdInsightDaily),
+    adAlerts: (adAlertsData.data ?? []).map(mapAdAlert),
     notifications: (notifications.data ?? []).map(mapNotification),
     calendarDates: (calendarDates.data ?? []).map(mapCalendarDate),
     customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion),
@@ -642,6 +672,178 @@ export async function deleteMetric(client: SupabaseClient, id: string) {
   await deleteById(client, "post_metrics", id);
 }
 
+export async function replaceAdAccounts(client: SupabaseClient, items: AdAccount[], previous: AdAccount[] = []) {
+  await replaceSimple(client, "ad_accounts", items, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    platform: item.platform,
+    external_id: item.externalId ?? null,
+    name: item.name,
+    currency: item.currency || "BRL",
+    status: item.status || "unknown",
+    updated_at: item.updatedAt ?? new Date().toISOString()
+  }));
+}
+
+export async function saveAdAccount(client: SupabaseClient, item: AdAccount) {
+  await replaceAdAccounts(client, [item], [item]);
+}
+
+export async function deleteAdAccount(client: SupabaseClient, id: string) {
+  await deleteById(client, "ad_accounts", id);
+}
+
+export async function replaceAdCampaigns(client: SupabaseClient, items: AdCampaign[], previous: AdCampaign[] = []) {
+  await replaceSimple(client, "ad_campaigns", items, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    account_id: item.accountId,
+    internal_campaign_id: item.internalCampaignId ?? null,
+    external_id: item.externalId ?? null,
+    name: item.name,
+    objective: item.objective || "",
+    status: item.status || "unknown",
+    budget_amount: item.budgetAmount ?? null,
+    budget_type: item.budgetType ?? null,
+    starts_at: item.startsAt ?? null,
+    ends_at: item.endsAt ?? null,
+    updated_at: item.updatedAt ?? new Date().toISOString()
+  }));
+}
+
+export async function saveAdCampaign(client: SupabaseClient, item: AdCampaign) {
+  await replaceAdCampaigns(client, [item], [item]);
+}
+
+export async function deleteAdCampaign(client: SupabaseClient, id: string) {
+  await deleteById(client, "ad_campaigns", id);
+}
+
+export async function replaceAdSets(client: SupabaseClient, items: AdSet[], previous: AdSet[] = []) {
+  await replaceSimple(client, "ad_sets", items, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    account_id: item.accountId,
+    campaign_id: item.campaignId,
+    external_id: item.externalId ?? null,
+    name: item.name,
+    audience_name: item.audienceName ?? null,
+    status: item.status || "unknown",
+    budget_amount: item.budgetAmount ?? null,
+    budget_type: item.budgetType ?? null,
+    updated_at: item.updatedAt ?? new Date().toISOString()
+  }));
+}
+
+export async function saveAdSet(client: SupabaseClient, item: AdSet) {
+  await replaceAdSets(client, [item], [item]);
+}
+
+export async function deleteAdSet(client: SupabaseClient, id: string) {
+  await deleteById(client, "ad_sets", id);
+}
+
+export async function replaceAds(client: SupabaseClient, items: Ad[], previous: Ad[] = []) {
+  await replaceSimple(client, "ads", items, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    account_id: item.accountId,
+    campaign_id: item.campaignId,
+    ad_set_id: item.adSetId ?? null,
+    external_id: item.externalId ?? null,
+    name: item.name,
+    creative_name: item.creativeName ?? null,
+    status: item.status || "unknown",
+    thumbnail_url: item.thumbnailUrl ?? null,
+    source_url: item.sourceUrl ?? null,
+    updated_at: item.updatedAt ?? new Date().toISOString()
+  }));
+}
+
+export async function saveAd(client: SupabaseClient, item: Ad) {
+  await replaceAds(client, [item], [item]);
+}
+
+export async function deleteAd(client: SupabaseClient, id: string) {
+  await deleteById(client, "ads", id);
+}
+
+export async function replaceAdInsightsDaily(client: SupabaseClient, items: AdInsightDaily[], previous: AdInsightDaily[] = []) {
+  await replaceSimple(client, "ad_insights_daily", items, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    platform: item.platform,
+    account_id: item.accountId,
+    campaign_id: item.campaignId ?? null,
+    ad_set_id: item.adSetId ?? null,
+    ad_id: item.adId ?? null,
+    date: item.date,
+    spend: item.spend,
+    impressions: item.impressions,
+    reach: item.reach,
+    frequency: item.frequency,
+    cpm: item.cpm,
+    clicks: item.clicks,
+    link_clicks: item.linkClicks,
+    ctr: item.ctr,
+    cpc: item.cpc,
+    landing_page_views: item.landingPageViews,
+    leads: item.leads,
+    cost_per_lead: item.costPerLead,
+    conversations: item.conversations,
+    cost_per_conversation: item.costPerConversation,
+    purchases: item.purchases,
+    purchase_value: item.purchaseValue,
+    cost_per_purchase: item.costPerPurchase,
+    roas: item.roas,
+    engagements: item.engagements,
+    video_views: item.videoViews,
+    cost_per_engagement: item.costPerEngagement,
+    breakdown_placement: item.breakdownPlacement ?? null,
+    breakdown_age: item.breakdownAge ?? null,
+    breakdown_gender: item.breakdownGender ?? null,
+    breakdown_region: item.breakdownRegion ?? null,
+    breakdown_device: item.breakdownDevice ?? null,
+    updated_at: item.updatedAt ?? new Date().toISOString()
+  }));
+}
+
+export async function saveAdInsightDaily(client: SupabaseClient, item: AdInsightDaily) {
+  await replaceAdInsightsDaily(client, [item], [item]);
+}
+
+export async function deleteAdInsightDaily(client: SupabaseClient, id: string) {
+  await deleteById(client, "ad_insights_daily", id);
+}
+
+export async function replaceAdAlerts(client: SupabaseClient, items: AdAlert[], previous: AdAlert[] = []) {
+  await replaceSimple(client, "ad_alerts", items, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    platform: item.platform,
+    severity: item.severity,
+    status: item.status,
+    entity_type: item.entityType,
+    entity_id: item.entityId,
+    title: item.title,
+    description: item.description,
+    recommendation: item.recommendation,
+    metric_key: item.metricKey,
+    metric_value: item.metricValue ?? null,
+    benchmark_value: item.benchmarkValue ?? null,
+    date: item.date,
+    reviewed_at: item.reviewedAt ?? null
+  }));
+}
+
+export async function saveAdAlert(client: SupabaseClient, item: AdAlert) {
+  await replaceAdAlerts(client, [item], [item]);
+}
+
+export async function deleteAdAlert(client: SupabaseClient, id: string) {
+  await deleteById(client, "ad_alerts", id);
+}
+
 export async function saveMetricSnapshots(
   client: SupabaseClient,
   snapshots: PostMetricSnapshot[]
@@ -978,6 +1180,130 @@ function mapMetric(row: any): PostMetric {
     thumbnailUrl: row.thumbnail_url ?? undefined,
     sourceUrl: row.source_url ?? undefined,
     embedUrl: row.embed_url ?? undefined
+  };
+}
+
+function mapAdAccount(row: any): AdAccount {
+  return {
+    id: row.id,
+    platform: (row.platform ?? "meta") as AdAccount["platform"],
+    externalId: row.external_id ?? undefined,
+    name: row.name ?? "",
+    currency: row.currency ?? "BRL",
+    status: (row.status ?? "unknown") as AdAccount["status"],
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+function mapAdCampaign(row: any): AdCampaign {
+  return {
+    id: row.id,
+    accountId: row.account_id ?? "",
+    internalCampaignId: row.internal_campaign_id ?? undefined,
+    externalId: row.external_id ?? undefined,
+    name: row.name ?? "",
+    objective: row.objective ?? "",
+    status: (row.status ?? "unknown") as AdCampaign["status"],
+    budgetAmount: row.budget_amount != null ? Number(row.budget_amount) : undefined,
+    budgetType: (row.budget_type ?? "unknown") as AdCampaign["budgetType"],
+    startsAt: row.starts_at ?? undefined,
+    endsAt: row.ends_at ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+function mapAdSet(row: any): AdSet {
+  return {
+    id: row.id,
+    accountId: row.account_id ?? "",
+    campaignId: row.campaign_id ?? "",
+    externalId: row.external_id ?? undefined,
+    name: row.name ?? "",
+    audienceName: row.audience_name ?? undefined,
+    status: (row.status ?? "unknown") as AdSet["status"],
+    budgetAmount: row.budget_amount != null ? Number(row.budget_amount) : undefined,
+    budgetType: (row.budget_type ?? "unknown") as AdSet["budgetType"],
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+function mapAd(row: any): Ad {
+  return {
+    id: row.id,
+    accountId: row.account_id ?? "",
+    campaignId: row.campaign_id ?? "",
+    adSetId: row.ad_set_id ?? undefined,
+    externalId: row.external_id ?? undefined,
+    name: row.name ?? "",
+    creativeName: row.creative_name ?? undefined,
+    status: (row.status ?? "unknown") as Ad["status"],
+    thumbnailUrl: row.thumbnail_url ?? undefined,
+    sourceUrl: row.source_url ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+function mapAdInsightDaily(row: any): AdInsightDaily {
+  return {
+    id: row.id,
+    platform: (row.platform ?? "meta") as AdInsightDaily["platform"],
+    accountId: row.account_id ?? "",
+    campaignId: row.campaign_id ?? undefined,
+    adSetId: row.ad_set_id ?? undefined,
+    adId: row.ad_id ?? undefined,
+    date: row.insight_date ?? row.date ?? "",
+    spend: Number(row.spend ?? 0),
+    impressions: Number(row.impressions ?? 0),
+    reach: Number(row.reach ?? 0),
+    frequency: Number(row.frequency ?? 0),
+    cpm: Number(row.cpm ?? 0),
+    clicks: Number(row.clicks ?? 0),
+    linkClicks: Number(row.link_clicks ?? 0),
+    ctr: Number(row.ctr ?? 0),
+    cpc: Number(row.cpc ?? 0),
+    landingPageViews: Number(row.landing_page_views ?? 0),
+    leads: Number(row.leads ?? 0),
+    costPerLead: Number(row.cost_per_lead ?? 0),
+    conversations: Number(row.conversations ?? 0),
+    costPerConversation: Number(row.cost_per_conversation ?? 0),
+    purchases: Number(row.purchases ?? 0),
+    purchaseValue: Number(row.purchase_value ?? 0),
+    costPerPurchase: Number(row.cost_per_purchase ?? 0),
+    roas: Number(row.roas ?? 0),
+    engagements: Number(row.engagements ?? 0),
+    videoViews: Number(row.video_views ?? 0),
+    costPerEngagement: Number(row.cost_per_engagement ?? 0),
+    breakdownPlacement: row.breakdown_placement ?? undefined,
+    breakdownAge: row.breakdown_age ?? undefined,
+    breakdownGender: row.breakdown_gender ?? undefined,
+    breakdownRegion: row.breakdown_region ?? undefined,
+    breakdownDevice: row.breakdown_device ?? undefined,
+    createdAt: row.created_at ?? undefined,
+    updatedAt: row.updated_at ?? undefined
+  };
+}
+
+function mapAdAlert(row: any): AdAlert {
+  return {
+    id: row.id,
+    platform: (row.platform ?? "meta") as AdAlert["platform"],
+    severity: (row.severity ?? "atencao") as AdAlert["severity"],
+    status: (row.status ?? "open") as AdAlert["status"],
+    entityType: (row.entity_type ?? "campaign") as AdAlert["entityType"],
+    entityId: row.entity_id ?? "",
+    title: row.title ?? "",
+    description: row.description ?? "",
+    recommendation: row.recommendation ?? "",
+    metricKey: row.metric_key ?? "",
+    metricValue: row.metric_value != null ? Number(row.metric_value) : undefined,
+    benchmarkValue: row.benchmark_value != null ? Number(row.benchmark_value) : undefined,
+    date: row.alert_date ?? row.date ?? row.created_at?.slice(0, 10) ?? "",
+    createdAt: row.created_at ?? undefined,
+    reviewedAt: row.reviewed_at ?? undefined
   };
 }
 

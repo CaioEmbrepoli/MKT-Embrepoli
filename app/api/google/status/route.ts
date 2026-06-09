@@ -18,12 +18,13 @@ export async function GET(request: Request) {
       .from("google_connections")
       .select("*")
       .eq("organization_id", context.organizationId)
-      .in("service", ["drive", "youtube"]);
+      .in("service", ["drive", "youtube", "sheets"]);
     if (error) throw error;
     const byService = new Map((data ?? []).map((item: any) => [item.service as GoogleService, item]));
     return NextResponse.json({
       drive: toStatus(byService.get("drive")),
       youtube: toStatus(byService.get("youtube")),
+      sheets: toStatus(byService.get("sheets")),
       canManage: context.role === "admin" || context.role === "gestor"
     });
   } catch (error) {

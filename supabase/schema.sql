@@ -424,6 +424,156 @@ create table if not exists public.post_metrics (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.ad_accounts (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  platform text not null default 'meta',
+  external_id text,
+  name text not null,
+  currency text not null default 'BRL',
+  status text not null default 'unknown',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists ad_accounts_org_platform_external_idx
+on public.ad_accounts (organization_id, platform, external_id)
+where external_id is not null;
+
+create table if not exists public.ad_campaigns (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  account_id text not null references public.ad_accounts(id) on delete cascade,
+  internal_campaign_id text references public.campaigns(id) on delete set null,
+  external_id text,
+  name text not null,
+  objective text not null default '',
+  status text not null default 'unknown',
+  budget_amount numeric,
+  budget_type text not null default 'unknown',
+  starts_at timestamptz,
+  ends_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists ad_campaigns_org_account_idx
+on public.ad_campaigns (organization_id, account_id);
+
+create table if not exists public.ad_sets (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  account_id text not null references public.ad_accounts(id) on delete cascade,
+  campaign_id text not null references public.ad_campaigns(id) on delete cascade,
+  external_id text,
+  name text not null,
+  audience_name text,
+  status text not null default 'unknown',
+  budget_amount numeric,
+  budget_type text not null default 'unknown',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists ad_sets_org_campaign_idx
+on public.ad_sets (organization_id, campaign_id);
+
+create table if not exists public.ads (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  account_id text not null references public.ad_accounts(id) on delete cascade,
+  campaign_id text not null references public.ad_campaigns(id) on delete cascade,
+  ad_set_id text references public.ad_sets(id) on delete set null,
+  external_id text,
+  name text not null,
+  creative_name text,
+  status text not null default 'unknown',
+  thumbnail_url text,
+  source_url text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists ads_org_campaign_idx
+on public.ads (organization_id, campaign_id);
+
+create table if not exists public.ad_insights_daily (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  platform text not null default 'meta',
+  account_id text not null references public.ad_accounts(id) on delete cascade,
+  campaign_id text references public.ad_campaigns(id) on delete cascade,
+  ad_set_id text references public.ad_sets(id) on delete set null,
+  ad_id text references public.ads(id) on delete set null,
+  date date not null,
+  spend numeric not null default 0,
+  impressions integer not null default 0,
+  reach integer not null default 0,
+  frequency numeric not null default 0,
+  cpm numeric not null default 0,
+  clicks integer not null default 0,
+  link_clicks integer not null default 0,
+  ctr numeric not null default 0,
+  cpc numeric not null default 0,
+  landing_page_views integer not null default 0,
+  leads integer not null default 0,
+  cost_per_lead numeric not null default 0,
+  conversations integer not null default 0,
+  cost_per_conversation numeric not null default 0,
+  purchases integer not null default 0,
+  purchase_value numeric not null default 0,
+  cost_per_purchase numeric not null default 0,
+  roas numeric not null default 0,
+  engagements integer not null default 0,
+  video_views integer not null default 0,
+  cost_per_engagement numeric not null default 0,
+  breakdown_placement text,
+  breakdown_age text,
+  breakdown_gender text,
+  breakdown_region text,
+  breakdown_device text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index if not exists ad_insights_daily_unique_entity_idx
+on public.ad_insights_daily (
+  organization_id,
+  platform,
+  account_id,
+  coalesce(campaign_id, ''),
+  coalesce(ad_set_id, ''),
+  coalesce(ad_id, ''),
+  date,
+  coalesce(breakdown_placement, ''),
+  coalesce(breakdown_age, ''),
+  coalesce(breakdown_gender, ''),
+  coalesce(breakdown_region, ''),
+  coalesce(breakdown_device, '')
+);
+
+create table if not exists public.ad_alerts (
+  id text primary key default gen_random_uuid()::text,
+  organization_id text not null references public.organizations(id) on delete cascade,
+  platform text not null default 'meta',
+  severity text not null default 'atencao',
+  status text not null default 'open',
+  entity_type text not null,
+  entity_id text not null,
+  title text not null,
+  description text not null default '',
+  recommendation text not null default '',
+  metric_key text not null default '',
+  metric_value numeric,
+  benchmark_value numeric,
+  date date not null default current_date,
+  created_at timestamptz not null default now(),
+  reviewed_at timestamptz
+);
+
+create index if not exists ad_alerts_org_status_idx
+on public.ad_alerts (organization_id, status, severity);
+
 create table if not exists public.notifications (
   id text primary key default gen_random_uuid()::text,
   organization_id text not null references public.organizations(id) on delete cascade,
@@ -449,7 +599,7 @@ create table if not exists public.google_connections (
   connected_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (organization_id, service),
-  constraint google_connections_service_check check (service in ('drive', 'youtube'))
+  constraint google_connections_service_check check (service in ('drive', 'youtube', 'sheets'))
 );
 
 alter table public.google_connections add column if not exists service text not null default 'drive';
@@ -463,7 +613,7 @@ begin
       and conrelid = 'public.google_connections'::regclass
   ) then
     alter table public.google_connections
-      add constraint google_connections_service_check check (service in ('drive', 'youtube'));
+      add constraint google_connections_service_check check (service in ('drive', 'youtube', 'sheets'));
   end if;
 end $$;
 create unique index if not exists google_connections_organization_service_idx
@@ -763,6 +913,12 @@ alter table public.task_comments enable row level security;
 alter table public.task_attachments enable row level security;
 alter table public.task_reset_history enable row level security;
 alter table public.post_metrics enable row level security;
+alter table public.ad_accounts enable row level security;
+alter table public.ad_campaigns enable row level security;
+alter table public.ad_sets enable row level security;
+alter table public.ads enable row level security;
+alter table public.ad_insights_daily enable row level security;
+alter table public.ad_alerts enable row level security;
 alter table public.notifications enable row level security;
 alter table public.google_connections enable row level security;
 alter table public.tiktok_connections enable row level security;
@@ -922,6 +1078,30 @@ using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
 create policy "members manage metrics" on public.post_metrics for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage ad accounts" on public.ad_accounts for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage ad campaigns" on public.ad_campaigns for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage ad sets" on public.ad_sets for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage ads" on public.ads for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage ad insights daily" on public.ad_insights_daily for all
+using (organization_id = public.current_organization_id())
+with check (organization_id = public.current_organization_id());
+
+create policy "members manage ad alerts" on public.ad_alerts for all
 using (organization_id = public.current_organization_id())
 with check (organization_id = public.current_organization_id());
 
@@ -1674,6 +1854,12 @@ alter publication supabase_realtime add table
   public.task_attachments,
   public.task_reset_history,
   public.post_metrics,
+  public.ad_accounts,
+  public.ad_campaigns,
+  public.ad_sets,
+  public.ads,
+  public.ad_insights_daily,
+  public.ad_alerts,
   public.notifications,
   public.google_connections,
   public.tiktok_connections,
