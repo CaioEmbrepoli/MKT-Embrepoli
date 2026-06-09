@@ -68,6 +68,7 @@ import {
   Pause,
   Play,
   Columns2,
+  ExternalLink,
   type LucideIcon
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
@@ -3116,7 +3117,7 @@ const salesSourceLabel: Record<SalesClientSource, string> = {
   outros: "Outros"
 };
 
-const CLIENT_IMPORT_SHEET = "Page1";
+const CLIENT_IMPORT_SHEET = "Leads-Clientes";
 const CLIENT_IMPORT_HEADERS = [
   "Código", "Nome Cliente/Empresa", "Tipo", "Nome do Contato", "CPF/CNPJ",
   "Email", "Telefone", "UF", "Municipio", "Segmento", "Ultima Compra"
@@ -3275,81 +3276,63 @@ async function exportClientTemplate(salesProfiles: { id: string; name: string }[
   const wb = new Workbook();
   const ws = wb.addWorksheet(CLIENT_IMPORT_SHEET);
 
-  // ── Definição de colunas ────────────────────────────────────────────────────
+  // ── Definição de colunas (larguras idênticas ao arquivo de referência) ────
   type ColDef = { h: string; req: boolean; drop: boolean; width: number };
   const colDefs: ColDef[] = [
-    { h: "Código",              req: false, drop: false, width: 10 },
-    { h: "Nome Cliente/Empresa", req: true,  drop: false, width: 26 },
-    { h: "Tipo",                req: false, drop: true,  width: 8  },
-    { h: "Nome do Contato",     req: false, drop: false, width: 22 },
-    { h: "CPF/CNPJ",            req: false, drop: false, width: 16 },
-    { h: "Email",               req: false, drop: false, width: 26 },
-    { h: "Telefone",            req: false, drop: false, width: 17 },
-    { h: "UF",                  req: false, drop: false, width: 6  },
-    { h: "Municipio",           req: false, drop: false, width: 20 },
-    { h: "Segmento",            req: false, drop: false, width: 20 },
-    { h: "Ultima Compra",       req: false, drop: false, width: 15 },
-    { h: "Valor Ultima Compra", req: false, drop: false, width: 15 },
-    { h: "Frequência",          req: false, drop: true,  width: 13 },
-    { h: "Responsável",         req: false, drop: true,  width: 20 },
+    { h: "Código",               req: false, drop: false, width: 10.86 },
+    { h: "Nome Cliente/Empresa", req: true,  drop: false, width: 26    },
+    { h: "Tipo",                 req: false, drop: true,  width: 10    },
+    { h: "Nome do Contato",      req: false, drop: false, width: 22    },
+    { h: "CPF/CNPJ",             req: false, drop: false, width: 16    },
+    { h: "Email",                req: false, drop: false, width: 26    },
+    { h: "Telefone",             req: false, drop: false, width: 17    },
+    { h: "UF",                   req: false, drop: false, width: 8.29  },
+    { h: "Municipio",            req: false, drop: false, width: 20    },
+    { h: "Segmento",             req: false, drop: false, width: 20    },
+    { h: "Ultima Compra",        req: false, drop: false, width: 16    },
+    { h: "Valor Ultima Compra",  req: false, drop: false, width: 18.29 },
+    { h: "Frequência",           req: false, drop: true,  width: 13    },
+    { h: "Responsável",          req: false, drop: true,  width: 20    },
   ];
 
-  // Cores dos headers (escuras — fonte branca)
-  const reqHeaderFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFB45309" } }; // âmbar escuro
-  const optHeaderFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF334155" } }; // slate escuro
-  const dropHeaderFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF1D4ED8" } }; // azul escuro
-  // Cores do painel lateral (claras — para legenda)
-  const reqFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFEF08A" } };
-  const optFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFF1F5F9" } };
-  const dropFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFBFDBFE" } };
-  // Bordas
-  const thinBorder  = { style: "thin"   as const, color: { argb: "FFD1D5DB" } };
-  const medBorder   = { style: "medium" as const, color: { argb: "FF64748B" } };
-  const cellBorder  = { top: thinBorder, left: thinBorder, bottom: thinBorder, right: thinBorder };
+  // Cores dos headers — âmbar = obrigatório, azul = dropdown, slate = opcional
+  const reqHeaderFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFB45309" } };
+  const optHeaderFill  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF334155" } };
+  const dropHeaderFill = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FF1D4ED8" } };
+  // Cores da legenda
+  const reqFill    = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFEF08A" } };
+  const optFill    = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFF1F5F9" } };
+  const dropFill   = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFBFDBFE" } };
+  const grayFill   = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFE2E8F0" } };
   // Linhas de dados alternadas
   const rowEven = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFF8FAFC" } };
   const rowOdd  = { type: "pattern" as const, pattern: "solid" as const, fgColor: { argb: "FFFFFFFF" } };
   const DATA_ROWS = 200;
 
-  // ── Cabeçalhos com cor ─────────────────────────────────────────────────────
+  // ── Cabeçalho ─────────────────────────────────────────────────────────────
   ws.addRow(colDefs.map(c => c.h));
   colDefs.forEach((c, i) => {
     const cell = ws.getCell(1, i + 1);
     cell.font = { bold: true, size: 10, color: { argb: "FFFFFFFF" } };
     cell.fill = c.req ? reqHeaderFill : c.drop ? dropHeaderFill : optHeaderFill;
-    cell.border = cellBorder;
-    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+    cell.alignment = { vertical: "middle", horizontal: "center" };
     ws.getColumn(i + 1).width = c.width;
   });
-  ws.getRow(1).height = 32;
+  ws.getRow(1).height = 18;
 
-  // ── Linhas de dados alternadas ─────────────────────────────────────────────
+  // ── Linhas de dados alternadas (sem bordas — igual ao arquivo de referência)
   for (let r = 2; r <= DATA_ROWS + 1; r++) {
     const fill = r % 2 === 0 ? rowEven : rowOdd;
     for (let c = 1; c <= colDefs.length; c++) {
-      const cell = ws.getCell(r, c);
-      cell.fill = fill;
-      cell.border = cellBorder;
-      cell.alignment = { vertical: "middle" };
+      ws.getCell(r, c).fill = fill;
+      ws.getCell(r, c).alignment = { vertical: "middle" };
     }
     ws.getRow(r).height = 18;
   }
 
-  // ── Borda externa grossa em toda a área da tabela ──────────────────────────
-  const lastRow = DATA_ROWS + 1;
-  const lastCol = colDefs.length;
-  for (let c = 1; c <= lastCol; c++) {
-    ws.getCell(1, c).border = { ...cellBorder, top: medBorder, left: c === 1 ? medBorder : thinBorder, right: c === lastCol ? medBorder : thinBorder };
-    ws.getCell(lastRow, c).border = { ...cellBorder, bottom: medBorder, left: c === 1 ? medBorder : thinBorder, right: c === lastCol ? medBorder : thinBorder };
-  }
-  for (let r = 2; r <= lastRow; r++) {
-    ws.getCell(r, 1).border      = { ...cellBorder, left: medBorder };
-    ws.getCell(r, lastCol).border = { ...cellBorder, right: medBorder };
-  }
-
   // ── Freeze + auto-filter ───────────────────────────────────────────────────
   ws.views = [{ state: "frozen", xSplit: 0, ySplit: 1, topLeftCell: "A2", activeCell: "A2" }];
-  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: lastCol } };
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: colDefs.length } };
 
   // ── Dropdowns ──────────────────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -3357,9 +3340,9 @@ async function exportClientTemplate(salesProfiles: { id: string; name: string }[
   dv.add("C2:C10000", { type: "list", allowBlank: true, formulae: ['"PF,PJ"'], showErrorMessage: false });
   dv.add("M2:M10000", { type: "list", allowBlank: true, formulae: ['"Diário,Semanal,Quinzenal,Mensal"'], showErrorMessage: false });
 
-  // ── Aba oculta + dropdown de Responsável ───────────────────────────────────
+  // ── Aba Vendedores + dropdown Responsável ─────────────────────────────────
   const allVend = [{ name: "Sem responsável" }, ...salesProfiles];
-  const vendWs = wb.addWorksheet("Vendedores", { state: "veryHidden" });
+  const vendWs = wb.addWorksheet("Vendedores");
   allVend.forEach((p, i) => { vendWs.getCell(i + 1, 1).value = p.name; });
   dv.add("N2:N10000", {
     type: "list", allowBlank: true,
@@ -3367,44 +3350,54 @@ async function exportClientTemplate(salesProfiles: { id: string; name: string }[
     showErrorMessage: false,
   });
 
-  // ── Painel lateral — Legenda + Dúvidas (col P = 16) ───────────────────────
-  const panelCol = 16;
-  const panelWidth = 52;
-  ws.getColumn(panelCol).width = panelWidth;
+  // ── Painel lateral de legenda — col P (16) + col Q (17) ───────────────────
+  // Col O (15) = espaçador vazio
+  ws.getColumn(15).width = 2;
+  ws.getColumn(16).width = 21.86;
+  ws.getColumn(17).width = 35.29;
 
-  function panelCell(row: number, text: string, opts?: { bold?: boolean; fill?: typeof reqFill; size?: number; color?: string }) {
-    const c = ws.getCell(row, panelCol);
-    c.value = text;
-    c.font = { bold: opts?.bold ?? false, size: opts?.size ?? 10, color: { argb: opts?.color ?? "FF374151" } };
-    if (opts?.fill) c.fill = opts.fill;
-    c.alignment = { vertical: "middle", wrapText: true };
-    c.border = cellBorder;
+  function legendRow(
+    row: number,
+    label: string,
+    desc: string,
+    fillP?: typeof reqFill,
+    bold?: boolean
+  ) {
+    const pCell = ws.getCell(row, 16);
+    const qCell = ws.getCell(row, 17);
+    pCell.value = label;
+    qCell.value = desc;
+    pCell.font = { bold: bold ?? false, size: 10, color: { argb: "FF374151" } };
+    qCell.font = { size: 10, color: { argb: "FF374151" } };
+    if (fillP) {
+      pCell.fill = fillP;
+      qCell.fill = fillP;
+    }
+    pCell.alignment = { vertical: "middle" };
+    qCell.alignment = { vertical: "middle", wrapText: true };
     ws.getRow(row).height = 18;
   }
 
-  // Legenda
-  panelCell(1,  "LEGENDA",                          { bold: true, size: 11, color: "FF111827" });
-  panelCell(2,  "  Obrigatório — deve ser preenchido",        { fill: reqFill });
-  panelCell(3,  "  Opcional — pode deixar em branco",         { fill: optFill });
-  panelCell(4,  "  Tem seleção automática (dropdown)",        { fill: dropFill });
-  panelCell(5,  "");
-
-  // Dúvidas
-  panelCell(6,  "O QUE É CADA COLUNA",              { bold: true, size: 11, color: "FF111827" });
-  panelCell(7,  "Código — ID único no seu sistema. Se deixar vazio, o sistema identifica o cliente pelo Nome + Telefone.");
-  panelCell(8,  "Nome Cliente/Empresa — Nome da pessoa (PF) ou da empresa (PJ).");
-  panelCell(9,  "Tipo — PF = Pessoa Física  |  PJ = Pessoa Jurídica");
-  panelCell(10, "Nome do Contato — Para PJ: nome do responsável dentro da empresa que você vai ligar.");
-  panelCell(11, "CPF/CNPJ — Documento do cliente. Pode digitar com ou sem formatação.");
-  panelCell(12, "Email — Endereço de e-mail do cliente.");
-  panelCell(13, "Telefone — Com DDD. Ex: 41 99999-0000");
-  panelCell(14, "UF — Sigla do estado. Ex: PR, SP, SC");
-  panelCell(15, "Municipio — Cidade do cliente.");
-  panelCell(16, "Segmento — Ramo de atuação. Ex: Auto Center, Agro, Indústria");
-  panelCell(17, "Ultima Compra — Data da última compra no formato DD/MM/AAAA. Deixar vazio se nunca comprou.");
-  panelCell(18, "Valor Ultima Compra — Valor em reais da última compra. Ex: 1500.00");
-  panelCell(19, "Frequência — Com que frequência ligar para este cliente: Diário, Semanal, Quinzenal ou Mensal.");
-  panelCell(20, "Responsável — Vendedor responsável pelo acompanhamento deste cliente.");
+  legendRow(1, "LEGENDA",                                       "", grayFill, true);
+  legendRow(2, "  Obrigatório — deve ser preenchido",           "", reqFill);
+  legendRow(3, "  Opcional — pode deixar em branco",            "", optFill);
+  legendRow(4, "  Tem seleção automática (dropdown)",           "", dropFill);
+  legendRow(5, "",                                              "");
+  legendRow(6, "O QUE É CADA COLUNA",                          "", grayFill, true);
+  legendRow(7,  "Código",               "ID único no seu sistema. Se deixar vazio, o sistema identifica o cliente pelo Nome + Telefone.");
+  legendRow(8,  "Nome Cliente/Empresa", "Nome da pessoa (PF) ou da empresa (PJ).");
+  legendRow(9,  "Tipo  PF | PJ",        "Pessoa Física, Pessoa Jurídica");
+  legendRow(10, "Nome do Contato",      "Para PJ: nome do responsável dentro da empresa que você vai ligar.");
+  legendRow(11, "CPF/CNPJ",             "Documento do cliente. Pode digitar com ou sem formatação.");
+  legendRow(12, "Email",                "Endereço de e-mail do cliente.");
+  legendRow(13, "Telefone",             "Com DDD. Ex: 41 99999-0000");
+  legendRow(14, "UF",                   "Sigla do estado. Ex: PR, SP, SC");
+  legendRow(15, "Municipio",            "Cidade do cliente.");
+  legendRow(16, "Segmento",             "Ramo de atuação. Ex: Auto Center, Agro, Indústria");
+  legendRow(17, "Ultima Compra",        "Data da última compra no formato DD/MM/AAAA. Deixar vazio se nunca comprou.");
+  legendRow(18, "Valor Ultima Compra",  "Valor em reais da última compra. Ex: 1500.00");
+  legendRow(19, "Frequência",           "Com que frequência ligar para este cliente: Diário, Semanal, Quinzenal ou Mensal.");
+  legendRow(20, "Responsável",          "Vendedor responsável pelo acompanhamento deste cliente.");
 
   // ── Download ───────────────────────────────────────────────────────────────
   const buffer = await wb.xlsx.writeBuffer();
@@ -3789,6 +3782,44 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
   const [showImportModal, setShowImportModal] = useState(false);
   const [schedulingClient, setSchedulingClient] = useState<SalesClient | null>(null);
 
+  // Google Sheets integration
+  const [sheetsConnected, setSheetsConnected] = useState(false);
+  const [clientsSheetId, setClientsSheetId] = useState<string | null>(null);
+  const [clientsSheetUrl, setClientsSheetUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function checkSheetsStatus() {
+      if (!supabase) return;
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) return;
+      try {
+        const res = await fetch("/api/google/sheets/clients/setup", {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const json = await res.json() as { sheetsConnected?: boolean; spreadsheetId?: string | null; spreadsheetUrl?: string | null };
+        setSheetsConnected(Boolean(json.sheetsConnected));
+        setClientsSheetId(json.spreadsheetId ?? null);
+        setClientsSheetUrl(json.spreadsheetUrl ?? null);
+      } catch {
+        // silencioso — sheets opcional
+      }
+    }
+    void checkSheetsStatus();
+  }, []);
+
+  async function pushToSheets() {
+    if (!supabase) return;
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token || !clientsSheetId) return;
+    fetch("/api/google/sheets/clients/push", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` }
+    }).catch(() => {});
+  }
+
   const filtered = salesClients.filter((c) => {
     if (filter !== "todos" && c.status !== filter) return false;
     const term = search.toLowerCase();
@@ -3821,6 +3852,7 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
     });
     setShowModal(false);
     setEditing(null);
+    void pushToSheets();
   }
 
   function importClients(rows: ImportedSalesClientRow[]): SalesClientImportResult {
@@ -3863,11 +3895,13 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
 
       return merged.next;
     });
+    void pushToSheets();
     return result;
   }
 
   function remove(id: string) {
     setSalesClients((prev) => prev.filter((c) => c.id !== id));
+    void pushToSheets();
   }
 
   function convertStatus(client: SalesClient) {
@@ -4020,6 +4054,13 @@ function ClientesSection({ salesClients, setSalesClients, callSchedules, setCall
           onImport={importClients}
           onClose={() => setShowImportModal(false)}
           salesProfiles={profiles.filter((p) => p.active && profileAreas.some((pa) => pa.profileId === p.id && pa.area === "vendas" && pa.active))}
+          sheetsConnected={sheetsConnected}
+          spreadsheetId={clientsSheetId}
+          spreadsheetUrl={clientsSheetUrl}
+          onSheetsSetup={(id, url) => {
+            setClientsSheetId(id);
+            setClientsSheetUrl(url);
+          }}
         />
       )}
     </Panel>
@@ -4104,15 +4145,24 @@ function QuickScheduleModal({ client, currentUser, profiles, onSave, onClose }: 
   );
 }
 
-function PlanilhaModal({ onImport, onClose, salesProfiles }: {
+function PlanilhaModal({ onImport, onClose, salesProfiles, sheetsConnected, spreadsheetId, spreadsheetUrl, onSheetsSetup }: {
   onImport: (rows: ImportedSalesClientRow[]) => SalesClientImportResult;
   onClose: () => void;
   salesProfiles: { id: string; name: string }[];
+  sheetsConnected: boolean;
+  spreadsheetId: string | null;
+  spreadsheetUrl: string | null;
+  onSheetsSetup: (id: string, url: string) => void;
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState<SalesClientImportResult | null>(null);
+
+  // Google Sheets state
+  const [sheetsLoading, setSheetsLoading] = useState(false);
+  const [sheetsError, setSheetsError] = useState("");
+  const [sheetsResult, setSheetsResult] = useState<SalesClientImportResult | null>(null);
 
   async function runImport() {
     if (!file) {
@@ -4132,19 +4182,72 @@ function PlanilhaModal({ onImport, onClose, salesProfiles }: {
     }
   }
 
+  async function handleSheetsSetup() {
+    if (!supabase) return;
+    setSheetsLoading(true);
+    setSheetsError("");
+    setSheetsResult(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Sessão expirada. Entre novamente.");
+      const res = await fetch("/api/google/sheets/clients/setup", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const json = await res.json() as { spreadsheetId?: string; spreadsheetUrl?: string; rows?: number; error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Erro ao criar planilha.");
+      onSheetsSetup(json.spreadsheetId!, json.spreadsheetUrl!);
+      window.open(json.spreadsheetUrl, "_blank");
+    } catch (err) {
+      setSheetsError(err instanceof Error ? err.message : "Erro ao configurar planilha.");
+    } finally {
+      setSheetsLoading(false);
+    }
+  }
+
+  async function handleSheetsSync() {
+    if (!supabase) return;
+    setSheetsLoading(true);
+    setSheetsError("");
+    setSheetsResult(null);
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error("Sessão expirada. Entre novamente.");
+      const res = await fetch("/api/google/sheets/clients/sync", {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const json = await res.json() as { rows?: ImportedSalesClientRow[]; error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Erro ao sincronizar planilha.");
+      const rows = json.rows ?? [];
+      if (rows.length === 0) {
+        setSheetsError("Nenhuma linha de cliente encontrada na planilha.");
+        return;
+      }
+      setSheetsResult(onImport(rows));
+    } catch (err) {
+      setSheetsError(err instanceof Error ? err.message : "Erro ao sincronizar planilha.");
+    } finally {
+      setSheetsLoading(false);
+    }
+  }
+
+  const sheetExists = Boolean(spreadsheetId);
+
   return (
     <CenteredModal close={onClose} variant="compact" panelClassName="rounded-[32px] border-0">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-black uppercase tracking-wide text-blue-700">Vendas · Clientes</p>
           <h2 className="text-xl font-black">Planilha de Clientes</h2>
-          <p className="mt-1 text-sm font-bold text-slate-500">Exporte o modelo ou importe uma planilha preenchida.</p>
+          <p className="mt-1 text-sm font-bold text-slate-500">Exporte o modelo, importe uma planilha ou sincronize pelo Google Sheets.</p>
         </div>
         <button type="button" onClick={onClose} className="rounded-2xl p-2 text-slate-400 hover:bg-slate-100"><X size={20} /></button>
       </div>
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        {/* Painel esquerdo — Exportar modelo */}
+      <div className="mt-5 grid gap-4 sm:grid-cols-3">
+        {/* Painel 1 — Exportar modelo */}
         <div className="flex flex-col items-center gap-3 rounded-3xl border border-slate-100 bg-slate-50 p-5 text-center">
           <FileDown size={32} className="text-blue-700" />
           <div>
@@ -4157,7 +4260,7 @@ function PlanilhaModal({ onImport, onClose, salesProfiles }: {
           </button>
         </div>
 
-        {/* Painel direito — Importar planilha */}
+        {/* Painel 2 — Importar planilha */}
         <div className="flex flex-col gap-3 rounded-3xl border border-slate-100 bg-slate-50 p-5">
           <div className="text-center">
             <p className="font-black text-slate-900">Importar Planilha</p>
@@ -4190,6 +4293,54 @@ function PlanilhaModal({ onImport, onClose, salesProfiles }: {
             className="w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-60">
             {loading ? "Importando..." : "Importar"}
           </button>
+        </div>
+
+        {/* Painel 3 — Google Sheets */}
+        <div className="flex flex-col gap-3 rounded-3xl border border-slate-100 bg-slate-50 p-5">
+          <div className="text-center">
+            <p className="font-black text-slate-900">Google Sheets</p>
+            <p className="mt-1 text-sm font-bold text-slate-500">
+              {sheetExists ? "Planilha vinculada — sincronização automática ativa." : "Crie a planilha para sincronização em tempo real."}
+            </p>
+          </div>
+
+          {!sheetsConnected ? (
+            <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-white p-4 text-center">
+              <p className="text-sm font-bold text-slate-500">Google Sheets não conectado.</p>
+              <p className="mt-1 text-xs font-bold text-slate-400">Conecte em Configurações → Conta e Permissões.</p>
+            </div>
+          ) : sheetExists ? (
+            <>
+              <a href={spreadsheetUrl ?? "#"} target="_blank" rel="noreferrer"
+                className="flex items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-black text-emerald-800 transition hover:bg-emerald-100">
+                <ExternalLink size={15} />
+                Abrir no Google Sheets
+              </a>
+              {sheetsError && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{sheetsError}</p>}
+              {sheetsResult && (
+                <div className="rounded-2xl bg-emerald-50 p-3 text-xs font-bold text-emerald-800">
+                  <p className="font-black">Sincronização concluída ✓</p>
+                  <p>{sheetsResult.rows} linhas · {sheetsResult.created} novos · {sheetsResult.updated} atualizados.</p>
+                </div>
+              )}
+              <button type="button" disabled={sheetsLoading} onClick={handleSheetsSync}
+                className="mt-auto w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-60">
+                {sheetsLoading ? "Sincronizando..." : "Sincronizar do Sheets"}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="flex flex-1 flex-col items-center justify-center rounded-2xl border border-dashed border-blue-200 bg-white p-4 text-center">
+                <p className="text-sm font-bold text-slate-600">Nenhuma planilha vinculada ainda.</p>
+                <p className="mt-1 text-xs font-bold text-slate-400">Crie para exportar todos os clientes e manter sync automático.</p>
+              </div>
+              {sheetsError && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700">{sheetsError}</p>}
+              <button type="button" disabled={sheetsLoading} onClick={handleSheetsSetup}
+                className="mt-auto w-full rounded-2xl bg-blue-700 px-4 py-2 font-black text-white transition hover:bg-blue-800 disabled:opacity-60">
+                {sheetsLoading ? "Criando planilha..." : "Criar planilha de clientes"}
+              </button>
+            </>
+          )}
         </div>
       </div>
 
