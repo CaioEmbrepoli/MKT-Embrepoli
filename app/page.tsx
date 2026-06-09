@@ -9959,7 +9959,7 @@ function googleTokenExpiryWarning(connectedAt?: string | null): { daysLeft: numb
   if (Number.isNaN(grantedAt)) return null;
   const estimatedExpiry = grantedAt + 7 * 24 * 60 * 60 * 1000;
   const msLeft = estimatedExpiry - Date.now();
-  const daysLeft = Math.ceil(msLeft / (24 * 60 * 60 * 1000));
+  const daysLeft = Math.floor(msLeft / (24 * 60 * 60 * 1000));
   if (daysLeft > 2) return null;
   return { daysLeft, urgent: daysLeft <= 1 };
 }

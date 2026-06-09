@@ -60,7 +60,7 @@ export async function GET(request: Request) {
     }
 
     const estimatedExpiry = connectedAt + TOKEN_LIFETIME_DAYS * DAY_MS;
-    const daysLeft = Math.ceil((estimatedExpiry - now) / DAY_MS);
+    const daysLeft = Math.floor((estimatedExpiry - now) / DAY_MS);
 
     if (daysLeft > ALERT_WINDOW_DAYS) {
       results.push({ id: conn.id, organizationId: conn.organization_id, service: conn.service, status: "ok", daysLeft });
