@@ -4236,7 +4236,7 @@ function PlanilhaModal({ onImport, onClose, salesProfiles, sheetsConnected, spre
   const sheetExists = Boolean(spreadsheetId);
 
   return (
-    <CenteredModal close={onClose} variant="compact" panelClassName="rounded-[32px] border-0">
+    <CenteredModal close={onClose} variant="media" panelClassName="rounded-[32px] border-0">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="text-xs font-black uppercase tracking-wide text-blue-700">Vendas · Clientes</p>
