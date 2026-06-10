@@ -17272,6 +17272,8 @@ function ComentariosSection({
   const [commentImportOpen, setCommentImportOpen] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
+  const [replyError, setReplyError] = useState<Record<string, string>>({});
+  const [likingId, setLikingId] = useState<string | null>(null);
   const [suggestionState, setSuggestionState] = useState<Record<string, "loading" | "none" | "error">>({});
   const [pressedBtn, setPressedBtn] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -17636,13 +17638,45 @@ function ComentariosSection({
 
   async function handleSaveResponse(comment: Comment) {
     const response = responses[comment.id] ?? "";
-    const updated = comments.map((c) => c.id === comment.id ? { ...c, response, status: "respondido" as CommentStatus } : c);
-    setComments(updated);
     setSaving(comment.id);
-    if (supabase) {
-      await saveComment(supabase, { ...comment, response, status: "respondido" }).catch(() => {});
+    setReplyError((prev) => { const next = { ...prev }; delete next[comment.id]; return next; });
+    try {
+      const res = await fetch("/api/comments/reply", {
+        method: "POST",
+        headers: await commentAuthHeaders(),
+        body: JSON.stringify({ commentId: comment.id, response })
+      });
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) throw new Error(data.error || "Erro ao responder comentário no canal.");
+      const updated = comments.map((c) => c.id === comment.id ? { ...c, response, status: "respondido" as CommentStatus } : c);
+      setComments(updated);
+    } catch (err) {
+      setReplyError((prev) => ({ ...prev, [comment.id]: err instanceof Error ? err.message : "Erro ao enviar resposta." }));
+      const updated = comments.map((c) => c.id === comment.id ? { ...c, response } : c);
+      setComments(updated);
+      if (supabase) {
+        await saveComment(supabase, { ...comment, response }).catch(() => {});
+      }
     }
     setSaving(null);
+  }
+
+  async function handleLikeComment(comment: Comment) {
+    if (comment.source !== "instagram" || comment.likedByOrg) return;
+    setLikingId(comment.id);
+    try {
+      const res = await fetch("/api/comments/like", {
+        method: "POST",
+        headers: await commentAuthHeaders(),
+        body: JSON.stringify({ commentId: comment.id })
+      });
+      const data = await res.json().catch(() => ({})) as { error?: string };
+      if (!res.ok) throw new Error(data.error || "Erro ao curtir comentário.");
+      setComments(comments.map((c) => c.id === comment.id ? { ...c, likedByOrg: true, likes: c.likes + 1 } : c));
+    } catch (err) {
+      setReplyError((prev) => ({ ...prev, [comment.id]: err instanceof Error ? err.message : "Erro ao curtir comentário." }));
+    }
+    setLikingId(null);
   }
 
   async function handleAddFilter() {
@@ -17892,9 +17926,17 @@ function ComentariosSection({
                 </div>
                 <div className="text-right">
                   <p className="text-xs font-bold text-slate-400">{formatCommentTimestamp(selected.publishedAt)}</p>
-                  {selected.likes > 0 && (
-                    <p className="flex items-center justify-end gap-1 text-xs font-bold text-slate-400"><Heart size={12} /> {selected.likes}</p>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => handleLikeComment(selected)}
+                    disabled={selected.source !== "instagram" || selected.likedByOrg || likingId === selected.id}
+                    title={selected.source !== "instagram" ? `Curtir comentários não é suportado pela API do ${commentSourceBadgeConfig[selected.source]?.label ?? selected.source}` : selected.likedByOrg ? "Curtido" : "Curtir comentário"}
+                    className={`mt-1 flex items-center justify-end gap-1 text-xs font-bold ${
+                      selected.source !== "instagram" ? "cursor-not-allowed text-slate-300" : selected.likedByOrg ? "text-red-500" : "text-slate-400 hover:text-red-500"
+                    }`}
+                  >
+                    <Heart size={12} className={selected.likedByOrg ? "fill-current" : ""} /> {selected.likes}
+                  </button>
                 </div>
               </div>
 
@@ -18006,13 +18048,16 @@ function ComentariosSection({
               </div>
 
               {/* Actions */}
+              {replyError[selected.id] && (
+                <p className="mb-2 text-xs font-bold text-red-500">{replyError[selected.id]}</p>
+              )}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => { pressButton(`${selected.id}-save`); handleSaveResponse(selected); }}
                   disabled={saving === selected.id}
                   className={`rounded-xl px-4 py-2 text-sm font-black text-white transition-all duration-150 disabled:opacity-50 ${pressedBtn[`${selected.id}-save`] ? "scale-95 bg-blue-900" : "bg-blue-700 hover:bg-blue-800"}`}
                 >
-                  {saving === selected.id ? "Salvando..." : "Enviar resposta"}
+                  {saving === selected.id ? "Enviando..." : "Enviar resposta"}
                 </button>
                 <button
                   onClick={() => { pressButton(`${selected.id}-ignore`); handleStatusChange(selected, "ignorado"); }}

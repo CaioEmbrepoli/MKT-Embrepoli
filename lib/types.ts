@@ -517,6 +517,7 @@ export type Comment = {
   authorName: string;
   text: string;
   likes: number;
+  likedByOrg?: boolean;
   response?: string;
   status: CommentStatus;
   addedToBank: boolean;

@@ -494,6 +494,11 @@ export async function replyToInstagramComment(accessToken: string, commentId: st
   });
 }
 
+export async function likeInstagramComment(accessToken: string, commentId: string) {
+  const cleanId = commentId.replace(/^instagram:/, "");
+  return graphPost<{ success?: boolean }>(`${igApiBase(accessToken)}/${cleanId}/likes`, accessToken, {});
+}
+
 export async function fetchInstagramInsightsForMedia(accessToken: string, media: InstagramMediaItem) {
   const metrics = ["reach", "impressions", "views", "shares", "saved", "total_interactions"].join(",");
   try {
