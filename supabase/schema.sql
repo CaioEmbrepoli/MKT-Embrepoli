@@ -644,8 +644,11 @@ create table if not exists public.meta_connections (
   id text primary key default gen_random_uuid()::text,
   organization_id text not null references public.organizations(id) on delete cascade,
   service text not null default 'instagram',
-  instagram_account_id text not null,
+  instagram_account_id text,
   page_id text,
+  ad_account_id text,
+  ad_account_name text,
+  business_id text,
   username text not null default '',
   display_name text not null default '',
   avatar_url text not null default '',
@@ -655,7 +658,7 @@ create table if not exists public.meta_connections (
   connected_by text references public.profiles(id) on delete set null,
   connected_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  constraint meta_connections_service_check check (service in ('instagram'))
+  constraint meta_connections_service_check check (service in ('instagram', 'ads'))
 );
 
 create unique index if not exists meta_connections_organization_service_idx

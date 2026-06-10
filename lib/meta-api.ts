@@ -87,6 +87,30 @@ export type InstagramCommentItem = {
   channelReply?: string;
 };
 
+export type MetaAdsConnectionStatus = {
+  connected: boolean;
+  service: "ads";
+  username: string;
+  displayName: string;
+  adAccountId: string;
+  adAccountName: string;
+  businessId: string;
+  scopes: string[];
+  connectedAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  canManage: boolean;
+};
+
+export type MetaAdsImportSummary = {
+  accounts: number;
+  campaigns: number;
+  adSets: number;
+  ads: number;
+  insights: number;
+  datePreset: string;
+};
+
 export async function getInstagramStatus(): Promise<InstagramConnectionStatus> {
   return fetchJson<InstagramConnectionStatus>("/api/meta/instagram/status");
 }
@@ -110,4 +134,21 @@ export async function listInstagramComments(): Promise<{ comments: InstagramComm
 
 export async function listInstagramMetrics(): Promise<{ metrics: InstagramMetricItem[] }> {
   return fetchJson<{ metrics: InstagramMetricItem[] }>("/api/meta/instagram/metrics", undefined, 120000);
+}
+
+export async function getMetaAdsStatus(): Promise<MetaAdsConnectionStatus> {
+  return fetchJson<MetaAdsConnectionStatus>("/api/meta/ads/status");
+}
+
+export async function startMetaAdsOAuth(): Promise<void> {
+  const data = await fetchJson<{ url: string }>("/api/meta/ads/oauth/start");
+  window.location.href = data.url;
+}
+
+export async function disconnectMetaAdsConnection(): Promise<void> {
+  await fetchJson<{ ok: true }>("/api/meta/ads/disconnect", { method: "POST" });
+}
+
+export async function importMetaAdsData(): Promise<{ summary: MetaAdsImportSummary }> {
+  return fetchJson<{ summary: MetaAdsImportSummary }>("/api/meta/ads/import", { method: "POST" }, 180000);
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Receiver } from "@upstash/qstash";
 import { getMetaConnection, type MetaRequestContext } from "@/lib/meta-server";
-import { publishInstagramMedia } from "@/lib/instagram-publish-server";
+import { publishInstagramMedia, type InstagramPublishConnection } from "@/lib/instagram-publish-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 
 export const dynamic = "force-dynamic";
@@ -101,6 +101,11 @@ async function processPublication(publicationId: string) {
     if (!connection?.access_token || !connection.instagram_account_id) {
       throw new Error("Instagram/Meta nao conectado para esta organizacao.");
     }
+    const publishConnection: InstagramPublishConnection = {
+      access_token: connection.access_token,
+      instagram_account_id: connection.instagram_account_id,
+      scopes: connection.scopes
+    };
 
     const context: MetaRequestContext = {
       service,
@@ -110,7 +115,7 @@ async function processPublication(publicationId: string) {
       active: true
     };
 
-    const published = await publishInstagramMedia(context, connection, {
+    const published = await publishInstagramMedia(context, publishConnection, {
       assetUrl: publication.asset_url,
       title: publication.title ?? "",
       caption: shouldUseInstagramCaption(publication.format) ? (publication.caption ?? "") : "",

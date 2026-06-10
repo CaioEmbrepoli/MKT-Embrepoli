@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-export type MetaService = "instagram";
+export type MetaService = "instagram" | "ads";
 
 // Scopes para Facebook Login (graph.facebook.com/dialog/oauth) — produto LEGADO, não usado pelo OAuth atual.
 // Mantido apenas como referência/compatibilidade (ex: connect-token aceita conexões antigas).
@@ -22,11 +22,19 @@ export const INSTAGRAM_BUSINESS_SCOPES = [
   "instagram_business_manage_messages"
 ];
 
+export const META_ADS_SCOPES = [
+  "ads_read",
+  "business_management"
+];
+
 type MetaConnectionRow = {
   id: string;
   organization_id: string;
   service: MetaService;
-  instagram_account_id: string;
+  instagram_account_id: string | null;
+  ad_account_id: string | null;
+  ad_account_name: string | null;
+  business_id: string | null;
   page_id: string | null;
   username: string;
   display_name: string;
@@ -159,10 +167,25 @@ export function requireMetaManager(context: MetaRequestContext) {
 // para META_APP_ID/SECRET (mesmo app, caso o painel exiba as mesmas credenciais).
 export function instagramAppId() { return process.env.INSTAGRAM_APP_ID || process.env.META_APP_ID || ""; }
 export function instagramAppSecret() { return process.env.INSTAGRAM_APP_SECRET || process.env.META_APP_SECRET || ""; }
+export function metaAppId() { return process.env.META_APP_ID || process.env.INSTAGRAM_APP_ID || ""; }
+export function metaAppSecret() { return process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || ""; }
 
 export function instagramOAuthRedirectUri(request: Request) {
   const origin = (process.env.NEXT_PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/$/, "");
   return `${origin}/api/meta/instagram/oauth/callback`;
+}
+
+export function metaAdsOAuthRedirectUri(request: Request) {
+  const origin = (process.env.NEXT_PUBLIC_SITE_URL || new URL(request.url).origin).replace(/\/$/, "");
+  return `${origin}/api/meta/ads/oauth/callback`;
+}
+
+export function metaOAuthAuthorizeUrl() {
+  return `https://www.facebook.com/${metaGraphVersion()}/dialog/oauth`;
+}
+
+export function metaOAuthAccessTokenUrl() {
+  return `${metaGraphBase()}/oauth/access_token`;
 }
 
 // --- Endpoints nativos do Instagram Business Login (não passam por graph.facebook.com) ---
@@ -206,13 +229,24 @@ export async function getMetaConnection(supabaseClient: SupabaseClient, organiza
   return data as MetaConnectionRow | null;
 }
 
-export async function getInstagramConnection(context: MetaRequestContext) {
+export async function getInstagramConnection(context: MetaRequestContext): Promise<MetaConnectionRow & { instagram_account_id: string }> {
   const connection = await getMetaConnection(context.service, context.organizationId, "instagram");
   if (!connection?.access_token || !connection.instagram_account_id) {
     throw new Error("Instagram / Meta nao conectado. Cadastre o token em Conta e Permissoes.");
   }
   if (connection.expires_at && new Date(connection.expires_at).getTime() < Date.now()) {
     throw new Error("Token do Instagram expirado. Gere um novo token no Meta Developer e atualize a conexao.");
+  }
+  return { ...connection, instagram_account_id: connection.instagram_account_id };
+}
+
+export async function getMetaAdsConnection(context: MetaRequestContext) {
+  const connection = await getMetaConnection(context.service, context.organizationId, "ads");
+  if (!connection?.access_token) {
+    throw new Error("Meta Ads nao conectado. Conecte a conta em Conta e Permissoes.");
+  }
+  if (connection.expires_at && new Date(connection.expires_at).getTime() < Date.now()) {
+    throw new Error("Token do Meta Ads expirado. Reconecte a conta de anuncios.");
   }
   return connection;
 }

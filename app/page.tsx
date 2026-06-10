@@ -90,7 +90,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
-import { disconnectInstagramConnection, getInstagramStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, type InstagramCommentItem, type InstagramConnectionStatus } from "@/lib/meta-api";
+import { disconnectInstagramConnection, disconnectMetaAdsConnection, getInstagramStatus, getMetaAdsStatus, importMetaAdsData, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportSummary } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
 import {
   type AppData,
@@ -9028,6 +9028,7 @@ function Metrics({
   const [period, setPeriod] = useState("all");
   const [metricsMode, setMetricsMode] = useState<"organic" | "ads">("organic");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
+  const [metaAdsImportOpen, setMetaAdsImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
   const [allVideosOpen, setAllVideosOpen] = useState(false);
   const [lineFilter, setLineFilter] = useState("all");
@@ -9305,8 +9306,8 @@ function Metrics({
           <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
         </div>
       ) : (
-        <button type="button" className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-500" title="A conexão Meta Ads entra na próxima etapa">
-          <Megaphone size={16} /> Meta Ads em breve
+        <button type="button" onClick={() => setMetaAdsImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white shadow-sm transition hover:bg-blue-800">
+          <Megaphone size={16} /> Importar Meta Ads
         </button>
       )
     }>
@@ -9824,6 +9825,12 @@ function Metrics({
         />
       )}
       </>
+      )}
+      {metaAdsImportOpen && (
+        <MetaAdsImportModal
+          onClose={() => setMetaAdsImportOpen(false)}
+          reloadData={reloadData}
+        />
       )}
     </Panel>
   );
@@ -10916,6 +10923,10 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
   const [instagramLoading, setInstagramLoading] = useState(true);
   const [instagramBusy, setInstagramBusy] = useState(false);
   const [instagramError, setInstagramError] = useState("");
+  const [metaAdsStatus, setMetaAdsStatus] = useState<MetaAdsConnectionStatus | null>(null);
+  const [metaAdsLoading, setMetaAdsLoading] = useState(true);
+  const [metaAdsBusy, setMetaAdsBusy] = useState(false);
+  const [metaAdsError, setMetaAdsError] = useState("");
 
   async function loadGoogleStatus() {
     setGoogleLoading(true);
@@ -10953,10 +10964,23 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     }
   }
 
+  async function loadMetaAdsStatus() {
+    setMetaAdsLoading(true);
+    setMetaAdsError("");
+    try {
+      setMetaAdsStatus(await getMetaAdsStatus());
+    } catch (error) {
+      setMetaAdsError(error instanceof Error ? error.message : "Erro ao carregar integração Meta Ads.");
+    } finally {
+      setMetaAdsLoading(false);
+    }
+  }
+
   useEffect(() => {
     loadGoogleStatus();
     loadTikTokStatus();
     loadInstagramStatus();
+    loadMetaAdsStatus();
   }, []);
 
   async function connectGoogle(service: GoogleService) {
@@ -11040,6 +11064,31 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
       setInstagramError(error instanceof Error ? error.message : "Erro ao desconectar Instagram / Meta.");
     } finally {
       setInstagramBusy(false);
+    }
+  }
+
+  async function connectMetaAds() {
+    setMetaAdsBusy(true);
+    setMetaAdsError("");
+    try {
+      await startMetaAdsOAuth();
+    } catch (error) {
+      setMetaAdsError(error instanceof Error ? error.message : "Erro ao iniciar OAuth Meta Ads.");
+      setMetaAdsBusy(false);
+    }
+  }
+
+  async function disconnectMetaAds() {
+    if (!window.confirm("Desconectar Meta Ads para toda a equipe?")) return;
+    setMetaAdsBusy(true);
+    setMetaAdsError("");
+    try {
+      await disconnectMetaAdsConnection();
+      await loadMetaAdsStatus();
+    } catch (error) {
+      setMetaAdsError(error instanceof Error ? error.message : "Erro ao desconectar Meta Ads.");
+    } finally {
+      setMetaAdsBusy(false);
     }
   }
 
@@ -11364,6 +11413,58 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                   </div>
                 ) : (
                   <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar Instagram / Meta.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Meta Ads */}
+            <div className="overflow-hidden rounded-[26px] border border-blue-200 bg-white shadow-sm">
+              <div className="flex items-center gap-3 border-b border-blue-100 bg-blue-50 px-4 py-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-700 text-white">
+                  <Megaphone size={18} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-black text-slate-800">Meta Ads</p>
+                  <p className="text-xs font-bold text-slate-400 truncate">Campanhas, anúncios, investimento e resultados pagos.</p>
+                </div>
+                <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${metaAdsStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>
+                  {metaAdsLoading ? "…" : metaAdsStatus?.connected ? "Conectado" : "Desconectado"}
+                </span>
+              </div>
+              <div className="p-4">
+                {metaAdsError && <p className="mb-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{metaAdsError}</p>}
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-100 text-sm font-black text-blue-700">
+                    {metaAdsStatus?.adAccountName?.[0]?.toUpperCase() ?? "M"}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-slate-800">
+                      {metaAdsLoading
+                        ? "Verificando..."
+                        : metaAdsStatus?.connected
+                          ? metaAdsStatus.adAccountName || metaAdsStatus.adAccountId || "Conta Meta Ads"
+                          : "Nenhuma conta Meta Ads conectada"}
+                    </p>
+                    <p className="text-xs font-bold text-slate-400">
+                      {metaAdsStatus?.displayName ? `${metaAdsStatus.displayName} · ` : ""}
+                      {metaAdsStatus?.businessId ? `Business ${metaAdsStatus.businessId}` : ""}
+                      {metaAdsStatus?.connectedAt && !metaAdsStatus.businessId ? `Conectado em ${new Date(metaAdsStatus.connectedAt).toLocaleDateString("pt-BR")}` : ""}
+                    </p>
+                  </div>
+                </div>
+                {canManageIntegrations ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" disabled={metaAdsBusy || metaAdsLoading} onClick={connectMetaAds} className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white transition hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
+                      {metaAdsBusy ? "Abrindo..." : metaAdsStatus?.connected ? "Reconectar Meta Ads" : "Conectar Meta Ads"}
+                    </button>
+                    {metaAdsStatus?.connected && (
+                      <button type="button" disabled={metaAdsBusy || metaAdsLoading} onClick={disconnectMetaAds} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                        Desconectar
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs font-bold text-slate-400">Apenas Administrador ou Gestor pode conectar ou desconectar Meta Ads.</p>
                 )}
               </div>
             </div>
@@ -12742,6 +12843,165 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
             </div>
           </div>
         )}
+    </CenteredModal>
+  );
+}
+
+function MetaAdsImportModal({ onClose, reloadData }: {
+  onClose: () => void;
+  reloadData?: () => Promise<void>;
+}) {
+  const [status, setStatus] = useState<MetaAdsConnectionStatus | null>(null);
+  const [phase, setPhase] = useState<"loading" | "idle" | "importing" | "done" | "error">("loading");
+  const [summary, setSummary] = useState<MetaAdsImportSummary | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setPhase("loading");
+    getMetaAdsStatus()
+      .then((nextStatus) => {
+        if (cancelled) return;
+        setStatus(nextStatus);
+        setPhase("idle");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : "Erro ao consultar conexão Meta Ads.");
+        setPhase("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function runImport() {
+    setError("");
+    setPhase("importing");
+    try {
+      const result = await importMetaAdsData();
+      setSummary(result.summary);
+      await reloadData?.();
+      setPhase("done");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar Meta Ads.");
+      setPhase("error");
+    }
+  }
+
+  const connected = Boolean(status?.connected);
+
+  return (
+    <CenteredModal close={onClose} closeOnOverlay={phase !== "importing"} zClass="z-[120]" variant="compact" className="bg-slate-950/75" panelClassName="max-w-3xl rounded-[28px] border-0">
+      <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Megaphone size={22} className="text-blue-700" />
+          <h2 className="font-black">Importar Meta Ads</h2>
+        </div>
+        {phase !== "importing" && (
+          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200">
+            <X size={18} />
+          </button>
+        )}
+      </div>
+
+      {phase === "loading" && (
+        <div className="space-y-3">
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full animate-pulse rounded-full bg-blue-700" style={{ width: "100%" }} />
+          </div>
+          <p className="text-sm font-bold text-slate-600">Verificando conexão Meta Ads...</p>
+        </div>
+      )}
+
+      {phase === "idle" && (
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-blue-50 p-4">
+            <p className="text-sm font-black text-blue-950">Conexão Meta Ads</p>
+            <p className="mt-1 text-sm font-bold text-blue-800/80">
+              O sistema vai importar contas, campanhas, conjuntos, anúncios e métricas dos últimos 30 dias.
+            </p>
+            <div className="mt-3 rounded-2xl border border-blue-100 bg-white px-3 py-2">
+              <p className="text-xs font-black uppercase text-slate-400">Conta conectada</p>
+              <p className={`mt-1 text-sm font-black ${connected ? "text-emerald-700" : "text-slate-500"}`}>
+                {connected
+                  ? status?.adAccountName || status?.adAccountId || status?.displayName || "Conta Meta Ads conectada"
+                  : "Meta Ads não conectado"}
+              </p>
+              {connected && (
+                <p className="mt-1 text-xs font-bold text-slate-400">
+                  {status?.displayName || status?.username || "Meta"}{status?.businessId ? ` · Business ${status.businessId}` : ""}
+                </p>
+              )}
+            </div>
+            {!connected && (
+              <p className="mt-3 rounded-2xl bg-amber-50 px-3 py-2 text-sm font-bold text-amber-800">
+                Conecte a conta em Configurações → Conta e Permissões → Meta Ads.
+              </p>
+            )}
+            {error && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
+          </div>
+          <button type="button" disabled={!connected} onClick={runImport} className="w-full rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
+            {connected ? "Importar últimos 30 dias" : "Meta Ads não conectado"}
+          </button>
+        </div>
+      )}
+
+      {phase === "importing" && (
+        <div className="space-y-3">
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className="h-full animate-pulse rounded-full bg-blue-700" style={{ width: "100%" }} />
+          </div>
+          <p className="text-sm font-bold text-slate-600">Buscando e salvando dados do Meta Ads...</p>
+        </div>
+      )}
+
+      {phase === "done" && summary && (
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-green-50 p-4">
+            <p className="text-sm font-black text-green-800">Importação concluída!</p>
+            <p className="mt-1 text-sm font-bold text-green-700">
+              Período {summary.datePreset} · {summary.insights} linhas de métricas
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-5">
+            {[
+              ["Contas", summary.accounts],
+              ["Campanhas", summary.campaigns],
+              ["Conjuntos", summary.adSets],
+              ["Anúncios", summary.ads],
+              ["Métricas", summary.insights]
+            ].map(([label, value]) => (
+              <div key={String(label)} className="rounded-2xl bg-slate-50 p-3">
+                <p className="text-xs font-black uppercase text-slate-400">{label}</p>
+                <p className="mt-1 text-xl font-black text-slate-950">{formatNumber(Number(value))}</p>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={onClose} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
+            Fechar
+          </button>
+        </div>
+      )}
+
+      {phase === "error" && (
+        <div className="space-y-4">
+          <div className="rounded-2xl bg-rose-50 p-4">
+            <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
+            <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
+          </div>
+          <div className="flex gap-2">
+            {connected && (
+              <button type="button" onClick={runImport} className="flex-1 rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
+                Tentar novamente
+              </button>
+            )}
+            <button type="button" onClick={onClose} className="flex-1 rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
     </CenteredModal>
   );
 }
