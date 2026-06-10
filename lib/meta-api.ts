@@ -87,6 +87,17 @@ export type InstagramCommentItem = {
   channelReply?: string;
 };
 
+export type InstagramCommentImportSummary = {
+  recentDays: number;
+  since: string;
+  maxMedia: number;
+  maxCommentsPerMedia: number;
+  mediaChecked: number;
+  mediaWithComments: number;
+  skippedWithoutComments: number;
+  commentsFound: number;
+};
+
 export type MetaAdsConnectionStatus = {
   connected: boolean;
   service: "ads";
@@ -128,8 +139,8 @@ export async function listInstagramMedia(): Promise<{ media: InstagramMedia[] }>
   return fetchJson<{ media: InstagramMedia[] }>("/api/meta/instagram/media", undefined, 90000);
 }
 
-export async function listInstagramComments(): Promise<{ comments: InstagramCommentItem[]; mediaCount: number }> {
-  return fetchJson<{ comments: InstagramCommentItem[]; mediaCount: number }>("/api/meta/instagram/comments", undefined, 120000);
+export async function listInstagramComments(): Promise<{ comments: InstagramCommentItem[]; mediaCount: number; summary?: InstagramCommentImportSummary }> {
+  return fetchJson<{ comments: InstagramCommentItem[]; mediaCount: number; summary?: InstagramCommentImportSummary }>("/api/meta/instagram/comments", undefined, 120000);
 }
 
 export async function listInstagramMetrics(): Promise<{ metrics: InstagramMetricItem[] }> {

@@ -377,28 +377,55 @@ function normalizeMedia(item: any): InstagramMediaItem {
   };
 }
 
-export async function fetchInstagramMedia(accessToken: string, instagramAccountId: string) {
+export async function fetchInstagramMedia(
+  accessToken: string,
+  instagramAccountId: string,
+  options: { maxMedia?: number; maxPages?: number; since?: Date } = {}
+) {
+  const maxMedia = options.maxMedia ?? 1000;
+  const maxPages = options.maxPages ?? 50;
   const media: InstagramMediaItem[] = [];
   let nextUrl = `${igApiBase(accessToken)}/${instagramAccountId}/media?fields=${encodeURIComponent("id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count")}&limit=100`;
   let pages = 0;
-  while (nextUrl && pages < 50 && media.length < 1000) {
+  while (nextUrl && pages < maxPages && media.length < maxMedia) {
     const data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
-    media.push(...(data.data ?? []).map(normalizeMedia).filter((item) => item.id));
+    const pageItems = (data.data ?? []).map(normalizeMedia).filter((item) => item.id);
+    for (const item of pageItems) {
+      const timestamp = item.timestamp ? new Date(item.timestamp) : null;
+      if (options.since && timestamp && !Number.isNaN(timestamp.getTime()) && timestamp < options.since) {
+        nextUrl = "";
+        break;
+      }
+      media.push(item);
+      if (media.length >= maxMedia) break;
+    }
+    if (!nextUrl) break;
     nextUrl = data.paging?.next || "";
     pages += 1;
   }
-  return media.slice(0, 1000);
+  return media.slice(0, maxMedia);
 }
 
-export async function fetchInstagramCommentsForMedia(accessToken: string, media: InstagramMediaItem) {
+export async function fetchInstagramCommentsForMedia(
+  accessToken: string,
+  media: InstagramMediaItem,
+  options: { since?: Date; maxComments?: number; maxPages?: number } = {}
+) {
+  const maxComments = options.maxComments ?? 1000;
+  const maxPages = options.maxPages ?? 20;
   const comments: InstagramCommentItem[] = [];
   let nextUrl = `${igApiBase(accessToken)}/${media.id}/comments?fields=${encodeURIComponent("id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}")}&limit=100`;
   let pages = 0;
   const videoTitle = media.caption?.slice(0, 140) || "Post Instagram";
 
-  while (nextUrl && pages < 20 && comments.length < 1000) {
+  while (nextUrl && pages < maxPages && comments.length < maxComments) {
     const data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
     for (const item of data.data ?? []) {
+      const publishedAt = String(item.timestamp || media.timestamp || new Date().toISOString());
+      const publishedDate = publishedAt ? new Date(publishedAt) : null;
+      if (options.since && publishedDate && !Number.isNaN(publishedDate.getTime()) && publishedDate < options.since) {
+        continue;
+      }
       const replies = Array.isArray(item.replies?.data) ? item.replies.data : [];
       const channelReply = replies.map((reply: any) => sanitizeText(String(reply.text || ""))).filter(Boolean).join("\n\n") || undefined;
       comments.push({
@@ -408,9 +435,10 @@ export async function fetchInstagramCommentsForMedia(accessToken: string, media:
         authorName: sanitizeText(String(item.username || "Instagram")),
         text: sanitizeText(String(item.text || "")),
         likes: Number(item.like_count || 0),
-        publishedAt: String(item.timestamp || media.timestamp || new Date().toISOString()),
+        publishedAt,
         channelReply
       });
+      if (comments.length >= maxComments) break;
     }
     nextUrl = data.paging?.next || "";
     pages += 1;

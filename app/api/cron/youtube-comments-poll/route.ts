@@ -23,16 +23,12 @@ async function ytFetch(url: string, token: string) {
   return data;
 }
 
-export async function GET(request: Request) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && request.headers.get("authorization") !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Nao autorizado." }, { status: 401 });
-  }
-
+export async function GET() {
+  const executedAt = new Date().toISOString();
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {
-    return NextResponse.json({ error: "Supabase nao configurado." }, { status: 500 });
+    return NextResponse.json({ ok: false, executedAt, error: "Supabase nao configurado." }, { status: 500 });
   }
 
   const service = createClient(supabaseUrl, serviceRoleKey, {
@@ -45,14 +41,24 @@ export async function GET(request: Request) {
     .eq("service", "youtube")
     .neq("refresh_token", "");
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) return NextResponse.json({ ok: false, executedAt, error: error.message }, { status: 500 });
   if (!connections?.length) {
-    return NextResponse.json({ ok: true, results: [], message: "Nenhuma conexao YouTube encontrada." });
+    return NextResponse.json({
+      ok: true,
+      executedAt,
+      connectionsFound: 0,
+      connectionsProcessed: 0,
+      results: [],
+      message: "Nenhuma conexao YouTube encontrada."
+    });
   }
 
   const results: Array<{
+    connectionId: string;
     organizationId: string;
     status: string;
+    channelId?: string;
+    channelTitle?: string;
     fetched?: number;
     upserted?: number;
     error?: string;
@@ -84,7 +90,11 @@ export async function GET(request: Request) {
       const channelId = channelData.items?.[0]?.id as string | undefined;
       const channelTitle = (channelData.items?.[0]?.snippet?.title as string) ?? "Canal YouTube";
       if (!channelId) {
-        results.push({ organizationId: conn.organization_id as string, status: "no_channel" });
+        results.push({
+          connectionId: conn.id as string,
+          organizationId: conn.organization_id as string,
+          status: "no_channel"
+        });
         continue;
       }
 
@@ -103,7 +113,15 @@ export async function GET(request: Request) {
 
       const items: unknown[] = commentsData.items ?? [];
       if (!items.length) {
-        results.push({ organizationId: conn.organization_id as string, status: "no_comments" });
+        results.push({
+          connectionId: conn.id as string,
+          organizationId: conn.organization_id as string,
+          status: "no_comments",
+          channelId,
+          channelTitle,
+          fetched: 0,
+          upserted: 0
+        });
         continue;
       }
 
@@ -126,19 +144,31 @@ export async function GET(request: Request) {
         .filter((c) => c.text && c.externalId !== "yt_comment:");
 
       if (!commentInputs.length) {
-        results.push({ organizationId: conn.organization_id as string, status: "no_valid_comments" });
+        results.push({
+          connectionId: conn.id as string,
+          organizationId: conn.organization_id as string,
+          status: "no_valid_comments",
+          channelId,
+          channelTitle,
+          fetched: items.length,
+          upserted: 0
+        });
         continue;
       }
 
       const upserted = await upsertServerComments(service, conn.organization_id as string, commentInputs);
       results.push({
+        connectionId: conn.id as string,
         organizationId: conn.organization_id as string,
         status: "ok",
+        channelId,
+        channelTitle,
         fetched: items.length,
         upserted: upserted.length
       });
     } catch (e) {
       results.push({
+        connectionId: conn.id as string,
         organizationId: conn.organization_id as string,
         status: "error",
         error: e instanceof Error ? e.message : "erro desconhecido"
@@ -146,5 +176,11 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, results });
+  return NextResponse.json({
+    ok: true,
+    executedAt,
+    connectionsFound: connections.length,
+    connectionsProcessed: results.length,
+    results
+  });
 }
