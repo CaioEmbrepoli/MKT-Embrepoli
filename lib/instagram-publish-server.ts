@@ -134,6 +134,18 @@ async function fetchDirectFile(assetUrl: string) {
   };
 }
 
+async function ensureDrivePublicPermission(driveToken: string, fileId: string) {
+  try {
+    await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${driveToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ role: "reader", type: "anyone" })
+    });
+  } catch (e) {
+    console.warn("[instagram-publish] drive permission:", e instanceof Error ? e.message : e);
+  }
+}
+
 async function ensurePublicBucket(service: SupabaseClient) {
   const { error } = await service.storage.createBucket(PUBLICATION_BUCKET, { public: true });
   if (error && !/already exists/i.test(error.message)) {
@@ -217,7 +229,9 @@ async function preparePublicAsset(context: MetaRequestContext, payload: Instagra
         const isTooBig = errData.message?.toLowerCase().includes("maximum allowed size") || errData.statusCode === "413";
 
         if (isTooBig) {
-          // Fallback: tentar usar URL pública do Drive diretamente (funciona se o arquivo estiver compartilhado como público)
+          // Fallback: garante que o arquivo está acessível via "Qualquer pessoa com o link"
+          // e tenta usar a URL pública do Drive diretamente.
+          await ensureDrivePublicPermission(driveToken, fileId);
           const publicDriveUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0`;
           const testRes = await fetch(publicDriveUrl, { method: "HEAD" }).catch(() => null);
           const ct = (testRes?.headers.get("content-type") || "").split(";")[0];
