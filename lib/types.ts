@@ -504,6 +504,15 @@ export type Notification = {
 export type CommentStatus = "novo" | "respondido" | "ignorado";
 export type CommentClassificationStatus = "pendente" | "relevante" | "normal" | "erro";
 
+export type CommentExternalReply = {
+  id: string;
+  authorName: string;
+  text: string;
+  publishedAt: string;
+  likes?: number;
+  isOwnReply?: boolean;
+};
+
 export type Comment = {
   id: string;
   source: "youtube" | "instagram" | "facebook" | "tiktok";
@@ -518,6 +527,7 @@ export type Comment = {
   text: string;
   likes: number;
   likedByOrg?: boolean;
+  externalReplies?: CommentExternalReply[];
   response?: string;
   status: CommentStatus;
   addedToBank: boolean;

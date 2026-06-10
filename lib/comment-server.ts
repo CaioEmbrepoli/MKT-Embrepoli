@@ -3,6 +3,15 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type CommentSource = "youtube" | "instagram" | "facebook" | "tiktok";
 
+export type CommentExternalReplyInput = {
+  id: string;
+  authorName: string;
+  text: string;
+  publishedAt: string;
+  likes?: number;
+  isOwnReply?: boolean;
+};
+
 export type ServerCommentInput = {
   source: CommentSource;
   externalId?: string;
@@ -15,6 +24,7 @@ export type ServerCommentInput = {
   authorName: string;
   text: string;
   likes?: number;
+  externalReplies?: CommentExternalReplyInput[];
   response?: string;
   status?: "novo" | "respondido" | "ignorado";
   addedToBank?: boolean;
@@ -40,6 +50,7 @@ type ExistingCommentRow = {
   media_thumbnail_url: string | null;
   media_url: string | null;
   media_permalink: string | null;
+  external_replies: CommentExternalReplyInput[] | null;
   added_to_bank: boolean | null;
   bank_question_id: string | null;
   classification_status: "pendente" | "relevante" | "normal" | "erro" | null;
@@ -90,6 +101,27 @@ function normalizeCommentText(value: string) {
   return sanitizeText(value).toLowerCase().replace(/\s+/g, " ").slice(0, 500);
 }
 
+function normalizeExternalReplies(value: unknown): CommentExternalReplyInput[] {
+  if (!Array.isArray(value)) return [];
+  const byId = new Map<string, CommentExternalReplyInput>();
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const id = sanitizeText(row.id);
+    const text = sanitizeText(row.text);
+    if (!id || !text) continue;
+    byId.set(id, {
+      id,
+      authorName: sanitizeText(row.authorName) || "Instagram",
+      text,
+      publishedAt: sanitizeText(row.publishedAt) || new Date().toISOString(),
+      likes: Number(row.likes ?? 0),
+      isOwnReply: Boolean(row.isOwnReply)
+    });
+  }
+  return Array.from(byId.values());
+}
+
 export function stripKnownCommentPrefix(source: CommentSource, externalId: string) {
   if (source === "youtube") return externalId.replace(/^yt_comment:/, "");
   if (source === "instagram") return externalId.replace(/^instagram:/, "");
@@ -128,6 +160,7 @@ function normalizeComment(comment: ServerCommentInput): ServerCommentInput {
     mediaPermalink: comment.mediaPermalink ? sanitizeText(comment.mediaPermalink) : undefined,
     authorName: sanitizeText(comment.authorName) || "Cliente",
     text: sanitizeText(comment.text),
+    externalReplies: normalizeExternalReplies(comment.externalReplies),
     response: comment.response ? sanitizeText(comment.response) : undefined,
     suggestedReply: comment.suggestedReply ? sanitizeText(comment.suggestedReply) : undefined,
     likes: Number(comment.likes ?? 0),
@@ -165,6 +198,7 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
     media_thumbnail_url: comment.mediaThumbnailUrl ?? existing?.media_thumbnail_url ?? null,
     media_url: comment.mediaUrl ?? existing?.media_url ?? null,
     media_permalink: comment.mediaPermalink ?? existing?.media_permalink ?? null,
+    external_replies: comment.externalReplies?.length ? comment.externalReplies : (existing?.external_replies ?? []),
     added_to_bank: addedToBank,
     bank_question_id: bankQuestionId,
     published_at: comment.publishedAt || null,
@@ -189,7 +223,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (externalIds.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
       .eq("organization_id", organizationId)
       .in("external_id", externalIds);
     if (error) throw error;
@@ -199,7 +233,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (signatures.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
       .eq("organization_id", organizationId)
       .in("import_signature", signatures);
     if (error) throw error;
@@ -238,6 +272,65 @@ export async function deleteServerCommentByExternalId(
     .maybeSingle();
   if (error) throw error;
   return Boolean(data?.id);
+}
+
+export async function updateServerCommentResponseByExternalId(
+  service: SupabaseClient,
+  organizationId: string,
+  source: CommentSource,
+  externalId: string,
+  response: string
+) {
+  const { data, error } = await service
+    .from("comments")
+    .update({
+      response: sanitizeText(response),
+      status: "respondido",
+      processed_at: new Date().toISOString()
+    })
+    .eq("organization_id", organizationId)
+    .eq("source", source)
+    .eq("external_id", externalId)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function appendServerCommentExternalReply(
+  service: SupabaseClient,
+  organizationId: string,
+  source: CommentSource,
+  externalId: string,
+  reply: CommentExternalReplyInput
+) {
+  const normalizedReply = normalizeExternalReplies([reply])[0];
+  if (!normalizedReply) return null;
+
+  const { data: existing, error: selectError } = await service
+    .from("comments")
+    .select("id,external_replies")
+    .eq("organization_id", organizationId)
+    .eq("source", source)
+    .eq("external_id", externalId)
+    .maybeSingle();
+  if (selectError) throw selectError;
+  if (!existing?.id) return null;
+
+  const replies = normalizeExternalReplies(existing.external_replies);
+  const nextReplies = [
+    normalizedReply,
+    ...replies.filter((item) => item.id !== normalizedReply.id)
+  ];
+
+  const { data, error } = await service
+    .from("comments")
+    .update({ external_replies: nextReplies })
+    .eq("id", existing.id)
+    .select("*")
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }
 
 export async function updateServerCommentResponse(

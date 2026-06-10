@@ -39,7 +39,9 @@ export async function GET(request: Request) {
       comments.push(...await fetchInstagramCommentsForMedia(connection.access_token, item, {
         since,
         maxComments: maxCommentsPerMedia,
-        maxPages: Math.ceil(maxCommentsPerMedia / 100) + 1
+        maxPages: Math.ceil(maxCommentsPerMedia / 100) + 1,
+        ownUsername: connection.username,
+        ownAccountId: connection.instagram_account_id
       }));
     }
 

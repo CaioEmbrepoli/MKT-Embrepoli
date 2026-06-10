@@ -95,8 +95,18 @@ export type InstagramCommentItem = {
   text: string;
   likes: number;
   publishedAt: string;
+  externalReplies?: {
+    id: string;
+    authorName: string;
+    text: string;
+    publishedAt: string;
+    likes?: number;
+    isOwnReply?: boolean;
+  }[];
   channelReply?: string;
 };
+
+type InstagramCommentReplyItem = NonNullable<InstagramCommentItem["externalReplies"]>[number];
 
 function supabaseEnv() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -380,6 +390,10 @@ function normalizeMedia(item: any): InstagramMediaItem {
   };
 }
 
+function normalizeInstagramUsername(value: unknown): string {
+  return sanitizeText(String(value ?? "")).replace(/^@+/, "").toLowerCase();
+}
+
 export async function fetchInstagramMedia(
   accessToken: string,
   instagramAccountId: string,
@@ -412,7 +426,7 @@ export async function fetchInstagramMedia(
 export async function fetchInstagramCommentsForMedia(
   accessToken: string,
   media: InstagramMediaItem,
-  options: { since?: Date; maxComments?: number; maxPages?: number } = {}
+  options: { since?: Date; maxComments?: number; maxPages?: number; ownUsername?: string; ownAccountId?: string } = {}
 ) {
   const maxComments = options.maxComments ?? 1000;
   const maxPages = options.maxPages ?? 20;
@@ -420,6 +434,8 @@ export async function fetchInstagramCommentsForMedia(
   let nextUrl = `${igApiBase(accessToken)}/${media.id}/comments?fields=${encodeURIComponent("id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}")}&limit=100`;
   let pages = 0;
   const videoTitle = media.caption?.slice(0, 140) || "Post Instagram";
+  const ownUsername = normalizeInstagramUsername(options.ownUsername);
+  const ownAccountId = sanitizeText(options.ownAccountId ?? "");
 
   while (nextUrl && pages < maxPages && comments.length < maxComments) {
     const data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
@@ -430,7 +446,28 @@ export async function fetchInstagramCommentsForMedia(
         continue;
       }
       const replies = Array.isArray(item.replies?.data) ? item.replies.data : [];
-      const channelReply = replies.map((reply: any) => sanitizeText(String(reply.text || ""))).filter(Boolean).join("\n\n") || undefined;
+      const mappedReplies: InstagramCommentReplyItem[] = replies.map((reply: any): InstagramCommentReplyItem => {
+        const authorName = sanitizeText(String(reply.username || "Instagram"));
+        const replyId = String(reply.id || "");
+        const isOwnReply = Boolean(
+          (ownUsername && normalizeInstagramUsername(authorName) === ownUsername) ||
+          (ownAccountId && String(reply.from?.id || reply.owner?.id || "") === ownAccountId)
+        );
+        return {
+          id: replyId,
+          authorName,
+          text: sanitizeText(String(reply.text || "")),
+          publishedAt: String(reply.timestamp || publishedAt),
+          likes: Number(reply.like_count || 0),
+          isOwnReply
+        };
+      }).filter((reply: InstagramCommentReplyItem) => Boolean(reply.id && reply.text));
+      const channelReply = mappedReplies
+        .filter((reply) => reply.isOwnReply)
+        .map((reply) => reply.text)
+        .filter(Boolean)
+        .join("\n\n") || undefined;
+      const externalReplies = mappedReplies.filter((reply) => !reply.isOwnReply);
       comments.push({
         commentId: `instagram:${String(item.id || "")}`,
         videoId: media.id,
@@ -442,6 +479,7 @@ export async function fetchInstagramCommentsForMedia(
         text: sanitizeText(String(item.text || "")),
         likes: Number(item.like_count || 0),
         publishedAt,
+        externalReplies,
         channelReply
       });
       if (comments.length >= maxComments) break;

@@ -890,6 +890,10 @@ function commentStableKey(comment: Pick<Comment, "source" | "externalId" | "vide
 function mergeImportedComment(existing: Comment | undefined, incoming: Comment): Comment {
   if (!existing) return incoming;
   const addedToBank = existing.addedToBank || incoming.addedToBank;
+  const externalRepliesById = new Map((existing.externalReplies ?? []).map((reply) => [reply.id, reply]));
+  for (const reply of incoming.externalReplies ?? []) {
+    externalRepliesById.set(reply.id, reply);
+  }
   return {
     ...existing,
     source: incoming.source,
@@ -903,6 +907,7 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
     authorName: incoming.authorName || existing.authorName,
     text: incoming.text || existing.text,
     likes: incoming.likes,
+    externalReplies: Array.from(externalRepliesById.values()),
     response: incoming.response ?? existing.response,
     status: existing.status === "respondido" && incoming.status !== "respondido" ? existing.status : incoming.status,
     addedToBank,
@@ -17424,7 +17429,7 @@ function ComentariosSection({
 
     const newComments: Comment[] = items.map((item) => {
       const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
-      const mediaFields = item as Partial<Pick<Comment, "mediaThumbnailUrl" | "mediaUrl" | "mediaPermalink">>;
+      const mediaFields = item as Partial<Pick<Comment, "mediaThumbnailUrl" | "mediaUrl" | "mediaPermalink" | "externalReplies">>;
       const incoming: Comment = {
         id: crypto.randomUUID(),
         source,
@@ -17444,6 +17449,7 @@ function ComentariosSection({
         authorName: item.authorName,
         text: item.text,
         likes: item.likes,
+        externalReplies: mediaFields.externalReplies ?? [],
         status: (item.channelReply ? "respondido" : "novo") as CommentStatus,
         response: item.channelReply,
         addedToBank: autoAdded,
@@ -18032,6 +18038,23 @@ function ComentariosSection({
               {selected.response && (
                 <div className="mb-4 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
                   <span className="font-bold">Resposta enviada: </span>{selected.response}
+                </div>
+              )}
+
+              {(selected.externalReplies ?? []).filter((reply) => !reply.isOwnReply).length > 0 && (
+                <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                  <p className="mb-3 text-xs font-black uppercase text-slate-400">Outras respostas</p>
+                  <div className="flex flex-col gap-3">
+                    {(selected.externalReplies ?? []).filter((reply) => !reply.isOwnReply).map((reply) => (
+                      <div key={reply.id} className="rounded-xl bg-white p-3 ring-1 ring-slate-100">
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <span className="truncate text-xs font-black text-slate-700">@{reply.authorName.replace(/^@+/, "")}</span>
+                          <span className="shrink-0 text-[11px] font-bold text-slate-400">{formatCommentTimestamp(reply.publishedAt)}</span>
+                        </div>
+                        <p className="text-sm text-slate-600">{reply.text}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 

@@ -87,6 +87,14 @@ export type InstagramCommentItem = {
   text: string;
   likes: number;
   publishedAt: string;
+  externalReplies?: {
+    id: string;
+    authorName: string;
+    text: string;
+    publishedAt: string;
+    likes?: number;
+    isOwnReply?: boolean;
+  }[];
   channelReply?: string;
 };
 

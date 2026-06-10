@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
-import { commentServiceClient, deleteServerCommentByExternalId, getDefaultOrganizationId, recordCommentWebhookEvent, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
+import { appendServerCommentExternalReply, commentServiceClient, deleteServerCommentByExternalId, getDefaultOrganizationId, recordCommentWebhookEvent, updateServerCommentResponseByExternalId, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
 import { fetchInstagramCommentById, fetchInstagramMediaById } from "@/lib/meta-server";
 
 type MetaConnection = {
   id: string;
   organization_id: string;
   instagram_account_id: string;
+  username: string | null;
   access_token: string;
 };
 
@@ -35,6 +36,20 @@ function safeText(value: unknown) {
 function instagramExternalCommentId(commentId: string) {
   const cleanId = safeText(commentId).replace(/^instagram:/, "");
   return cleanId ? `instagram:${cleanId}` : "";
+}
+
+function normalizeInstagramUsername(value: unknown) {
+  return safeText(value).replace(/^@+/, "").toLowerCase();
+}
+
+function isOwnInstagramActor(value: any, connection: MetaConnection) {
+  const actorId = safeText(value?.from?.id || value?.user_id || value?.owner?.id);
+  const actorUsername = normalizeInstagramUsername(value?.from?.username || value?.from?.name || value?.username);
+  const connectionUsername = normalizeInstagramUsername(connection.username);
+  return Boolean(
+    (actorId && actorId === connection.instagram_account_id) ||
+    (actorUsername && connectionUsername && actorUsername === connectionUsername)
+  );
 }
 
 function isDeleteEvent(value: any, change: any) {
@@ -95,7 +110,7 @@ async function getConnections() {
   const service = commentServiceClient();
   const { data, error } = await service
     .from("meta_connections")
-    .select("id,organization_id,instagram_account_id,access_token")
+    .select("id,organization_id,instagram_account_id,username,access_token")
     .eq("service", "instagram");
   if (error) throw error;
   return { service, connections: (data ?? []) as MetaConnection[] };
@@ -113,7 +128,17 @@ function pickConnection(connections: MetaConnection[], entry: any, value: any) {
 
 function extractCommentEvent(payload: any, entry: any, change: any) {
   const value = change?.value ?? {};
-  const commentId = safeText(value.comment_id || value.id || value.comment?.id);
+  const valueId = safeText(value.id || value.comment?.id);
+  const valueCommentId = safeText(value.comment_id);
+  const commentId = safeText(valueId || valueCommentId);
+  const parentCommentId = safeText(
+    value.parent_id ||
+    value.parent_comment_id ||
+    value.parent?.id ||
+    value.comment?.parent_id ||
+    value.comment?.parent?.id ||
+    (valueId && valueCommentId && valueId !== valueCommentId ? valueCommentId : "")
+  );
   const mediaId = safeText(value.media_id || value.media?.id || value.post_id || value.video_id);
   const text = safeText(value.text || value.comment?.text || value.message);
   const authorName = safeText(value.from?.username || value.from?.name || value.username || "Instagram");
@@ -122,7 +147,7 @@ function extractCommentEvent(payload: any, entry: any, change: any) {
     : safeText(value.timestamp || new Date().toISOString());
   const eventId = safeText(value.id || value.comment_id || change?.field || entry?.time || crypto.randomUUID());
 
-  return { value, commentId, mediaId, text, authorName, publishedAt, eventId, payload };
+  return { value, commentId, parentCommentId, mediaId, text, authorName, publishedAt, eventId, payload };
 }
 
 export async function GET(request: Request) {
@@ -220,6 +245,59 @@ export async function POST(request: Request) {
           });
           storedEvents += 1;
           processed += deleted ? 1 : 0;
+          continue;
+        }
+
+        if (event.parentCommentId && event.commentId && event.text) {
+          const parentExternalId = instagramExternalCommentId(event.parentCommentId);
+          const replyExternalId = instagramExternalCommentId(event.commentId);
+          const isOwnReply = isOwnInstagramActor(event.value, connection);
+          let updated = null;
+          if (isOwnReply) {
+            updated = await updateServerCommentResponseByExternalId(
+              service,
+              connection.organization_id,
+              "instagram",
+              parentExternalId,
+              event.text
+            );
+          } else {
+            updated = await appendServerCommentExternalReply(
+              service,
+              connection.organization_id,
+              "instagram",
+              parentExternalId,
+              {
+                id: replyExternalId,
+                authorName: event.authorName,
+                text: event.text,
+                publishedAt: event.publishedAt,
+                likes: Number(event.value.like_count || 0),
+                isOwnReply: false
+              }
+            );
+          }
+          await recordCommentWebhookEvent(service, {
+            organizationId: connection.organization_id,
+            source: "instagram",
+            eventId: `${event.eventId}:reply`,
+            externalCommentId: parentExternalId,
+            externalMediaId: event.mediaId,
+            eventType: updated
+              ? (isOwnReply ? "comment_reply_own_processed" : "comment_reply_external_processed")
+              : "comment_reply_parent_not_found",
+            payload: {
+              field: safeText(change?.field || "comment"),
+              replyId: replyExternalId,
+              authorName: event.authorName,
+              isOwnReply,
+              hasText: Boolean(event.text)
+            },
+            processedAt: updated ? new Date().toISOString() : null,
+            error: updated ? null : "Comentario pai nao encontrado para registrar reply."
+          });
+          storedEvents += 1;
+          processed += updated ? 1 : 0;
           continue;
         }
 
