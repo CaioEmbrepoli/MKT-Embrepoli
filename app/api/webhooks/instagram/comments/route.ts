@@ -14,8 +14,18 @@ function verifyToken() {
   return process.env.META_WEBHOOK_VERIFY_TOKEN || process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN || "";
 }
 
-function metaAppSecret() {
-  return process.env.META_APP_SECRET || process.env.INSTAGRAM_APP_SECRET || "";
+function metaAppSecrets() {
+  return [
+    process.env.META_APP_SECRET,
+    process.env.INSTAGRAM_APP_SECRET
+  ].map((value) => value?.trim()).filter((value): value is string => Boolean(value));
+}
+
+function configuredSecretNames() {
+  return [
+    process.env.META_APP_SECRET ? "META_APP_SECRET" : "",
+    process.env.INSTAGRAM_APP_SECRET ? "INSTAGRAM_APP_SECRET" : ""
+  ].filter(Boolean);
 }
 
 function safeText(value: unknown) {
@@ -52,14 +62,16 @@ async function recordInstagramDiagnostic(input: {
 }
 
 function verifySignature(rawBody: string, signatureHeader: string | null) {
-  const secret = metaAppSecret();
-  if (!secret || !signatureHeader) return true;
+  const secrets = Array.from(new Set(metaAppSecrets()));
+  if (!secrets.length || !signatureHeader) return true;
   const [algo, signature] = signatureHeader.split("=");
   if (algo !== "sha256" || !signature) return false;
-  const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
   const actualBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expected);
-  return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+  return secrets.some((secret) => {
+    const expected = crypto.createHmac("sha256", secret).update(rawBody).digest("hex");
+    const expectedBuffer = Buffer.from(expected);
+    return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+  });
 }
 
 async function getConnections() {
@@ -124,7 +136,10 @@ export async function POST(request: Request) {
     await recordInstagramDiagnostic({
       eventType: "webhook_signature_invalid",
       error: "Assinatura Meta invalida.",
-      payload: { hasSignature: Boolean(request.headers.get("x-hub-signature-256")) }
+      payload: {
+        hasSignature: Boolean(request.headers.get("x-hub-signature-256")),
+        configuredSecretNames: configuredSecretNames()
+      }
     });
     return NextResponse.json({ error: "Assinatura Meta invalida." }, { status: 401 });
   }
