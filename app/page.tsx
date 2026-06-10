@@ -17272,8 +17272,10 @@ function ComentariosSection({
   const [commentImportOpen, setCommentImportOpen] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
+  const [suggestionState, setSuggestionState] = useState<Record<string, "loading" | "none" | "error">>({});
   const [pressedBtn, setPressedBtn] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const suggestionAttemptedRef = useRef<Set<string>>(new Set());
 
   function pressButton(key: string) {
     setPressedBtn((prev) => ({ ...prev, [key]: true }));
@@ -17334,6 +17336,54 @@ function ComentariosSection({
     if (filter.matchType === "exact") return t === k;
     return t.includes(k);
   }
+
+  async function commentAuthHeaders() {
+    const session = await supabase?.auth.getSession();
+    const token = session?.data.session?.access_token;
+    return {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+  }
+
+  async function handleSuggestReply(comment: Comment, options: { force?: boolean } = {}) {
+    if (comment.status !== "novo") return;
+    if (!options.force && comment.suggestedReply) return;
+    if (!options.force && suggestionAttemptedRef.current.has(comment.id)) return;
+    suggestionAttemptedRef.current.add(comment.id);
+    setSuggestionState((prev) => ({ ...prev, [comment.id]: "loading" }));
+    try {
+      const res = await fetch("/api/comments/suggest-reply", {
+        method: "POST",
+        headers: await commentAuthHeaders(),
+        body: JSON.stringify({ commentId: comment.id })
+      });
+      const data = await res.json().catch(() => ({})) as {
+        found?: boolean;
+        suggestion?: string;
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || "Erro ao sugerir resposta.");
+      if (data.found && data.suggestion) {
+        const suggestion = data.suggestion;
+        setComments(comments.map((item) => item.id === comment.id ? { ...item, suggestedReply: suggestion } : item));
+        setSuggestionState((prev) => {
+          const next = { ...prev };
+          delete next[comment.id];
+          return next;
+        });
+        return;
+      }
+      setSuggestionState((prev) => ({ ...prev, [comment.id]: "none" }));
+    } catch {
+      setSuggestionState((prev) => ({ ...prev, [comment.id]: "error" }));
+    }
+  }
+
+  useEffect(() => {
+    if (!selected || selected.status !== "novo" || selected.suggestedReply) return;
+    void handleSuggestReply(selected);
+  }, [selected?.id, selected?.status, selected?.suggestedReply]);
 
   async function handleImport(items: Array<YouTubeCommentItem | InstagramCommentItem | TikTokCommentItem>, updatedItems: YouTubeCommentItem[] = [], source: Comment["source"] = "youtube") {
     // ── ATUALIZAÇÕES: comentários existentes com nova resposta ──
@@ -17894,28 +17944,48 @@ function ComentariosSection({
               </div>
 
               {/* AI suggestion / classification */}
-              {(selected.classificationReason || selected.suggestedReply) && (
-                <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <CommentClassificationBadge status={selected.classificationStatus} />
-                    {selected.classificationReason && (
-                      <span className="text-xs italic text-slate-500">{selected.classificationReason}</span>
-                    )}
-                  </div>
-                  {selected.suggestedReply && (
-                    <>
-                      <p className="text-sm font-semibold text-slate-700">{selected.suggestedReply}</p>
-                      <button
-                        type="button"
-                        onClick={() => setResponses((prev) => ({ ...prev, [selected.id]: selected.suggestedReply ?? "" }))}
-                        className="mt-3 rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
-                      >
-                        Usar sugestão
-                      </button>
-                    </>
+              <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="flex items-center gap-1 text-xs font-black uppercase text-blue-700">
+                    <Wand2 size={13} /> Sugestão de resposta
+                  </span>
+                  <CommentClassificationBadge status={selected.classificationStatus} />
+                  {selected.classificationReason && (
+                    <span className="text-xs italic text-slate-500">{selected.classificationReason}</span>
                   )}
                 </div>
-              )}
+                {selected.suggestedReply ? (
+                  <>
+                    <p className="text-sm font-semibold text-slate-700">{selected.suggestedReply}</p>
+                    <button
+                      type="button"
+                      onClick={() => setResponses((prev) => ({ ...prev, [selected.id]: selected.suggestedReply ?? "" }))}
+                      className="mt-3 rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
+                    >
+                      Usar sugestão
+                    </button>
+                  </>
+                ) : suggestionState[selected.id] === "loading" ? (
+                  <p className="text-sm font-semibold text-slate-500">Analisando Banco de Dúvidas...</p>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-3">
+                    <p className="text-sm font-semibold text-slate-500">
+                      {suggestionState[selected.id] === "error"
+                        ? "Não foi possível analisar agora."
+                        : "Sem sugestão segura no Banco de Dúvidas."}
+                    </p>
+                    {selected.status === "novo" && (
+                      <button
+                        type="button"
+                        onClick={() => handleSuggestReply(selected, { force: true })}
+                        className="rounded-xl bg-white px-3 py-1.5 text-xs font-bold text-blue-700 ring-1 ring-blue-100 hover:bg-blue-50"
+                      >
+                        Analisar novamente
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {selected.response && (
                 <div className="mb-4 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
