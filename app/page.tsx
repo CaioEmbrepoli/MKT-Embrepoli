@@ -2592,6 +2592,7 @@ export default function Home() {
               }}
               currentUser={currentUser}
               channels={channels}
+              metrics={metrics}
             />
           )}
           {activeSection === "marketing-banco-duvidas" && hasModulePermission(currentUser, "marketing", "banco-duvidas", "view", profileAreas, profileModulePermissions) && (
@@ -17163,50 +17164,59 @@ function BancoDeDuvidas({
 
 // ─── ComentariosSection ───────────────────────────────────────────────────────
 
-const commentSourceBadgeConfig: Record<Comment["source"], { label: string; className: string; icon: ReactNode }> = {
+const commentSourceBadgeConfig: Record<Comment["source"], { label: string; bgClassName: string; icon: ReactNode }> = {
   youtube: {
     label: "YouTube",
-    className: "bg-red-100 text-red-700",
+    bgClassName: "bg-red-600",
     icon: (
-      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
-        <path fill="currentColor" d="M14.7 4.2a1.9 1.9 0 0 0-1.3-1.3C12.2 2.6 8 2.6 8 2.6s-4.2 0-5.4.3a1.9 1.9 0 0 0-1.3 1.3A19.7 19.7 0 0 0 1 8a19.7 19.7 0 0 0 .3 3.8 1.9 1.9 0 0 0 1.3 1.3c1.2.3 5.4.3 5.4.3s4.2 0 5.4-.3a1.9 1.9 0 0 0 1.3-1.3A19.7 19.7 0 0 0 15 8a19.7 19.7 0 0 0-.3-3.8ZM6.6 10.3V5.7L10.4 8l-3.8 2.3Z" />
+      <svg viewBox="0 0 24 24" className="h-[58%] w-[58%] fill-white" aria-hidden="true">
+        <path d="M23.5 6.2a3 3 0 00-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 00.5 6.2C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 002.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 002.1-2.1C24 15.9 24 12 24 12s0-3.9-.5-5.8zM9.75 15.5v-7l6.5 3.5-6.5 3.5z" />
       </svg>
     )
   },
   instagram: {
     label: "Instagram",
-    className: "bg-fuchsia-100 text-fuchsia-700",
+    bgClassName: "bg-gradient-to-br from-purple-500 via-pink-500 to-orange-400",
     icon: (
-      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
-        <path fill="currentColor" d="M5 1.5h6A3.5 3.5 0 0 1 14.5 5v6a3.5 3.5 0 0 1-3.5 3.5H5A3.5 3.5 0 0 1 1.5 11V5A3.5 3.5 0 0 1 5 1.5Zm0 1.4A2.1 2.1 0 0 0 2.9 5v6A2.1 2.1 0 0 0 5 13.1h6a2.1 2.1 0 0 0 2.1-2.1V5A2.1 2.1 0 0 0 11 2.9H5Zm3 2.4A2.7 2.7 0 1 1 8 10.7 2.7 2.7 0 0 1 8 5.3Zm0 1.4A1.3 1.3 0 1 0 8 9.3 1.3 1.3 0 0 0 8 6.7Zm3.1-2.1a.7.7 0 1 1 0 1.4.7.7 0 0 1 0-1.4Z" />
+      <svg viewBox="0 0 24 24" className="h-[58%] w-[58%] fill-white" aria-hidden="true">
+        <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z" />
       </svg>
     )
   },
   tiktok: {
     label: "TikTok",
-    className: "bg-slate-900 text-white",
+    bgClassName: "bg-black",
     icon: (
-      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
-        <path fill="currentColor" d="M10.2 1.5c.2 1.8 1.2 3 3 3.2v2a5.4 5.4 0 0 1-3-1v4.7a4 4 0 1 1-4-4c.3 0 .7 0 1 .1v2.1a1.8 1.8 0 1 0 1 1.6V1.5h2Z" />
+      <svg viewBox="0 0 24 24" className="h-[58%] w-[58%] fill-white" aria-hidden="true">
+        <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-2.88 2.5 2.89 2.89 0 01-2.89-2.89 2.89 2.89 0 012.89-2.89c.28 0 .54.04.79.1V9.01a6.33 6.33 0 00-.79-.05 6.34 6.34 0 00-6.34 6.34 6.34 6.34 0 006.34 6.34 6.34 6.34 0 006.33-6.34V9.02a8.16 8.16 0 004.77 1.52V7.1a4.85 4.85 0 01-1-.41z" />
       </svg>
     )
   },
   facebook: {
     label: "Facebook",
-    className: "bg-blue-100 text-blue-700",
+    bgClassName: "bg-blue-600",
     icon: (
-      <svg viewBox="0 0 16 16" className="h-3 w-3" aria-hidden="true">
-        <path fill="currentColor" d="M9.2 14.5V8.8h1.9l.3-2.2H9.2V5.2c0-.6.2-1.1 1.1-1.1h1.2v-2a15 15 0 0 0-1.8-.1C8 2 6.8 3.1 6.8 5v1.6H4.9v2.2h1.9v5.7h2.4Z" />
+      <svg viewBox="0 0 24 24" className="h-[58%] w-[58%] fill-white" aria-hidden="true">
+        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
       </svg>
     )
   }
 };
 
+function CommentChannelIcon({ source, className }: { source: Comment["source"]; className?: string }) {
+  const config = commentSourceBadgeConfig[source] ?? commentSourceBadgeConfig.youtube;
+  return (
+    <div className={`flex shrink-0 items-center justify-center rounded-full ${config.bgClassName} ${className ?? "h-7 w-7"}`}>
+      {config.icon}
+    </div>
+  );
+}
+
 function CommentSourceBadge({ source }: { source: Comment["source"] }) {
   const config = commentSourceBadgeConfig[source] ?? commentSourceBadgeConfig.youtube;
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-bold ${config.className}`}>
-      {config.icon}
+    <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
+      <CommentChannelIcon source={source} className="h-4 w-4" />
       {config.label}
     </span>
   );
@@ -17234,6 +17244,7 @@ function ComentariosSection({
   setQuestions,
   currentUser,
   channels,
+  metrics,
 }: {
   comments: Comment[];
   setComments: (next: Comment[]) => void;
@@ -17243,6 +17254,7 @@ function ComentariosSection({
   setQuestions: (next: CustomerQuestion[]) => void;
   currentUser: Profile;
   channels: Channel[];
+  metrics: PostMetric[];
 }) {
   const [statusFilter, setStatusFilter] = useState<CommentStatus | "todos">("novo");
   const [channelFilter, setChannelFilter] = useState<Comment["source"] | "todos">("todos");
@@ -17299,6 +17311,16 @@ function ComentariosSection({
   }, [comments, statusFilter, channelFilter, search, dateRange, sortOrder]);
 
   const selected = filtered.find((c) => c.id === selectedId) ?? filtered[0] ?? null;
+
+  const metricByVideoId = useMemo(() => {
+    const map = new Map<string, PostMetric>();
+    for (const m of metrics) {
+      if (!m.externalId) continue;
+      const key = m.externalId.includes(":") ? m.externalId.split(":").slice(1).join(":") : m.externalId;
+      map.set(key, m);
+    }
+    return map;
+  }, [metrics]);
 
   function matchesFilter(text: string, filter: AutoFilter): boolean {
     const t = text.toLowerCase();
@@ -17606,26 +17628,21 @@ function ComentariosSection({
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-2xl font-black text-slate-900">Comentários</h2>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
-          >
-            <Settings size={14} />
-          </button>
-          <button
-            onClick={() => setCommentImportOpen(true)}
-            className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition"
-          >
-            <Download size={14} /> Importar
-          </button>
-        </div>
+      {/* Action buttons */}
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50"
+        >
+          <Settings size={14} /> Filtros automáticos
+        </button>
+        <button
+          onClick={() => setCommentImportOpen(true)}
+          className="flex items-center gap-2 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 hover:bg-blue-50 hover:text-blue-700 transition"
+        >
+          <Download size={14} /> Importar
+        </button>
       </div>
-
-
 
       {/* Auto-filter panel */}
       {showFilters && (
@@ -17690,8 +17707,8 @@ function ComentariosSection({
                 onClick={() => setChannelFilter(src)}
                 className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold ${channelFilter === src ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:bg-white"}`}
               >
-                {config.icon} {config.label}
-                {count > 0 && <span className={`rounded-full px-1.5 text-[10px] ${config.className}`}>{count}</span>}
+                <CommentChannelIcon source={src} className="h-4 w-4" /> {config.label}
+                {count > 0 && <span className="rounded-full bg-slate-200 px-1.5 text-[10px] text-slate-600">{count}</span>}
               </button>
             );
           })}
@@ -17772,9 +17789,7 @@ function ComentariosSection({
                 >
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
-                        {commentSourceBadgeConfig[comment.source]?.icon}
-                      </span>
+                      <CommentChannelIcon source={comment.source} className="h-7 w-7" />
                       <span className="truncate text-sm font-black text-slate-800">{comment.authorName}</span>
                     </div>
                     {comment.addedToBank ? (
@@ -17807,9 +17822,7 @@ function ComentariosSection({
               {/* Detail header */}
               <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
                 <div className="flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100">
-                    {commentSourceBadgeConfig[selected.source]?.icon}
-                  </div>
+                  <CommentChannelIcon source={selected.source} className="h-11 w-11" />
                   <div>
                     <p className="text-base font-black text-slate-900">{selected.authorName}</p>
                     <p className="text-xs font-bold text-slate-400">
@@ -17825,6 +17838,36 @@ function ComentariosSection({
                   )}
                 </div>
               </div>
+
+              {/* Post/video preview */}
+              {selected.videoTitle && (() => {
+                const post = selected.videoId ? metricByVideoId.get(selected.videoId) : undefined;
+                const link = post?.sourceUrl || post?.embedUrl;
+                const content = post?.thumbnailUrl ? (
+                  <div className="flex gap-3">
+                    <img src={post.thumbnailUrl} alt="" className="h-16 w-28 shrink-0 rounded-xl object-cover" />
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-black uppercase text-slate-400">Post de origem</p>
+                      <p className="line-clamp-2 text-sm font-bold text-slate-700">{post.postTitle || selected.videoTitle}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <CommentChannelIcon source={selected.source} className="h-10 w-10" />
+                    <div className="min-w-0">
+                      <p className="text-[10px] font-black uppercase text-slate-400">Post de origem</p>
+                      <p className="line-clamp-2 text-sm font-bold text-slate-700">{post?.postTitle || selected.videoTitle}</p>
+                    </div>
+                  </div>
+                );
+                return (
+                  <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/60 p-3">
+                    {link ? (
+                      <a href={link} target="_blank" rel="noreferrer" className="block hover:opacity-80">{content}</a>
+                    ) : content}
+                  </div>
+                );
+              })()}
 
               {/* Original comment */}
               <div className="mb-4 rounded-2xl bg-slate-50 p-4">
