@@ -88,6 +88,9 @@ export type InstagramCommentItem = {
   commentId: string;
   videoId: string;
   videoTitle: string;
+  mediaThumbnailUrl?: string;
+  mediaUrl?: string;
+  mediaPermalink?: string;
   authorName: string;
   text: string;
   likes: number;
@@ -432,6 +435,9 @@ export async function fetchInstagramCommentsForMedia(
         commentId: `instagram:${String(item.id || "")}`,
         videoId: media.id,
         videoTitle: sanitizeText(videoTitle),
+        mediaThumbnailUrl: media.thumbnailUrl || media.mediaUrl || undefined,
+        mediaUrl: media.mediaUrl || undefined,
+        mediaPermalink: media.permalink || undefined,
         authorName: sanitizeText(String(item.username || "Instagram")),
         text: sanitizeText(String(item.text || "")),
         likes: Number(item.like_count || 0),
@@ -449,19 +455,36 @@ export async function fetchInstagramCommentsForMedia(
 export async function fetchInstagramCommentById(accessToken: string, commentId: string, fallbackMediaId = "") {
   const cleanId = commentId.replace(/^instagram:/, "");
   const data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
-    fields: "id,text,username,timestamp,like_count,media{id,caption,timestamp}"
+    fields: "id,text,username,timestamp,like_count,media{id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count}"
   });
   const media = data?.media ?? {};
   const mediaId = String(media.id || fallbackMediaId || "");
+  const normalizedMedia = mediaId ? normalizeMedia({ id: mediaId, ...media }) : null;
   return {
     commentId: `instagram:${String(data.id || cleanId)}`,
     videoId: mediaId,
     videoTitle: sanitizeText(String(media.caption || "Post Instagram")).slice(0, 140) || "Post Instagram",
+    mediaThumbnailUrl: normalizedMedia?.thumbnailUrl || normalizedMedia?.mediaUrl || undefined,
+    mediaUrl: normalizedMedia?.mediaUrl || undefined,
+    mediaPermalink: normalizedMedia?.permalink || undefined,
     authorName: sanitizeText(String(data.username || "Instagram")),
     text: sanitizeText(String(data.text || "")),
     likes: Number(data.like_count || 0),
     publishedAt: String(data.timestamp || media.timestamp || new Date().toISOString())
   } satisfies InstagramCommentItem;
+}
+
+export async function fetchInstagramMediaById(accessToken: string, mediaId: string): Promise<InstagramMediaItem | null> {
+  const cleanId = mediaId.replace(/^instagram:/, "").trim();
+  if (!cleanId) return null;
+  try {
+    const data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
+      fields: "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count"
+    });
+    return normalizeMedia(data);
+  } catch {
+    return null;
+  }
 }
 
 export async function replyToInstagramComment(accessToken: string, commentId: string, message: string) {

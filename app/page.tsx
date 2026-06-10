@@ -721,8 +721,10 @@ function proxiedThumbnailUrl(url: string): string {
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
-    const shouldProxy = ["tiktok", "tiktokcdn", "muscdn", "byteimg"].some((part) => host.includes(part));
-    if (shouldProxy) return `/api/tiktok/thumb?url=${encodeURIComponent(url)}`;
+    const shouldProxyTikTok = ["tiktok", "tiktokcdn", "muscdn", "byteimg"].some((part) => host.includes(part));
+    if (shouldProxyTikTok) return `/api/tiktok/thumb?url=${encodeURIComponent(url)}`;
+    const shouldProxyInstagram = ["cdninstagram", "fbcdn", "scontent"].some((part) => host.includes(part));
+    if (shouldProxyInstagram) return `/api/instagram/thumb?url=${encodeURIComponent(url)}`;
   } catch {
     return url;
   }
@@ -895,6 +897,9 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
     importSignature: existing.importSignature ?? incoming.importSignature,
     videoId: incoming.videoId ?? existing.videoId,
     videoTitle: incoming.videoTitle ?? existing.videoTitle,
+    mediaThumbnailUrl: incoming.mediaThumbnailUrl ?? existing.mediaThumbnailUrl,
+    mediaUrl: incoming.mediaUrl ?? existing.mediaUrl,
+    mediaPermalink: incoming.mediaPermalink ?? existing.mediaPermalink,
     authorName: incoming.authorName || existing.authorName,
     text: incoming.text || existing.text,
     likes: incoming.likes,
@@ -17367,6 +17372,7 @@ function ComentariosSection({
 
     const newComments: Comment[] = items.map((item) => {
       const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
+      const mediaFields = item as Partial<Pick<Comment, "mediaThumbnailUrl" | "mediaUrl" | "mediaPermalink">>;
       const incoming: Comment = {
         id: crypto.randomUUID(),
         source,
@@ -17380,6 +17386,9 @@ function ComentariosSection({
         }),
         videoId: item.videoId,
         videoTitle: item.videoTitle,
+        mediaThumbnailUrl: mediaFields.mediaThumbnailUrl,
+        mediaUrl: mediaFields.mediaUrl,
+        mediaPermalink: mediaFields.mediaPermalink,
         authorName: item.authorName,
         text: item.text,
         likes: item.likes,
@@ -17845,8 +17854,12 @@ function ComentariosSection({
                 const ytThumbnail = selected.source === "youtube" && selected.videoId
                   ? `https://i.ytimg.com/vi/${selected.videoId}/mqdefault.jpg`
                   : undefined;
-                const thumbnailUrl = post?.thumbnailUrl || ytThumbnail;
-                const link = post?.sourceUrl || post?.embedUrl || (
+                const instagramThumbnail = selected.source === "instagram"
+                  ? selected.mediaThumbnailUrl || selected.mediaUrl
+                  : undefined;
+                const rawThumbnailUrl = instagramThumbnail || post?.thumbnailUrl || ytThumbnail;
+                const thumbnailUrl = rawThumbnailUrl ? proxiedThumbnailUrl(rawThumbnailUrl) : undefined;
+                const link = selected.mediaPermalink || post?.sourceUrl || post?.embedUrl || (
                   selected.source === "youtube" && selected.videoId
                     ? `https://www.youtube.com/watch?v=${selected.videoId}`
                     : undefined

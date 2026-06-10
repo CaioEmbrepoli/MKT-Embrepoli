@@ -1519,6 +1519,9 @@ create table if not exists public.comments (
   import_signature text,
   video_id text,
   video_title text,
+  media_thumbnail_url text,
+  media_url text,
+  media_permalink text,
   author_name text,
   text text not null,
   likes integer not null default 0,
@@ -1539,6 +1542,9 @@ create table if not exists public.comments (
 
 alter table public.comments add column if not exists import_signature text;
 alter table public.comments add column if not exists bank_question_id text references public.customer_questions(id) on delete set null;
+alter table public.comments add column if not exists media_thumbnail_url text;
+alter table public.comments add column if not exists media_url text;
+alter table public.comments add column if not exists media_permalink text;
 alter table public.comments add column if not exists retention_until timestamptz;
 alter table public.comments add column if not exists processed_at timestamptz;
 alter table public.comments add column if not exists is_relevant boolean;

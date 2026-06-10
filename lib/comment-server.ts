@@ -9,6 +9,9 @@ export type ServerCommentInput = {
   importSignature?: string;
   videoId?: string;
   videoTitle?: string;
+  mediaThumbnailUrl?: string;
+  mediaUrl?: string;
+  mediaPermalink?: string;
   authorName: string;
   text: string;
   likes?: number;
@@ -34,6 +37,9 @@ type ExistingCommentRow = {
   created_at: string | null;
   response: string | null;
   status: "novo" | "respondido" | "ignorado" | null;
+  media_thumbnail_url: string | null;
+  media_url: string | null;
+  media_permalink: string | null;
   added_to_bank: boolean | null;
   bank_question_id: string | null;
   classification_status: "pendente" | "relevante" | "normal" | "erro" | null;
@@ -117,6 +123,9 @@ function normalizeComment(comment: ServerCommentInput): ServerCommentInput {
     importSignature: comment.importSignature?.trim() || buildCommentSignature(comment),
     videoId: sanitizeText(comment.videoId),
     videoTitle: sanitizeText(comment.videoTitle),
+    mediaThumbnailUrl: comment.mediaThumbnailUrl ? sanitizeText(comment.mediaThumbnailUrl) : undefined,
+    mediaUrl: comment.mediaUrl ? sanitizeText(comment.mediaUrl) : undefined,
+    mediaPermalink: comment.mediaPermalink ? sanitizeText(comment.mediaPermalink) : undefined,
     authorName: sanitizeText(comment.authorName) || "Cliente",
     text: sanitizeText(comment.text),
     response: comment.response ? sanitizeText(comment.response) : undefined,
@@ -153,6 +162,9 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
     likes: Number(comment.likes ?? 0),
     response,
     status,
+    media_thumbnail_url: comment.mediaThumbnailUrl ?? existing?.media_thumbnail_url ?? null,
+    media_url: comment.mediaUrl ?? existing?.media_url ?? null,
+    media_permalink: comment.mediaPermalink ?? existing?.media_permalink ?? null,
     added_to_bank: addedToBank,
     bank_question_id: bankQuestionId,
     published_at: comment.publishedAt || null,
@@ -177,7 +189,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (externalIds.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
       .eq("organization_id", organizationId)
       .in("external_id", externalIds);
     if (error) throw error;
@@ -187,7 +199,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (signatures.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
       .eq("organization_id", organizationId)
       .in("import_signature", signatures);
     if (error) throw error;
@@ -208,6 +220,24 @@ export async function upsertServerComments(service: SupabaseClient, organization
     .select("*");
   if (error) throw error;
   return data ?? [];
+}
+
+export async function deleteServerCommentByExternalId(
+  service: SupabaseClient,
+  organizationId: string,
+  source: CommentSource,
+  externalId: string
+) {
+  const { data, error } = await service
+    .from("comments")
+    .delete()
+    .eq("organization_id", organizationId)
+    .eq("source", source)
+    .eq("external_id", externalId)
+    .select("id")
+    .maybeSingle();
+  if (error) throw error;
+  return Boolean(data?.id);
 }
 
 export async function updateServerCommentResponse(

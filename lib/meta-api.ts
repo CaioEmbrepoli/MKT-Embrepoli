@@ -80,6 +80,9 @@ export type InstagramCommentItem = {
   commentId: string;
   videoId: string;
   videoTitle: string;
+  mediaThumbnailUrl?: string;
+  mediaUrl?: string;
+  mediaPermalink?: string;
   authorName: string;
   text: string;
   likes: number;

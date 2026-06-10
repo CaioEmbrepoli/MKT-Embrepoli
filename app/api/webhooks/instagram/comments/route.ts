@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
-import { commentServiceClient, getDefaultOrganizationId, recordCommentWebhookEvent, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
-import { fetchInstagramCommentById } from "@/lib/meta-server";
+import { commentServiceClient, deleteServerCommentByExternalId, getDefaultOrganizationId, recordCommentWebhookEvent, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
+import { fetchInstagramCommentById, fetchInstagramMediaById } from "@/lib/meta-server";
 
 type MetaConnection = {
   id: string;
@@ -30,6 +30,23 @@ function configuredSecretNames() {
 
 function safeText(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function instagramExternalCommentId(commentId: string) {
+  const cleanId = safeText(commentId).replace(/^instagram:/, "");
+  return cleanId ? `instagram:${cleanId}` : "";
+}
+
+function isDeleteEvent(value: any, change: any) {
+  const parts = [
+    value?.verb,
+    value?.action,
+    value?.event_type,
+    value?.type,
+    value?.item,
+    change?.field
+  ].map((item) => safeText(item).toLowerCase()).filter(Boolean);
+  return parts.some((part) => part.includes("delete") || part.includes("remove") || part === "removed");
 }
 
 async function recordInstagramDiagnostic(input: {
@@ -181,11 +198,36 @@ export async function POST(request: Request) {
           continue;
         }
 
+        if (event.commentId && isDeleteEvent(event.value, change)) {
+          const externalCommentId = instagramExternalCommentId(event.commentId);
+          const deleted = await deleteServerCommentByExternalId(service, connection.organization_id, "instagram", externalCommentId);
+          await recordCommentWebhookEvent(service, {
+            organizationId: connection.organization_id,
+            source: "instagram",
+            eventId: `${event.eventId}:delete`,
+            externalCommentId,
+            externalMediaId: event.mediaId,
+            eventType: deleted ? "comment_deleted" : "comment_delete_not_found",
+            payload: {
+              field: safeText(change?.field || "comment"),
+              verb: safeText(event.value?.verb),
+              action: safeText(event.value?.action),
+              eventType: safeText(event.value?.event_type || event.value?.type),
+              item: safeText(event.value?.item)
+            },
+            processedAt: deleted ? new Date().toISOString() : null,
+            error: deleted ? null : "Comentario de Instagram nao encontrado para remover."
+          });
+          storedEvents += 1;
+          processed += deleted ? 1 : 0;
+          continue;
+        }
+
         await recordCommentWebhookEvent(service, {
           organizationId: connection.organization_id,
           source: "instagram",
           eventId: event.eventId,
-          externalCommentId: event.commentId ? `instagram:${event.commentId.replace(/^instagram:/, "")}` : undefined,
+          externalCommentId: event.commentId ? instagramExternalCommentId(event.commentId) : undefined,
           externalMediaId: event.mediaId,
           eventType: safeText(change?.field || "comment"),
           payload: {
@@ -200,11 +242,15 @@ export async function POST(request: Request) {
 
         let comment: ServerCommentInput | null = null;
         if (event.commentId && event.text) {
+          const media = event.mediaId ? await fetchInstagramMediaById(connection.access_token, event.mediaId) : null;
           comment = {
             source: "instagram" as const,
-            externalId: `instagram:${event.commentId.replace(/^instagram:/, "")}`,
+            externalId: instagramExternalCommentId(event.commentId),
             videoId: event.mediaId,
             videoTitle: "Post Instagram",
+            mediaThumbnailUrl: media?.thumbnailUrl || media?.mediaUrl || undefined,
+            mediaUrl: media?.mediaUrl || undefined,
+            mediaPermalink: media?.permalink || undefined,
             authorName: event.authorName,
             text: event.text,
             likes: Number(event.value.like_count || 0),
@@ -216,7 +262,7 @@ export async function POST(request: Request) {
               organizationId: connection.organization_id,
               source: "instagram",
               eventId: `${event.eventId}:fetch_failed`,
-              externalCommentId: `instagram:${event.commentId.replace(/^instagram:/, "")}`,
+              externalCommentId: instagramExternalCommentId(event.commentId),
               externalMediaId: event.mediaId,
               eventType: "comment_fetch_failed",
               payload: { hasCommentId: true, hasText: false },
@@ -232,6 +278,9 @@ export async function POST(request: Request) {
               externalId: fetched.commentId,
               videoId: fetched.videoId,
               videoTitle: fetched.videoTitle,
+              mediaThumbnailUrl: fetched.mediaThumbnailUrl,
+              mediaUrl: fetched.mediaUrl,
+              mediaPermalink: fetched.mediaPermalink,
               authorName: fetched.authorName,
               text: fetched.text,
               likes: fetched.likes,
@@ -262,7 +311,7 @@ export async function POST(request: Request) {
             organizationId: connection.organization_id,
             source: "instagram",
             eventId: `${event.eventId}:no_comment`,
-            externalCommentId: event.commentId ? `instagram:${event.commentId.replace(/^instagram:/, "")}` : undefined,
+            externalCommentId: event.commentId ? instagramExternalCommentId(event.commentId) : undefined,
             externalMediaId: event.mediaId,
             eventType: "comment_not_processed",
             payload: {
