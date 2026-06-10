@@ -65,6 +65,7 @@ import {
   Target,
   Pencil,
   Clock,
+  Heart,
   Pause,
   Play,
   Columns2,
@@ -1009,6 +1010,21 @@ function sameDay(left: Date, right: Date) {
 
 function formatDateOnly(value: Date) {
   return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short" }).format(value);
+}
+
+function formatCommentTimestamp(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const now = new Date();
+  const time = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date);
+  if (sameDay(date, now)) return `Hoje · ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (sameDay(date, yesterday)) return `Ontem · ${time}`;
+  const diffDays = Math.floor((now.getTime() - date.getTime()) / 86400000);
+  if (diffDays >= 0 && diffDays < 7) return `${diffDays} dia${diffDays !== 1 ? "s" : ""} atrás`;
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(date);
 }
 
 function toDateTimeLocalValue(value: Date) {
@@ -17229,6 +17245,9 @@ function ComentariosSection({
   channels: Channel[];
 }) {
   const [statusFilter, setStatusFilter] = useState<CommentStatus | "todos">("novo");
+  const [channelFilter, setChannelFilter] = useState<Comment["source"] | "todos">("todos");
+  const [dateRange, setDateRange] = useState<"7d" | "30d" | "month" | "all">("all");
+  const [sortOrder, setSortOrder] = useState<"recent" | "oldest" | "likes">("recent");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
   const [newKeyword, setNewKeyword] = useState("");
@@ -17237,17 +17256,49 @@ function ComentariosSection({
   const [saving, setSaving] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [pressedBtn, setPressedBtn] = useState<Record<string, boolean>>({});
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   function pressButton(key: string) {
     setPressedBtn((prev) => ({ ...prev, [key]: true }));
     setTimeout(() => setPressedBtn((prev) => { const n = { ...prev }; delete n[key]; return n; }), 600);
   }
 
-  const filtered = comments.filter((c) => {
-    if (statusFilter !== "todos" && c.status !== statusFilter) return false;
-    if (search && !c.text.toLowerCase().includes(search.toLowerCase()) && !c.authorName.toLowerCase().includes(search.toLowerCase())) return false;
-    return true;
-  });
+  const channelCounts = useMemo(() => {
+    const counts: Partial<Record<Comment["source"], number>> = {};
+    for (const c of comments) {
+      if (c.status === "novo") counts[c.source] = (counts[c.source] ?? 0) + 1;
+    }
+    return counts;
+  }, [comments]);
+
+  const filtered = useMemo(() => {
+    const now = new Date();
+    const list = comments.filter((c) => {
+      if (statusFilter !== "todos" && c.status !== statusFilter) return false;
+      if (channelFilter !== "todos" && c.source !== channelFilter) return false;
+      if (search && !c.text.toLowerCase().includes(search.toLowerCase()) && !c.authorName.toLowerCase().includes(search.toLowerCase())) return false;
+      if (dateRange !== "all") {
+        const ref = c.publishedAt ? new Date(c.publishedAt) : null;
+        if (!ref || Number.isNaN(ref.getTime())) return false;
+        if (dateRange === "month") {
+          if (ref.getMonth() !== now.getMonth() || ref.getFullYear() !== now.getFullYear()) return false;
+        } else {
+          const limitDays = dateRange === "7d" ? 7 : 30;
+          const diffDays = (now.getTime() - ref.getTime()) / 86400000;
+          if (diffDays > limitDays) return false;
+        }
+      }
+      return true;
+    });
+    return list.sort((a, b) => {
+      if (sortOrder === "likes") return b.likes - a.likes;
+      const ad = a.publishedAt ? new Date(a.publishedAt).getTime() : 0;
+      const bd = b.publishedAt ? new Date(b.publishedAt).getTime() : 0;
+      return sortOrder === "oldest" ? ad - bd : bd - ad;
+    });
+  }, [comments, statusFilter, channelFilter, search, dateRange, sortOrder]);
+
+  const selected = filtered.find((c) => c.id === selectedId) ?? filtered[0] ?? null;
 
   function matchesFilter(text: string, filter: AutoFilter): boolean {
     const t = text.toLowerCase();
@@ -17620,126 +17671,248 @@ function ComentariosSection({
         </div>
       )}
 
-      {/* Status filter + search */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex gap-1 rounded-2xl border border-slate-200 bg-white p-1">
+      {/* Filter bar */}
+      <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-3">
+        {/* Channel pills */}
+        <div className="flex flex-wrap gap-1 rounded-xl bg-slate-50 p-1">
+          <button
+            onClick={() => setChannelFilter("todos")}
+            className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-black ${channelFilter === "todos" ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:bg-white"}`}
+          >
+            Todos
+          </button>
+          {(["youtube", "instagram", "tiktok", "facebook"] as const).map((src) => {
+            const config = commentSourceBadgeConfig[src];
+            const count = channelCounts[src] ?? 0;
+            return (
+              <button
+                key={src}
+                onClick={() => setChannelFilter(src)}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold ${channelFilter === src ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:bg-white"}`}
+              >
+                {config.icon} {config.label}
+                {count > 0 && <span className={`rounded-full px-1.5 text-[10px] ${config.className}`}>{count}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="hidden h-6 w-px bg-slate-200 sm:block" />
+
+        {/* Status pills */}
+        <div className="flex gap-1 rounded-xl bg-slate-50 p-1">
           {(["todos", "novo", "respondido", "ignorado"] as const).map((s) => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
-              className={`rounded-xl px-3 py-1 text-xs font-bold ${statusFilter === s ? "bg-slate-800 text-white" : "text-slate-600 hover:bg-slate-100"}`}
+              className={`rounded-lg px-3 py-1.5 text-xs font-bold ${statusFilter === s ? "bg-white text-slate-800 shadow-sm" : "text-slate-500 hover:bg-white"}`}
             >
               {statusLabels[s]}
             </button>
           ))}
         </div>
-        <div className="relative flex-1">
+
+        <div className="hidden h-6 w-px bg-slate-200 sm:block" />
+
+        {/* Date range */}
+        <select
+          value={dateRange}
+          onChange={(e) => setDateRange(e.target.value as typeof dateRange)}
+          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600"
+        >
+          <option value="7d">Últimos 7 dias</option>
+          <option value="30d">Últimos 30 dias</option>
+          <option value="month">Este mês</option>
+          <option value="all">Tudo</option>
+        </select>
+
+        {/* Sort */}
+        <select
+          value={sortOrder}
+          onChange={(e) => setSortOrder(e.target.value as typeof sortOrder)}
+          className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-600"
+        >
+          <option value="recent">Mais recentes</option>
+          <option value="oldest">Mais antigos</option>
+          <option value="likes">Mais curtidos</option>
+        </select>
+
+        {/* Search */}
+        <div className="relative ml-auto min-w-[180px] max-w-xs flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar comentários..."
-            className="w-full rounded-2xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm"
+            className="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm"
           />
         </div>
-        <span className="text-xs text-slate-400">{filtered.length} comentário{filtered.length !== 1 ? "s" : ""}</span>
       </div>
 
       {/* Comment list */}
-      {filtered.length === 0 && (
+      {filtered.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center">
           <MessageSquare size={32} className="mx-auto mb-3 text-slate-300" />
           <p className="text-sm text-slate-400">Nenhum comentário encontrado.</p>
           <p className="mt-1 text-xs text-slate-300">Importe comentários do YouTube, Instagram ou TikTok para começar.</p>
         </div>
-      )}
-      <div className="flex flex-col gap-3">
-        {filtered.map((comment) => (
-          <div key={comment.id} className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-black text-slate-800">{comment.authorName}</span>
-                  <CommentSourceBadge source={comment.source} />
+      ) : (
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[420px_1fr]">
+          {/* LIST */}
+          <div className="flex max-h-[75vh] flex-col gap-2 overflow-y-auto pr-1">
+            {filtered.map((comment) => {
+              const isSelected = selected?.id === comment.id;
+              return (
+                <button
+                  key={comment.id}
+                  onClick={() => setSelectedId(comment.id)}
+                  className={`rounded-2xl border-2 p-3 text-left transition ${
+                    isSelected ? "border-blue-500 bg-blue-50/50" : "border-slate-200 bg-white hover:border-slate-300"
+                  } ${comment.status === "ignorado" ? "opacity-60" : ""}`}
+                >
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-100">
+                        {commentSourceBadgeConfig[comment.source]?.icon}
+                      </span>
+                      <span className="truncate text-sm font-black text-slate-800">{comment.authorName}</span>
+                    </div>
+                    {comment.addedToBank ? (
+                      <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">No banco</span>
+                    ) : comment.status === "novo" && comment.suggestedReply ? (
+                      <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-700">✨ IA sugeriu</span>
+                    ) : (
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-black ${
+                        comment.status === "novo" ? "bg-blue-600 text-white" :
+                        comment.status === "respondido" ? "bg-emerald-100 text-emerald-700" :
+                        "bg-slate-100 text-slate-500"
+                      }`}>
+                        {comment.status === "novo" ? "Novo" : comment.status === "respondido" ? "Respondido" : "Ignorado"}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mb-2 line-clamp-2 text-sm text-slate-600">{comment.text}</p>
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-bold text-slate-400">
+                    <span className="truncate">{comment.videoTitle ?? ""}</span>
+                    <span className="shrink-0">{formatCommentTimestamp(comment.publishedAt)}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* DETAIL / REPLY PANEL */}
+          {selected && (
+            <div className="rounded-3xl border border-slate-200 bg-white p-6">
+              {/* Detail header */}
+              <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-11 w-11 items-center justify-center rounded-full bg-slate-100">
+                    {commentSourceBadgeConfig[selected.source]?.icon}
+                  </div>
+                  <div>
+                    <p className="text-base font-black text-slate-900">{selected.authorName}</p>
+                    <p className="text-xs font-bold text-slate-400">
+                      <CommentSourceBadge source={selected.source} />
+                      {selected.videoTitle && <span className="ml-2">{selected.videoTitle}</span>}
+                    </p>
+                  </div>
                 </div>
-                {comment.videoTitle && <span className="ml-2 text-xs text-slate-400">· {comment.videoTitle}</span>}
-                {comment.likes > 0 && <span className="ml-2 text-xs text-slate-400">· {comment.likes} ❤</span>}
-              </div>
-              <div className="flex items-center gap-2">
-                {comment.addedToBank && (
-                  <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">No banco</span>
-                )}
-                <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${
-                  comment.status === "novo" ? "bg-blue-100 text-blue-700" :
-                  comment.status === "respondido" ? "bg-emerald-100 text-emerald-700" :
-                  "bg-slate-100 text-slate-500"
-                }`}>
-                  {comment.status === "novo" ? "Novo" : comment.status === "respondido" ? "Respondido" : "Ignorado"}
-                </span>
-              </div>
-            </div>
-            <p className="mb-3 text-sm text-slate-700">{comment.text}</p>
-            {(comment.classificationReason || comment.suggestedReply) && (
-              <div className="mb-3 rounded-2xl border border-blue-100 bg-blue-50/60 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <CommentClassificationBadge status={comment.classificationStatus} />
-                  {comment.classificationReason && (
-                    <span className="text-xs italic text-slate-500">{comment.classificationReason}</span>
+                <div className="text-right">
+                  <p className="text-xs font-bold text-slate-400">{formatCommentTimestamp(selected.publishedAt)}</p>
+                  {selected.likes > 0 && (
+                    <p className="flex items-center justify-end gap-1 text-xs font-bold text-slate-400"><Heart size={12} /> {selected.likes}</p>
                   )}
                 </div>
-                {comment.suggestedReply && (
-                  <div className="mt-2 rounded-xl bg-white/80 p-3">
-                    <p className="text-xs font-black uppercase text-blue-700">Sugestão de resposta</p>
-                    <p className="mt-1 whitespace-pre-wrap text-sm font-semibold text-slate-700">{comment.suggestedReply}</p>
-                    <button
-                      type="button"
-                      onClick={() => setResponses((prev) => ({ ...prev, [comment.id]: comment.suggestedReply ?? "" }))}
-                      className="mt-2 rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
-                    >
-                      Usar sugestão
-                    </button>
+              </div>
+
+              {/* Original comment */}
+              <div className="mb-4 rounded-2xl bg-slate-50 p-4">
+                <p className="text-sm text-slate-700">{selected.text}</p>
+              </div>
+
+              {/* AI suggestion / classification */}
+              {(selected.classificationReason || selected.suggestedReply) && (
+                <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <CommentClassificationBadge status={selected.classificationStatus} />
+                    {selected.classificationReason && (
+                      <span className="text-xs italic text-slate-500">{selected.classificationReason}</span>
+                    )}
                   </div>
+                  {selected.suggestedReply && (
+                    <>
+                      <p className="text-sm font-semibold text-slate-700">{selected.suggestedReply}</p>
+                      <button
+                        type="button"
+                        onClick={() => setResponses((prev) => ({ ...prev, [selected.id]: selected.suggestedReply ?? "" }))}
+                        className="mt-3 rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
+                      >
+                        Usar sugestão
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
+              {selected.response && (
+                <div className="mb-4 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                  <span className="font-bold">Resposta enviada: </span>{selected.response}
+                </div>
+              )}
+
+              {/* Reply box */}
+              <div className="mb-4">
+                <label className="mb-1.5 block text-xs font-black uppercase text-slate-400">Sua resposta</label>
+                <textarea
+                  value={responses[selected.id] ?? selected.response ?? ""}
+                  onChange={(e) => setResponses((prev) => ({ ...prev, [selected.id]: e.target.value }))}
+                  placeholder="Escreva sua resposta..."
+                  rows={4}
+                  className="w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => { pressButton(`${selected.id}-save`); handleSaveResponse(selected); }}
+                  disabled={saving === selected.id}
+                  className={`rounded-xl px-4 py-2 text-sm font-black text-white transition-all duration-150 disabled:opacity-50 ${pressedBtn[`${selected.id}-save`] ? "scale-95 bg-blue-900" : "bg-blue-700 hover:bg-blue-800"}`}
+                >
+                  {saving === selected.id ? "Salvando..." : "Enviar resposta"}
+                </button>
+                <button
+                  onClick={() => { pressButton(`${selected.id}-ignore`); handleStatusChange(selected, "ignorado"); }}
+                  className={`rounded-xl px-4 py-2 text-sm font-bold transition-all duration-150 ${pressedBtn[`${selected.id}-ignore`] ? "scale-95 bg-slate-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                >
+                  Ignorar
+                </button>
+                {!selected.addedToBank && (
+                  <button
+                    onClick={() => { pressButton(`${selected.id}-bank`); handleAddToBank(selected); }}
+                    className={`rounded-xl px-4 py-2 text-sm font-bold transition-all duration-150 ${pressedBtn[`${selected.id}-bank`] ? "scale-95 bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"}`}
+                  >
+                    + Adicionar ao Banco
+                  </button>
+                )}
+                {filtered.length > 1 && (
+                  <button
+                    onClick={() => {
+                      const idx = filtered.findIndex((c) => c.id === selected.id);
+                      const next = filtered[(idx + 1) % filtered.length];
+                      setSelectedId(next.id);
+                    }}
+                    className="ml-auto flex items-center gap-1 rounded-xl px-4 py-2 text-sm font-bold text-slate-400 hover:text-slate-600"
+                  >
+                    Próximo comentário <ChevronRight size={14} />
+                  </button>
                 )}
               </div>
-            )}
-            {comment.response && (
-              <div className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                <span className="font-bold">Resposta: </span>{comment.response}
-              </div>
-            )}
-            <textarea
-              value={responses[comment.id] ?? comment.response ?? ""}
-              onChange={(e) => setResponses((prev) => ({ ...prev, [comment.id]: e.target.value }))}
-              placeholder="Escrever resposta..."
-              rows={2}
-              className="mb-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm resize-none"
-            />
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => { pressButton(`${comment.id}-save`); handleSaveResponse(comment); }}
-                disabled={saving === comment.id}
-                className={`rounded-xl px-3 py-1.5 text-xs font-bold text-white transition-all duration-150 disabled:opacity-50 ${pressedBtn[`${comment.id}-save`] ? "scale-95 bg-blue-900" : "bg-blue-700 hover:bg-blue-800"}`}
-              >
-                {saving === comment.id ? "Salvando..." : "Salvar resposta"}
-              </button>
-              <button
-                onClick={() => { pressButton(`${comment.id}-ignore`); handleStatusChange(comment, "ignorado"); }}
-                className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all duration-150 ${pressedBtn[`${comment.id}-ignore`] ? "scale-95 bg-slate-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
-              >
-                Ignorar
-              </button>
-              {!comment.addedToBank && (
-                <button
-                  onClick={() => { pressButton(`${comment.id}-bank`); handleAddToBank(comment); }}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all duration-150 ${pressedBtn[`${comment.id}-bank`] ? "scale-95 bg-emerald-600 text-white" : "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"}`}
-                >
-                  + Adicionar ao Banco
-                </button>
-              )}
             </div>
-          </div>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
 
       {commentImportOpen && (
         <CommentImportUnifiedModal
