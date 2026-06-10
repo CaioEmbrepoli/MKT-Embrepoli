@@ -17842,18 +17842,24 @@ function ComentariosSection({
               {/* Post/video preview */}
               {selected.videoTitle && (() => {
                 const post = selected.videoId ? metricByVideoId.get(selected.videoId) : undefined;
-                const link = post?.sourceUrl || post?.embedUrl;
-                const content = post?.thumbnailUrl ? (
+                const ytThumbnail = selected.source === "youtube" && selected.videoId
+                  ? `https://i.ytimg.com/vi/${selected.videoId}/mqdefault.jpg`
+                  : undefined;
+                const thumbnailUrl = post?.thumbnailUrl || ytThumbnail;
+                const link = post?.sourceUrl || post?.embedUrl || (
+                  selected.source === "youtube" && selected.videoId
+                    ? `https://www.youtube.com/watch?v=${selected.videoId}`
+                    : undefined
+                );
+                const content = (
                   <div className="flex gap-3">
-                    <img src={post.thumbnailUrl} alt="" className="h-16 w-28 shrink-0 rounded-xl object-cover" />
-                    <div className="min-w-0">
-                      <p className="text-[10px] font-black uppercase text-slate-400">Post de origem</p>
-                      <p className="line-clamp-2 text-sm font-bold text-slate-700">{post.postTitle || selected.videoTitle}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-3">
-                    <CommentChannelIcon source={selected.source} className="h-10 w-10" />
+                    {thumbnailUrl ? (
+                      <img src={thumbnailUrl} alt="" className="h-16 w-28 shrink-0 rounded-xl object-cover" />
+                    ) : (
+                      <div className="flex h-16 w-28 shrink-0 items-center justify-center rounded-xl bg-slate-200 text-slate-400">
+                        <FileImage size={20} />
+                      </div>
+                    )}
                     <div className="min-w-0">
                       <p className="text-[10px] font-black uppercase text-slate-400">Post de origem</p>
                       <p className="line-clamp-2 text-sm font-bold text-slate-700">{post?.postTitle || selected.videoTitle}</p>
