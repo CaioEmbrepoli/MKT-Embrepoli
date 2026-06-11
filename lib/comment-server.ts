@@ -224,7 +224,11 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
   const responseHistory = comment.responseHistory?.length
     ? comment.responseHistory
     : (existing?.response_history ?? []);
-  const status = existing?.status === "respondido" || response ? "respondido" : (comment.status ?? "novo");
+  const status = existing?.status === "respondido" || response
+    ? "respondido"
+    : existing?.status === "ignorado"
+      ? "ignorado"
+      : (comment.status ?? "novo");
   const addedToBank = Boolean(existing?.added_to_bank || comment.addedToBank);
   const bankQuestionId = existing?.bank_question_id ?? comment.bankQuestionId ?? null;
   const classificationStatus = existing?.classification_status && existing.classification_status !== "pendente"

@@ -395,12 +395,20 @@ export async function askKnowledgeAi(question: string, bank: BankItem[], context
 // ── Classificação de comentários (pergunta vs. reação social) ───────────────
 
 const QUESTION_KEYWORDS = new Set([
-  "preco", "precos", "valor", "valores", "quanto", "custa", "custo", "custam",
+  "preco", "precos", "valor", "valores", "quanto", "cuanto", "custa", "custo", "custam",
   "comprar", "venda", "vende", "vendem", "onde", "frete", "entrega", "entregam",
   "disponivel", "disponibilidade", "tem", "possui", "possuem", "funciona", "funcionam",
   "instala", "instalacao", "garantia", "prazo", "parcela", "parcelamento", "desconto",
   "modelo", "compativel", "compativeis", "compatibilidade", "qual", "quais", "como",
   "voces", "aceita", "aceitam", "whatsapp", "contato", "loja", "pix", "cartao", "duvida"
+]);
+
+// Palavras tipicamente usadas em elogios/reações curtas (sem pedir nenhuma informação).
+const SOCIAL_KEYWORDS = new Set([
+  "show", "top", "massa", "lindo", "linda", "demais", "incrivel", "sensacional",
+  "maravilhoso", "maravilhosa", "perfeito", "perfeita", "excelente", "otimo", "otima",
+  "parabens", "obrigado", "obrigada", "valeu", "boa", "bom", "legal", "daora",
+  "sucesso", "fera", "monstro", "brabo", "brabissimo", "lenda", "campeao", "feras"
 ]);
 
 function classifyCommentHeuristic(text: string): "question" | "social" | "ambiguous" {
@@ -409,7 +417,11 @@ function classifyCommentHeuristic(text: string): "question" | "social" | "ambigu
   if (stripped.includes("?")) return "question";
   const tokens = tokenize(stripped);
   for (const t of tokens) if (QUESTION_KEYWORDS.has(t)) return "question";
-  if (tokens.size <= 4) return "social";
+  if (tokens.size <= 4) {
+    for (const t of tokens) if (SOCIAL_KEYWORDS.has(t)) return "social";
+    if (!tokens.size) return "social"; // só emojis/pontuação, sem palavras
+    return "ambiguous"; // poucas palavras mas nenhuma reconhecida — deixa a IA decidir
+  }
   return "ambiguous";
 }
 
