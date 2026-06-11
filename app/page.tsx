@@ -17493,7 +17493,7 @@ function ComentariosSection({
       const incoming: Comment = {
         id: crypto.randomUUID(),
         source,
-        externalId: item.commentId,
+        externalId: source === "youtube" ? `yt_comment:${item.commentId}` : item.commentId,
         importSignature: commentImportSignature({
           source,
           videoId: item.videoId,

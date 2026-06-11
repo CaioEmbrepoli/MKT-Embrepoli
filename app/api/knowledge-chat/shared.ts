@@ -285,6 +285,8 @@ REGRA MAIS IMPORTANTE: NUNCA copie ou repita o texto de "R:" literalmente, palav
 
 Não invente informações que não estejam nas referências.${videoContext}${priceSection}
 
+Sempre que a resposta orientar o cliente a entrar em contato (ex: "entre em contato conosco", "fale com a gente", etc.), inclua também o número de telefone/WhatsApp (41) 3045-4595 na própria resposta.
+
 Referências:
 ${bankText}
 
@@ -297,6 +299,19 @@ Se as referências não forem suficientes para responder com segurança, retorne
 {"found": false, "answer": null, "matchedIds": []}
 
 Retorne SOMENTE o JSON, sem texto adicional.`;
+}
+
+const CONTACT_PHONE = "(41) 3045-4595";
+const CONTACT_KEYWORDS = ["contato", "contate", "fale com", "fale conosco", "telefone", "whatsapp", "ligue", "ligar"];
+
+function ensureContactPhone(answer: string): string {
+  const normalized = answer.toLowerCase();
+  const mentionsContact = CONTACT_KEYWORDS.some((kw) => normalized.includes(kw));
+  const mentionsPhone = answer.includes("3045-4595");
+  if (mentionsContact && !mentionsPhone) {
+    return `${answer} Telefone/WhatsApp: ${CONTACT_PHONE}.`;
+  }
+  return answer;
 }
 
 async function callOllama(prompt: string): Promise<string> {
@@ -373,7 +388,7 @@ async function askAiWithBank(question: string, bank: BankItem[], context?: { vid
 
   return {
     found: true,
-    answer: (parsed.answer as string).trim(),
+    answer: ensureContactPhone((parsed.answer as string).trim()),
     matchedIds,
     confidence: 0.9,
     reason: "Resposta gerada por IA com base no Banco de Dúvidas.",
