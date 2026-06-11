@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { exchangeRefreshToken } from "@/lib/google-server";
-import { upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
+import { createServerQuestionsFromComments, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +61,7 @@ export async function GET() {
     channelTitle?: string;
     fetched?: number;
     upserted?: number;
+    questionsCreated?: number;
     error?: string;
   }> = [];
 
@@ -157,6 +158,7 @@ export async function GET() {
       }
 
       const upserted = await upsertServerComments(service, conn.organization_id as string, commentInputs);
+      const bankResult = await createServerQuestionsFromComments(service, conn.organization_id as string, upserted as Array<Record<string, any>>);
       results.push({
         connectionId: conn.id as string,
         organizationId: conn.organization_id as string,
@@ -164,7 +166,8 @@ export async function GET() {
         channelId,
         channelTitle,
         fetched: items.length,
-        upserted: upserted.length
+        upserted: upserted.length,
+        questionsCreated: bankResult.created
       });
     } catch (e) {
       results.push({

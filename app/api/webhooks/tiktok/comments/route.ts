@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
-import { commentServiceClient, getDefaultOrganizationId, recordCommentWebhookEvent, upsertServerComments } from "@/lib/comment-server";
+import { commentServiceClient, createServerQuestionsFromComments, getDefaultOrganizationId, recordCommentWebhookEvent, upsertServerComments } from "@/lib/comment-server";
 
 function safeText(value: unknown) {
   return String(value ?? "").trim();
@@ -50,7 +50,8 @@ export async function POST(request: Request) {
     });
 
     if (comment) {
-      await upsertServerComments(service, organizationId, [comment]);
+      const upserted = await upsertServerComments(service, organizationId, [comment]);
+      await createServerQuestionsFromComments(service, organizationId, upserted as Array<Record<string, any>>);
     }
 
     return NextResponse.json({

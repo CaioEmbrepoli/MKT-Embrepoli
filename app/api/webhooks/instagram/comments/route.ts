@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
-import { appendServerCommentExternalReply, commentServiceClient, deleteServerCommentByExternalId, getDefaultOrganizationId, recordCommentWebhookEvent, updateServerCommentResponseByExternalId, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
+import { appendServerCommentExternalReply, commentServiceClient, createServerQuestionsFromComments, deleteServerCommentByExternalId, getDefaultOrganizationId, recordCommentWebhookEvent, updateServerCommentResponseByExternalId, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
 import { fetchInstagramCommentById, fetchInstagramMediaById } from "@/lib/meta-server";
 
 type MetaConnection = {
@@ -368,7 +368,8 @@ export async function POST(request: Request) {
         }
 
         if (comment?.text) {
-          await upsertServerComments(service, connection.organization_id, [comment]);
+          const upserted = await upsertServerComments(service, connection.organization_id, [comment]);
+          const bankResult = await createServerQuestionsFromComments(service, connection.organization_id, upserted as Array<Record<string, any>>);
           processed += 1;
           await recordCommentWebhookEvent(service, {
             organizationId: connection.organization_id,
@@ -380,7 +381,8 @@ export async function POST(request: Request) {
             payload: {
               externalId: comment.externalId,
               videoId: comment.videoId,
-              hasText: Boolean(comment.text)
+              hasText: Boolean(comment.text),
+              questionsCreated: bankResult.created
             },
             processedAt: new Date().toISOString()
           });

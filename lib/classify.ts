@@ -76,8 +76,6 @@ export function classifyLocal(text: string): LocalClassification {
   if (!/[a-zA-ZÀ-ú]/.test(t)) return "normal";
 
   // Muito curto (emojis com texto, "Top!", "👏👏", "ótimo!")
-  if (t.length < 15) return "normal";
-
   // Menção ou hashtag isolado
   if (t.startsWith("@") || t.startsWith("#")) return "normal";
 
@@ -88,6 +86,8 @@ export function classifyLocal(text: string): LocalClassification {
 
   // Começa com palavra/expressão interrogativa
   if (INTERROGATIVE_STARTS.some((w) => norm.startsWith(w))) return "duvida";
+
+  if (t.length < 15) return "normal";
 
   // Reação genérica curta (até 4 palavras e bate na lista)
   const words = norm.split(" ");
@@ -101,3 +101,4 @@ export function classifyLocal(text: string): LocalClassification {
 
   return "incerto";
 }
+

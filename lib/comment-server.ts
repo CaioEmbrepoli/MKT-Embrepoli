@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { classifyLocal } from "./classify";
 
 export type CommentSource = "youtube" | "instagram" | "facebook" | "tiktok";
 
@@ -257,6 +258,118 @@ export async function upsertServerComments(service: SupabaseClient, organization
     .select("*");
   if (error) throw error;
   return data ?? [];
+}
+
+export async function createServerQuestionsFromComments(
+  service: SupabaseClient,
+  organizationId: string,
+  rows: Array<Record<string, any>>
+) {
+  const candidates = rows.filter((row) => row?.id && row?.text && row?.source);
+  if (!candidates.length) return { checked: 0, created: 0, relevant: 0, skippedExisting: 0 };
+
+  const relevant = candidates.filter((row) => classifyLocal(String(row.text || "")) === "duvida");
+  if (!relevant.length) return { checked: candidates.length, created: 0, relevant: 0, skippedExisting: 0 };
+
+  const externalIds = Array.from(new Set(relevant.map((row) => String(row.external_id || "")).filter(Boolean)));
+  const commentIds = Array.from(new Set(relevant.map((row) => String(row.id || "")).filter(Boolean)));
+  const existingExternalIds = new Set<string>();
+  const existingCommentIds = new Set<string>();
+
+  if (externalIds.length) {
+    const { data, error } = await service
+      .from("customer_questions")
+      .select("external_id")
+      .eq("organization_id", organizationId)
+      .in("external_id", externalIds);
+    if (error) throw error;
+    for (const row of data ?? []) {
+      if (row.external_id) existingExternalIds.add(String(row.external_id));
+    }
+  }
+
+  if (commentIds.length) {
+    const { data: sourceRows, error: sourceError } = await service
+      .from("customer_questions")
+      .select("source_comment_id")
+      .eq("organization_id", organizationId)
+      .in("source_comment_id", commentIds);
+    if (sourceError) throw sourceError;
+    for (const row of sourceRows ?? []) {
+      if (row.source_comment_id) existingCommentIds.add(String(row.source_comment_id));
+    }
+
+    const { data: fromRows, error: fromError } = await service
+      .from("customer_questions")
+      .select("from_comment_id")
+      .eq("organization_id", organizationId)
+      .in("from_comment_id", commentIds);
+    if (fromError) throw fromError;
+    for (const row of fromRows ?? []) {
+      if (row.from_comment_id) existingCommentIds.add(String(row.from_comment_id));
+    }
+  }
+
+  const now = new Date().toISOString();
+  const questionRows = relevant
+    .filter((row) => {
+      const externalId = String(row.external_id || "");
+      const commentId = String(row.id || "");
+      return !(externalId && existingExternalIds.has(externalId)) && !existingCommentIds.has(commentId);
+    })
+    .map((row) => ({
+      id: crypto.randomUUID(),
+      organization_id: organizationId,
+      source: row.source,
+      external_id: row.external_id ?? null,
+      video_id: row.video_id ?? null,
+      video_title: row.video_title ?? null,
+      question_text: row.text,
+      answer_text: row.response ?? null,
+      author_name: row.author_name ?? null,
+      likes: Number(row.likes ?? 0),
+      status: "aprovado",
+      category: "",
+      learning: "",
+      from_comment_id: row.id,
+      source_comment_id: row.id,
+      needs_review: true,
+      ai_confidence: 1,
+      ai_reason: "regra local: pergunta identificada automaticamente",
+      published_at: row.published_at ?? null,
+      created_at: now
+    }));
+
+  if (!questionRows.length) {
+    return { checked: candidates.length, created: 0, relevant: relevant.length, skippedExisting: relevant.length };
+  }
+
+  const { error: insertError } = await service
+    .from("customer_questions")
+    .upsert(questionRows, { onConflict: "organization_id,external_id", ignoreDuplicates: true });
+  if (insertError) throw insertError;
+
+  await Promise.all(questionRows.map((question) =>
+    service
+      .from("comments")
+      .update({
+        added_to_bank: true,
+        bank_question_id: question.id,
+        is_relevant: true,
+        classification_status: "relevante",
+        classification_reason: "regra local: pergunta identificada automaticamente",
+        processed_at: now
+      })
+      .eq("organization_id", organizationId)
+      .eq("id", question.source_comment_id)
+  ));
+
+  return {
+    checked: candidates.length,
+    created: questionRows.length,
+    relevant: relevant.length,
+    skippedExisting: relevant.length - questionRows.length
+  };
 }
 
 export async function deleteServerCommentByExternalId(
