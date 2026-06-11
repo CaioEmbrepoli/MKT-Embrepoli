@@ -394,6 +394,10 @@ function normalizeInstagramUsername(value: unknown): string {
   return sanitizeText(String(value ?? "")).replace(/^@+/, "").toLowerCase();
 }
 
+function normalizeInstagramCommentText(value: unknown): string {
+  return sanitizeText(String(value ?? "")).toLowerCase().replace(/\s+/g, " ").trim();
+}
+
 export async function fetchInstagramMedia(
   accessToken: string,
   instagramAccountId: string,
@@ -510,6 +514,54 @@ export async function fetchInstagramCommentById(accessToken: string, commentId: 
     likes: Number(data.like_count || 0),
     publishedAt: String(data.timestamp || media.timestamp || new Date().toISOString())
   } satisfies InstagramCommentItem;
+}
+
+export async function validateInstagramComment(accessToken: string, commentId: string) {
+  const cleanId = commentId.replace(/^instagram:/, "").trim();
+  if (!cleanId) throw new Error("Comentario Instagram sem ID externo.");
+  return graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
+    fields: "id,text,username,timestamp,like_count,media{id}"
+  });
+}
+
+export async function findInstagramCommentOnMedia(
+  accessToken: string,
+  mediaId: string,
+  target: { authorName?: string; text?: string },
+  options: { maxPages?: number } = {}
+) {
+  const cleanMediaId = mediaId.replace(/^instagram:/, "").trim();
+  if (!cleanMediaId) return null;
+
+  const targetAuthor = normalizeInstagramUsername(target.authorName);
+  const targetText = normalizeInstagramCommentText(target.text);
+  if (!targetText) return null;
+
+  const maxPages = options.maxPages ?? 3;
+  let pages = 0;
+  let nextUrl = `${igApiBase(accessToken)}/${cleanMediaId}/comments?fields=${encodeURIComponent("id,text,username,timestamp,like_count")}&limit=100`;
+
+  while (nextUrl && pages < maxPages) {
+    const data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
+    for (const item of data.data ?? []) {
+      const itemText = normalizeInstagramCommentText(item.text);
+      const itemAuthor = normalizeInstagramUsername(item.username);
+      const authorMatches = !targetAuthor || itemAuthor === targetAuthor;
+      if (authorMatches && itemText === targetText && item.id) {
+        return {
+          id: String(item.id),
+          text: sanitizeText(String(item.text || "")),
+          username: sanitizeText(String(item.username || "Instagram")),
+          timestamp: String(item.timestamp || ""),
+          likes: Number(item.like_count || 0)
+        };
+      }
+    }
+    nextUrl = data.paging?.next || "";
+    pages += 1;
+  }
+
+  return null;
 }
 
 export async function fetchInstagramMediaById(accessToken: string, mediaId: string): Promise<InstagramMediaItem | null> {
