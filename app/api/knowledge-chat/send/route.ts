@@ -76,7 +76,7 @@ export async function POST(request: Request) {
           }))
         );
         if (matchesError) throw new Error(`chat matches insert: ${matchesError.message}`);
-      } else {
+      } else if (!ai.found) {
         const { data: gap, error: gapError } = await ctx.service
           .from("knowledge_gaps")
           .insert({

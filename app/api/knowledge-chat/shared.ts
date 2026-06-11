@@ -212,14 +212,12 @@ function jaccardScore(a: Set<string>, b: Set<string>): number {
   return intersection / union;
 }
 
-export function searchBank(question: string, bank: BankItem[], context?: { videoTitle?: string }): AiResult {
-  if (!bank.length) {
-    return { found: false, answer: null, matchedIds: [], confidence: 0, reason: "Banco de dúvidas vazio.", provider: "local", model: "keyword-search" };
-  }
+type RankedBankItem = { item: BankItem; score: number; intersects: boolean };
 
+function rankBank(question: string, bank: BankItem[], context?: { videoTitle?: string }): RankedBankItem[] {
   const queryTokens = tokenize(question);
   const queryEntities = extractEntityTokens(`${question} ${context?.videoTitle ?? ""}`);
-  let best: { item: BankItem; score: number } | null = null;
+  const ranked: RankedBankItem[] = [];
 
   for (const item of bank) {
     const itemEntities = extractEntityTokens(`${item.questionText} ${item.videoTitle ?? ""}`);
@@ -237,8 +235,18 @@ export function searchBank(question: string, bank: BankItem[], context?: { video
       jaccardScore(queryTokens, vTokens) * 0.4
     );
     if (intersects) score = Math.min(1, score + 0.25);
-    if (!best || score > best.score) best = { item, score };
+    ranked.push({ item, score, intersects });
   }
+
+  return ranked.sort((a, b) => b.score - a.score);
+}
+
+export function searchBank(question: string, bank: BankItem[], context?: { videoTitle?: string }): AiResult {
+  if (!bank.length) {
+    return { found: false, answer: null, matchedIds: [], confidence: 0, reason: "Banco de dúvidas vazio.", provider: "local", model: "keyword-search" };
+  }
+
+  const best = rankBank(question, bank, context)[0];
 
   if (!best || best.score < CHAT_CONFIDENCE_THRESHOLD) {
     return { found: false, answer: null, matchedIds: [], confidence: best?.score ?? 0, reason: "Nenhuma correspondência encontrada.", provider: "local", model: "keyword-search" };
@@ -255,9 +263,103 @@ export function searchBank(question: string, bank: BankItem[], context?: { video
   };
 }
 
-// Mantido como alias para compatibilidade com send/route.ts
-export async function askKnowledgeAi(question: string, bank: BankItem[]): Promise<AiResult> {
-  return searchBank(question, bank);
+// ── IA generativa com banco como referência (RAG simples) ───────────────────
+
+const OLLAMA_HOST = process.env.OLLAMA_HOST?.replace(/\/$/, "");
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
+const MAX_BANK_CONTEXT = 8;
+
+function buildAiPrompt(question: string, candidates: BankItem[], context?: { videoTitle?: string }): string {
+  const bankText = candidates
+    .map((item, i) => `${i + 1}. [id:${item.id}] P: ${item.questionText}\nR: ${item.answerText}${item.videoTitle ? `\nVideo: ${item.videoTitle}` : ""}`)
+    .join("\n\n");
+
+  const videoContext = context?.videoTitle ? `\nO comentário foi feito no vídeo/post: "${context.videoTitle}"` : "";
+
+  return `Você é um atendente da Embrepoli, empresa de kits turbo e intercooler para motores diesel (veicular e agrícola).
+Use SOMENTE as referências abaixo (perguntas e respostas já aprovadas) para responder de forma natural, direta e assertiva à pergunta do cliente, adaptando o texto ao que foi perguntado.
+Não invente informações que não estejam nas referências.${videoContext}
+
+Referências:
+${bankText}
+
+Pergunta do cliente: ${question}
+
+Se as referências cobrirem a pergunta, retorne:
+{"found": true, "answer": "resposta adaptada em portugues", "matchedIds": ["id1","id2"]}
+
+Se as referências não forem suficientes para responder com segurança, retorne:
+{"found": false, "answer": null, "matchedIds": []}
+
+Retorne SOMENTE o JSON, sem texto adicional.`;
+}
+
+async function callOllama(prompt: string): Promise<string> {
+  const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false, format: "json" })
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Ollama respondeu ${res.status}: ${body}`);
+  }
+  const data = await res.json() as { response?: string };
+  return data.response?.trim() ?? "{}";
+}
+
+async function callGemini(prompt: string): Promise<string> {
+  if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY não configurada.");
+  const { GoogleGenerativeAI } = await import("@google/generative-ai");
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.0-flash",
+    generationConfig: { responseMimeType: "application/json" }
+  });
+  const result = await model.generateContent(prompt);
+  return result.response.text().trim();
+}
+
+async function askAiWithBank(question: string, bank: BankItem[], context?: { videoTitle?: string }): Promise<AiResult> {
+  const ranked = rankBank(question, bank, context);
+  const candidates = (ranked.length ? ranked.map((r) => r.item) : bank).slice(0, MAX_BANK_CONTEXT);
+
+  const prompt = buildAiPrompt(question, candidates, context);
+  const provider = OLLAMA_HOST ? "ollama" : "gemini";
+  const model = OLLAMA_HOST ? OLLAMA_MODEL : "gemini-2.0-flash";
+
+  const text = OLLAMA_HOST ? await callOllama(prompt) : await callGemini(prompt);
+  const parsed = JSON.parse(text) as { found?: boolean; answer?: string | null; matchedIds?: unknown };
+
+  const found = parsed.found === true && typeof parsed.answer === "string" && parsed.answer.trim().length > 0;
+  const candidateIds = new Set(candidates.map((c) => c.id));
+  const matchedIds = Array.isArray(parsed.matchedIds)
+    ? parsed.matchedIds.filter((x): x is string => typeof x === "string" && candidateIds.has(x))
+    : [];
+
+  if (!found) {
+    return { found: false, answer: null, matchedIds: [], confidence: 0, reason: "IA não encontrou correspondência segura no banco.", provider, model };
+  }
+
+  return {
+    found: true,
+    answer: (parsed.answer as string).trim(),
+    matchedIds,
+    confidence: 0.9,
+    reason: "Resposta gerada por IA com base no Banco de Dúvidas.",
+    provider,
+    model
+  };
+}
+
+export async function askKnowledgeAi(question: string, bank: BankItem[], context?: { videoTitle?: string }): Promise<AiResult> {
+  if (!bank.length) return searchBank(question, bank, context);
+  try {
+    return await askAiWithBank(question, bank, context);
+  } catch (err) {
+    console.error("[knowledge-chat] askAiWithBank falhou, usando busca por palavras-chave", err);
+    return searchBank(question, bank, context);
+  }
 }
 
 export function mapSession(row: any) {

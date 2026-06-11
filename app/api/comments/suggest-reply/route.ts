@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authContext, loadAnswerBank, searchBank } from "@/app/api/knowledge-chat/shared";
+import { authContext, askKnowledgeAi, loadAnswerBank } from "@/app/api/knowledge-chat/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     }
 
     const bank = await loadAnswerBank(ctx);
-    const result = searchBank(String(comment.text ?? ""), bank, { videoTitle: comment.video_title ?? undefined });
+    const result = await askKnowledgeAi(String(comment.text ?? ""), bank, { videoTitle: comment.video_title ?? undefined });
     if (!result.found || !result.answer) {
       return NextResponse.json({
         found: false,
