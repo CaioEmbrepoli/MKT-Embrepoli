@@ -513,6 +513,16 @@ export type CommentExternalReply = {
   isOwnReply?: boolean;
 };
 
+export type CommentResponseHistoryItem = {
+  id: string;
+  externalReplyId?: string;
+  text: string;
+  sentAt: string;
+  editedAt?: string;
+  source: "youtube" | "instagram" | "facebook" | "tiktok";
+  kind: "primary" | "additional";
+};
+
 export type Comment = {
   id: string;
   source: "youtube" | "instagram" | "facebook" | "tiktok";
@@ -529,6 +539,8 @@ export type Comment = {
   likedByOrg?: boolean;
   externalReplies?: CommentExternalReply[];
   response?: string;
+  responseExternalId?: string;
+  responseHistory?: CommentResponseHistoryItem[];
   status: CommentStatus;
   addedToBank: boolean;
   bankQuestionId?: string;

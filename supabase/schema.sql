@@ -1527,6 +1527,8 @@ create table if not exists public.comments (
   likes integer not null default 0,
   external_replies jsonb not null default '[]'::jsonb,
   response text,
+  response_external_id text,
+  response_history jsonb not null default '[]'::jsonb,
   status text not null default 'novo',
   added_to_bank boolean not null default false,
   bank_question_id text references public.customer_questions(id) on delete set null,
@@ -1547,6 +1549,8 @@ alter table public.comments add column if not exists media_thumbnail_url text;
 alter table public.comments add column if not exists media_url text;
 alter table public.comments add column if not exists media_permalink text;
 alter table public.comments add column if not exists external_replies jsonb not null default '[]'::jsonb;
+alter table public.comments add column if not exists response_external_id text;
+alter table public.comments add column if not exists response_history jsonb not null default '[]'::jsonb;
 alter table public.comments add column if not exists retention_until timestamptz;
 alter table public.comments add column if not exists processed_at timestamptz;
 alter table public.comments add column if not exists is_relevant boolean;

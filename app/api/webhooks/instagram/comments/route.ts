@@ -259,7 +259,8 @@ export async function POST(request: Request) {
               connection.organization_id,
               "instagram",
               parentExternalId,
-              event.text
+              event.text,
+              replyExternalId
             );
           } else {
             updated = await appendServerCommentExternalReply(

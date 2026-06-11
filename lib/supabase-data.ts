@@ -1498,6 +1498,8 @@ function mapYtComment(row: any): Comment {
     likedByOrg: row.liked_by_org ?? false,
     externalReplies: Array.isArray(row.external_replies) ? row.external_replies : [],
     response: row.response ?? undefined,
+    responseExternalId: row.response_external_id ?? undefined,
+    responseHistory: Array.isArray(row.response_history) ? row.response_history : [],
     status: row.status ?? "novo",
     addedToBank: row.added_to_bank ?? false,
     bankQuestionId: row.bank_question_id ?? undefined,
@@ -1546,6 +1548,12 @@ function preserveCommentClassification(existing: any | undefined, incoming: Comm
   return incoming.classificationStatus ?? current ?? null;
 }
 
+function mergeResponseHistory(existing: any | undefined, incoming: Comment) {
+  if (Array.isArray(incoming.responseHistory) && incoming.responseHistory.length) return incoming.responseHistory;
+  if (Array.isArray(existing?.response_history)) return existing.response_history;
+  return [];
+}
+
 function mapCommentForUpsert(comment: Comment, organizationId: string, existing?: any) {
   const createdAt = existing?.created_at ?? comment.createdAt ?? new Date().toISOString();
   const addedToBank = Boolean(existing?.added_to_bank || comment.addedToBank);
@@ -1569,6 +1577,8 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
     liked_by_org: comment.likedByOrg ?? existing?.liked_by_org ?? false,
     external_replies: comment.externalReplies ?? existing?.external_replies ?? [],
     response: comment.response ?? existing?.response ?? null,
+    response_external_id: comment.responseExternalId ?? existing?.response_external_id ?? null,
+    response_history: mergeResponseHistory(existing, comment),
     status: preserveCommentStatus(existing, comment),
     added_to_bank: addedToBank,
     bank_question_id: bankQuestionId,

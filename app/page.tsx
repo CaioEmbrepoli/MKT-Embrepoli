@@ -909,6 +909,8 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
     likes: incoming.likes,
     externalReplies: Array.from(externalRepliesById.values()),
     response: incoming.response ?? existing.response,
+    responseExternalId: existing.responseExternalId ?? incoming.responseExternalId,
+    responseHistory: existing.responseHistory ?? incoming.responseHistory,
     status: existing.status === "respondido" && incoming.status !== "respondido" ? existing.status : incoming.status,
     addedToBank,
     bankQuestionId: existing.bankQuestionId ?? incoming.bankQuestionId,
@@ -17277,6 +17279,8 @@ function ComentariosSection({
   const [commentImportOpen, setCommentImportOpen] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [responses, setResponses] = useState<Record<string, string>>({});
+  const [additionalResponses, setAdditionalResponses] = useState<Record<string, string>>({});
+  const [additionalOpen, setAdditionalOpen] = useState<Record<string, boolean>>({});
   const [replyError, setReplyError] = useState<Record<string, string>>({});
   const [likeError, setLikeError] = useState<Record<string, string>>({});
   const [suggestionState, setSuggestionState] = useState<Record<string, "loading" | "none" | "error">>({});
@@ -17325,6 +17329,13 @@ function ComentariosSection({
   }, [comments, statusFilter, channelFilter, search, dateRange, sortOrder]);
 
   const selected = filtered.find((c) => c.id === selectedId) ?? filtered[0] ?? null;
+  const selectedAdditionalResponses = (selected?.responseHistory ?? []).filter((item) => item.kind === "additional");
+  const selectedCanEditPrimary = Boolean(selected?.status === "respondido" && selected.response && selected.source === "youtube");
+  const selectedEditBlockedReason = selected?.status === "respondido" && selected.response && selected.source !== "youtube"
+    ? selected.source === "instagram"
+      ? "O Instagram não permite editar respostas já publicadas pela integração. Use outra mensagem."
+      : "Esta plataforma não permite editar respostas pelo app."
+    : "";
 
   const metricByVideoId = useMemo(() => {
     const map = new Map<string, PostMetric>();
@@ -17643,26 +17654,51 @@ function ComentariosSection({
   }
 
   async function handleSaveResponse(comment: Comment) {
-    const response = responses[comment.id] ?? "";
+    const response = responses[comment.id] ?? comment.response ?? "";
+    const isEditing = comment.status === "respondido" && Boolean(comment.response);
     setSaving(comment.id);
     setReplyError((prev) => { const next = { ...prev }; delete next[comment.id]; return next; });
     try {
       const res = await fetch("/api/comments/reply", {
         method: "POST",
         headers: await commentAuthHeaders(),
-        body: JSON.stringify({ commentId: comment.id, response })
+        body: JSON.stringify({ commentId: comment.id, response, mode: isEditing ? "edit" : "create", kind: "primary" })
       });
-      const data = await res.json().catch(() => ({})) as { error?: string };
+      const data = await res.json().catch(() => ({})) as { error?: string; externalReplyId?: string; comment?: any };
       if (!res.ok) throw new Error(data.error || "Erro ao responder comentário no canal.");
-      const updated = comments.map((c) => c.id === comment.id ? { ...c, response, status: "respondido" as CommentStatus } : c);
+      const responseHistory = Array.isArray(data.comment?.response_history) ? data.comment.response_history : comment.responseHistory ?? [];
+      const updated = comments.map((c) => c.id === comment.id ? {
+        ...c,
+        response,
+        responseExternalId: data.comment?.response_external_id ?? data.externalReplyId ?? c.responseExternalId,
+        responseHistory,
+        status: "respondido" as CommentStatus
+      } : c);
       setComments(updated);
     } catch (err) {
       setReplyError((prev) => ({ ...prev, [comment.id]: err instanceof Error ? err.message : "Erro ao enviar resposta." }));
-      const updated = comments.map((c) => c.id === comment.id ? { ...c, response } : c);
-      setComments(updated);
-      if (supabase) {
-        await saveComment(supabase, { ...comment, response }).catch(() => {});
-      }
+    }
+    setSaving(null);
+  }
+
+  async function handleSendAdditionalResponse(comment: Comment) {
+    const response = additionalResponses[comment.id] ?? "";
+    setSaving(`${comment.id}-additional`);
+    setReplyError((prev) => { const next = { ...prev }; delete next[comment.id]; return next; });
+    try {
+      const res = await fetch("/api/comments/reply", {
+        method: "POST",
+        headers: await commentAuthHeaders(),
+        body: JSON.stringify({ commentId: comment.id, response, mode: "create", kind: "additional" })
+      });
+      const data = await res.json().catch(() => ({})) as { error?: string; comment?: any };
+      if (!res.ok) throw new Error(data.error || "Erro ao enviar outra mensagem.");
+      const responseHistory = Array.isArray(data.comment?.response_history) ? data.comment.response_history : comment.responseHistory ?? [];
+      setComments(comments.map((c) => c.id === comment.id ? { ...c, responseHistory, status: "respondido" as CommentStatus } : c));
+      setAdditionalResponses((prev) => ({ ...prev, [comment.id]: "" }));
+      setAdditionalOpen((prev) => ({ ...prev, [comment.id]: false }));
+    } catch (err) {
+      setReplyError((prev) => ({ ...prev, [comment.id]: err instanceof Error ? err.message : "Erro ao enviar outra mensagem." }));
     }
     setSaving(null);
   }
@@ -18072,12 +18108,6 @@ function ComentariosSection({
                 )}
               </div>
 
-              {selected.response && (
-                <div className="mb-4 rounded-xl bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
-                  <span className="font-bold">Resposta enviada: </span>{selected.response}
-                </div>
-              )}
-
               {(selected.externalReplies ?? []).filter((reply) => !reply.isOwnReply).length > 0 && (
                 <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
                   <p className="mb-3 text-xs font-black uppercase text-slate-400">Outras respostas</p>
@@ -18097,14 +18127,23 @@ function ComentariosSection({
 
               {/* Reply box */}
               <div className="mb-4">
-                <label className="mb-1.5 block text-xs font-black uppercase text-slate-400">Sua resposta</label>
+                <label className={`mb-1.5 block text-xs font-black uppercase ${selected.response ? "text-emerald-700" : "text-slate-400"}`}>
+                  {selected.response ? "Resposta enviada" : "Sua resposta"}
+                </label>
                 <textarea
                   value={responses[selected.id] ?? selected.response ?? ""}
                   onChange={(e) => setResponses((prev) => ({ ...prev, [selected.id]: e.target.value }))}
                   placeholder="Escreva sua resposta..."
                   rows={4}
-                  className="w-full resize-none rounded-2xl border border-slate-200 px-4 py-3 text-sm outline-none focus:border-blue-500"
+                  className={`w-full resize-none rounded-2xl border px-4 py-3 text-sm outline-none ${
+                    selected.response
+                      ? "border-emerald-200 bg-emerald-50 text-emerald-950 focus:border-emerald-500"
+                      : "border-slate-200 bg-white focus:border-blue-500"
+                  }`}
                 />
+                {selectedEditBlockedReason && (
+                  <p className="mt-2 text-xs font-semibold text-amber-600">{selectedEditBlockedReason}</p>
+                )}
               </div>
 
               {/* Actions */}
@@ -18114,11 +18153,57 @@ function ComentariosSection({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => { pressButton(`${selected.id}-save`); handleSaveResponse(selected); }}
-                  disabled={saving === selected.id}
-                  className={`rounded-xl px-4 py-2 text-sm font-black text-white transition-all duration-150 disabled:opacity-50 ${pressedBtn[`${selected.id}-save`] ? "scale-95 bg-blue-900" : "bg-blue-700 hover:bg-blue-800"}`}
+                  disabled={saving === selected.id || Boolean(selected.response && !selectedCanEditPrimary)}
+                  title={selected.response && !selectedCanEditPrimary ? selectedEditBlockedReason : undefined}
+                  className={`rounded-xl px-4 py-2 text-sm font-black text-white transition-all duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${pressedBtn[`${selected.id}-save`] ? "scale-95 bg-blue-900" : selected.response ? "bg-emerald-700 hover:bg-emerald-800" : "bg-blue-700 hover:bg-blue-800"}`}
                 >
-                  {saving === selected.id ? "Enviando..." : "Enviar resposta"}
+                  {saving === selected.id ? "Enviando..." : selected.response ? "Editar resposta" : "Enviar resposta"}
                 </button>
+                {selected.status === "respondido" && (
+                  <button
+                    type="button"
+                    onClick={() => setAdditionalOpen((prev) => ({ ...prev, [selected.id]: !prev[selected.id] }))}
+                    className="rounded-xl bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100"
+                  >
+                    Enviar outra mensagem
+                  </button>
+                )}
+                {additionalOpen[selected.id] && (
+                  <div className="mt-3 w-full rounded-2xl border border-blue-100 bg-blue-50/50 p-3">
+                    <label className="mb-1.5 block text-xs font-black uppercase text-blue-700">Outra mensagem</label>
+                    <textarea
+                      value={additionalResponses[selected.id] ?? ""}
+                      onChange={(e) => setAdditionalResponses((prev) => ({ ...prev, [selected.id]: e.target.value }))}
+                      placeholder="Escreva uma nova mensagem para enviar no canal..."
+                      rows={3}
+                      className="w-full resize-none rounded-2xl border border-blue-100 bg-white px-4 py-3 text-sm outline-none focus:border-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => { pressButton(`${selected.id}-additional`); handleSendAdditionalResponse(selected); }}
+                      disabled={saving === `${selected.id}-additional`}
+                      className={`mt-2 rounded-xl px-4 py-2 text-sm font-black text-white transition-all duration-150 disabled:opacity-50 ${pressedBtn[`${selected.id}-additional`] ? "scale-95 bg-blue-900" : "bg-blue-700 hover:bg-blue-800"}`}
+                    >
+                      {saving === `${selected.id}-additional` ? "Enviando..." : "Enviar mensagem"}
+                    </button>
+                  </div>
+                )}
+                {selectedAdditionalResponses.length > 0 && (
+                  <div className="mt-3 w-full rounded-2xl border border-slate-100 bg-white p-4">
+                    <p className="mb-3 text-xs font-black uppercase text-slate-400">Mensagens adicionais enviadas</p>
+                    <div className="flex flex-col gap-2">
+                      {selectedAdditionalResponses.map((item) => (
+                        <div key={item.id} className="rounded-xl bg-slate-50 p-3">
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <span className="text-xs font-black text-slate-500">Enviada pela Embrepoli</span>
+                            <span className="text-[11px] font-bold text-slate-400">{formatCommentTimestamp(item.sentAt)}</span>
+                          </div>
+                          <p className="text-sm text-slate-700">{item.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <button
                   onClick={() => { pressButton(`${selected.id}-ignore`); handleStatusChange(selected, "ignorado"); }}
                   className={`rounded-xl px-4 py-2 text-sm font-bold transition-all duration-150 ${pressedBtn[`${selected.id}-ignore`] ? "scale-95 bg-slate-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
