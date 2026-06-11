@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     let activeGap = null;
 
     try {
-      const ai = await askKnowledgeAi(cleanQuestion, bank);
+      const ai = await askKnowledgeAi(cleanQuestion, bank, undefined, ctx);
       const answerText = ai.found && ai.answer
         ? ai.answer
         : "Ainda não sei responder isso com segurança pelo Banco de Dúvidas. Se você souber a resposta correta, me envie para alimentar o banco.";

@@ -61,6 +61,7 @@ import {
   X,
   Youtube,
   Wand2,
+  RefreshCw,
   Phone,
   Target,
   Pencil,
@@ -17365,7 +17366,7 @@ function ComentariosSection({
   }
 
   async function handleSuggestReply(comment: Comment, options: { force?: boolean } = {}) {
-    if (comment.status !== "novo") return;
+    if (!options.force && comment.status !== "novo") return;
     if (!options.force && comment.suggestedReply) return;
     if (!options.force && suggestionAttemptedRef.current.has(comment.id)) return;
     suggestionAttemptedRef.current.add(comment.id);
@@ -17374,7 +17375,7 @@ function ComentariosSection({
       const res = await fetch("/api/comments/suggest-reply", {
         method: "POST",
         headers: await commentAuthHeaders(),
-        body: JSON.stringify({ commentId: comment.id })
+        body: JSON.stringify({ commentId: comment.id, force: options.force ?? false })
       });
       const data = await res.json().catch(() => ({})) as {
         found?: boolean;
@@ -18078,13 +18079,28 @@ function ComentariosSection({
                 {selected.suggestedReply ? (
                   <>
                     <p className="text-sm font-semibold text-slate-700">{selected.suggestedReply}</p>
-                    <button
-                      type="button"
-                      onClick={() => setResponses((prev) => ({ ...prev, [selected.id]: selected.suggestedReply ?? "" }))}
-                      className="mt-3 rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
-                    >
-                      Usar sugestão
-                    </button>
+                    <div className="mt-3 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setResponses((prev) => ({ ...prev, [selected.id]: selected.suggestedReply ?? "" }))}
+                        className="rounded-xl bg-blue-700 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-800"
+                      >
+                        Usar sugestão
+                      </button>
+                      <button
+                        type="button"
+                        title="Gerar nova sugestão"
+                        disabled={suggestionState[selected.id] === "loading"}
+                        onClick={() => handleSuggestReply(selected, { force: true })}
+                        className="rounded-2xl bg-blue-100 p-2 text-blue-700 hover:bg-blue-200 disabled:opacity-50"
+                      >
+                        {suggestionState[selected.id] === "loading" ? (
+                          <span className="block h-4 w-4 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+                        ) : (
+                          <RefreshCw size={16} />
+                        )}
+                      </button>
+                    </div>
                   </>
                 ) : suggestionState[selected.id] === "loading" ? (
                   <p className="text-sm font-semibold text-slate-500">Analisando Banco de Dúvidas...</p>

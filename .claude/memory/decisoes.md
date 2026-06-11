@@ -1,5 +1,49 @@
 # Decisões de Arquitetura e UX
 
+## 2026-06-11 — Botão "Repensar sugestão" + integração Tray (preço em tempo real, opcional)
+
+**Botão "Repensar sugestão" (Comentários):** `app/page.tsx` (~linha 18078-18100), bloco de
+sugestão de resposta — quando `selected.suggestedReply` existe, agora há um botão com ícone
+`RefreshCw` (ao lado de "Usar sugestão") que chama `handleSuggestReply(selected, { force: true })`.
+- `handleSuggestReply` (linha ~17368) agora aceita `force` mesmo quando `comment.status !== "novo"`
+  e envia `{ commentId, force }` para `/api/comments/suggest-reply`.
+- `app/api/comments/suggest-reply/route.ts` aceita `body.force` — quando `true`, ignora
+  `comment.suggested_reply` já salvo e gera uma nova sugestão via `suggestReplyForComment`,
+  sobrescrevendo o valor no Supabase.
+
+**Integração Tray Commerce (preço em tempo real no RAG) — OPCIONAL/CONFIGURÁVEL:**
+Caio ainda não confirmou se tem `consumer_key`/`consumer_secret`/`code` da Tray Partners. Por isso
+o código foi implementado seguindo o mesmo padrão do Ollama: se não configurado, comportamento
+atual é preservado (sem erros).
+- `lib/tray-api.ts` (novo) — `getTrayToken(service, organizationId)` lê a tabela
+  `tray_integration` (retorna `null` se não houver linha = não configurado) e renova o
+  `access_token` automaticamente se faltar <20min para expirar; `searchTrayProduct(apiAddress,
+  accessToken, query)` busca `GET {api_address}/products?...&search=...` (parâmetro `search` e
+  formato de resposta **ainda não validados com credenciais reais** — ajustar quando o Caio
+  conseguir acesso).
+- `supabase/tray-integration-migration.sql` (novo, **NÃO aplicada ainda**) — cria tabela
+  `tray_integration` (organization_id, api_address, access_token, refresh_token, expires_at) com
+  RLS por organização (admin/gestor).
+- `app/api/tray/setup/route.ts` (novo) — rota de setup único, `POST {apiAddress, consumerKey,
+  consumerSecret, code}` (admin/gestor), troca por `access_token`/`refresh_token` via
+  `POST {apiAddress}/auth` e salva (upsert) em `tray_integration`. Chamar manualmente uma vez
+  quando o Caio tiver as credenciais.
+- `app/api/knowledge-chat/shared.ts`: `askAiWithBank`/`askKnowledgeAi`/`suggestReplyForComment`
+  agora aceitam um `ctx?: AuthContext` opcional (último parâmetro). Quando presente e a pergunta
+  contém palavras de preço (`PRICE_INTENT_KEYWORDS`: preco/valor/quanto/custa...),
+  `buildTrayPriceContext` chama `getTrayToken` + `searchTrayProduct` (usando
+  `extractEntityTokens` da pergunta) e injeta `"Preço atualizado da loja: ..."` no prompt da IA,
+  instruindo a priorizar esse valor sobre o banco. Sem `tray_integration` configurada, retorna
+  `undefined` e o prompt fica igual a antes.
+- Callers atualizados para passar `ctx`: `app/api/comments/suggest-reply/route.ts` e
+  `app/api/knowledge-chat/send/route.ts`.
+
+**Pendente:** aplicar a migration `tray-integration-migration.sql` (pedir confirmação antes —
+mudança de schema em produção) e validar `searchTrayProduct` com credenciais reais quando o Caio
+conseguir o `consumer_key`/`consumer_secret`/`code` na Tray.
+
+---
+
 ## 2026-06-08 — Migração do OAuth do Instagram para "Instagram Business Login"
 
 **Problema:** Publicações agendadas do Instagram falhavam com "Token has been expired or revoked."

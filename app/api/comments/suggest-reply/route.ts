@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authContext, askKnowledgeAi, loadAnswerBank } from "@/app/api/knowledge-chat/shared";
+import { authContext, suggestReplyForComment, loadAnswerBank } from "@/app/api/knowledge-chat/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -7,6 +7,7 @@ export async function POST(request: Request) {
   try {
     const body = await request.json().catch(() => ({}));
     const commentId = String(body.commentId || "").trim();
+    const force = Boolean(body.force);
     if (!commentId) {
       return NextResponse.json({ error: "commentId obrigatorio." }, { status: 400 });
     }
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
     if (!comment) return NextResponse.json({ error: "Comentario nao encontrado." }, { status: 404 });
 
     const existingSuggestion = String(comment.suggested_reply ?? "").trim();
-    if (existingSuggestion) {
+    if (!force && existingSuggestion) {
       return NextResponse.json({
         found: true,
         suggestion: existingSuggestion,
@@ -34,7 +35,7 @@ export async function POST(request: Request) {
     }
 
     const bank = await loadAnswerBank(ctx);
-    const result = await askKnowledgeAi(String(comment.text ?? ""), bank, { videoTitle: comment.video_title ?? undefined });
+    const result = await suggestReplyForComment(String(comment.text ?? ""), bank, { videoTitle: comment.video_title ?? undefined }, ctx);
     if (!result.found || !result.answer) {
       return NextResponse.json({
         found: false,

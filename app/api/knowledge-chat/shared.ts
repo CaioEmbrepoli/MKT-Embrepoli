@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { getTrayToken, searchTrayProduct } from "@/lib/tray-api";
 
 export const CHAT_CONFIDENCE_THRESHOLD = 0.30; // threshold para busca por palavras-chave
 
@@ -269,19 +270,20 @@ const OLLAMA_HOST = process.env.OLLAMA_HOST?.replace(/\/$/, "");
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
 const MAX_BANK_CONTEXT = 8;
 
-function buildAiPrompt(question: string, candidates: BankItem[], context?: { videoTitle?: string }): string {
+function buildAiPrompt(question: string, candidates: BankItem[], context?: { videoTitle?: string }, priceContext?: string): string {
   const bankText = candidates
     .map((item, i) => `${i + 1}. [id:${item.id}] P: ${item.questionText}\nR: ${item.answerText}${item.videoTitle ? `\nVideo: ${item.videoTitle}` : ""}`)
     .join("\n\n");
 
   const videoContext = context?.videoTitle ? `\nO comentário foi feito no vídeo/post: "${context.videoTitle}"` : "";
+  const priceSection = priceContext ? `\n\nPreço atualizado da loja (priorize esta informação sobre as referências em caso de conflito):\n${priceContext}` : "";
 
   return `Você é um atendente da Embrepoli, empresa de kits turbo e intercooler para motores diesel (veicular e agrícola).
 Use SOMENTE as referências abaixo (perguntas e respostas já aprovadas) como FONTE DE INFORMAÇÃO para responder à pergunta do cliente.
 
 REGRA MAIS IMPORTANTE: NUNCA copie ou repita o texto de "R:" literalmente, palavra por palavra. As referências foram escritas para OUTRAS perguntas, com outras palavras. Você DEVE reescrever a informação com suas próprias palavras, em uma frase nova, curta e natural, como se estivesse respondendo a pergunta específica do cliente pela primeira vez.
 
-Não invente informações que não estejam nas referências.${videoContext}
+Não invente informações que não estejam nas referências.${videoContext}${priceSection}
 
 Referências:
 ${bankText}
@@ -323,11 +325,36 @@ async function callGemini(prompt: string): Promise<string> {
   return result.response.text().trim();
 }
 
-async function askAiWithBank(question: string, bank: BankItem[], context?: { videoTitle?: string }): Promise<AiResult> {
+const PRICE_INTENT_KEYWORDS = new Set(["preco", "precos", "valor", "valores", "quanto", "custa", "custo", "custam"]);
+
+function hasPriceIntent(text: string): boolean {
+  const tokens = tokenize(text);
+  for (const t of tokens) if (PRICE_INTENT_KEYWORDS.has(t)) return true;
+  return false;
+}
+
+async function buildTrayPriceContext(question: string, ctx: AuthContext, context?: { videoTitle?: string }): Promise<string | undefined> {
+  if (!hasPriceIntent(question)) return undefined;
+
+  const tray = await getTrayToken(ctx.service, ctx.organizationId);
+  if (!tray) return undefined;
+
+  const entities = extractEntityTokens(`${question} ${context?.videoTitle ?? ""}`);
+  if (!entities.size) return undefined;
+
+  const product = await searchTrayProduct(tray.apiAddress, tray.accessToken, Array.from(entities).join(" "));
+  if (!product) return undefined;
+
+  const price = product.promotionalPrice ?? product.price;
+  return `${product.name} — R$ ${price.toFixed(2)}${product.available ? "" : " (sem estoque no momento)"}`;
+}
+
+async function askAiWithBank(question: string, bank: BankItem[], context?: { videoTitle?: string }, ctx?: AuthContext): Promise<AiResult> {
   const ranked = rankBank(question, bank, context);
   const candidates = (ranked.length ? ranked.map((r) => r.item) : bank).slice(0, MAX_BANK_CONTEXT);
 
-  const prompt = buildAiPrompt(question, candidates, context);
+  const priceContext = ctx ? await buildTrayPriceContext(question, ctx, context).catch(() => undefined) : undefined;
+  const prompt = buildAiPrompt(question, candidates, context, priceContext);
   const provider = OLLAMA_HOST ? "ollama" : "gemini";
   const model = OLLAMA_HOST ? OLLAMA_MODEL : "gemini-2.0-flash";
 
@@ -355,14 +382,104 @@ async function askAiWithBank(question: string, bank: BankItem[], context?: { vid
   };
 }
 
-export async function askKnowledgeAi(question: string, bank: BankItem[], context?: { videoTitle?: string }): Promise<AiResult> {
+export async function askKnowledgeAi(question: string, bank: BankItem[], context?: { videoTitle?: string }, ctx?: AuthContext): Promise<AiResult> {
   if (!bank.length) return searchBank(question, bank, context);
   try {
-    return await askAiWithBank(question, bank, context);
+    return await askAiWithBank(question, bank, context, ctx);
   } catch (err) {
     console.error("[knowledge-chat] askAiWithBank falhou, usando busca por palavras-chave", err);
     return searchBank(question, bank, context);
   }
+}
+
+// ── Classificação de comentários (pergunta vs. reação social) ───────────────
+
+const QUESTION_KEYWORDS = new Set([
+  "preco", "precos", "valor", "valores", "quanto", "custa", "custo", "custam",
+  "comprar", "venda", "vende", "vendem", "onde", "frete", "entrega", "entregam",
+  "disponivel", "disponibilidade", "tem", "possui", "possuem", "funciona", "funcionam",
+  "instala", "instalacao", "garantia", "prazo", "parcela", "parcelamento", "desconto",
+  "modelo", "compativel", "compativeis", "compatibilidade", "qual", "quais", "como",
+  "voces", "aceita", "aceitam", "whatsapp", "contato", "loja", "pix", "cartao", "duvida"
+]);
+
+function classifyCommentHeuristic(text: string): "question" | "social" | "ambiguous" {
+  const stripped = text.replace(/\p{Extended_Pictographic}/gu, "").trim();
+  if (!stripped) return "social";
+  if (stripped.includes("?")) return "question";
+  const tokens = tokenize(stripped);
+  for (const t of tokens) if (QUESTION_KEYWORDS.has(t)) return "question";
+  if (tokens.size <= 4) return "social";
+  return "ambiguous";
+}
+
+async function classifyCommentWithAi(text: string): Promise<"question" | "social"> {
+  const prompt = `Classifique o comentário de um cliente abaixo, feito num post de rede social da Embrepoli (empresa de kits turbo/intercooler para motores diesel).
+
+Comentário: "${text}"
+
+Retorne "pergunta" se o comentário pede alguma informação (preço, disponibilidade, dúvida técnica, prazo, etc.).
+Retorne "social" se o comentário é apenas uma reação, elogio, emoji ou comentário social, sem pedir nada.
+
+Retorne SOMENTE o JSON: {"type": "pergunta"} ou {"type": "social"}`;
+
+  try {
+    const raw = OLLAMA_HOST ? await callOllama(prompt) : await callGemini(prompt);
+    const parsed = JSON.parse(raw) as { type?: string };
+    return parsed.type === "pergunta" ? "question" : "social";
+  } catch {
+    return "social"; // fallback seguro: evita puxar o banco de dúvidas para algo que pode não ser pergunta
+  }
+}
+
+async function askSocialReply(text: string, context?: { videoTitle?: string }): Promise<AiResult> {
+  const videoContext = context?.videoTitle ? `\nO comentário foi feito no post: "${context.videoTitle}"` : "";
+  const prompt = `Você é o atendente de redes sociais da Embrepoli, empresa de kits turbo e intercooler para motores diesel (veicular e agrícola).
+Um cliente deixou o comentário abaixo (elogio, reação ou comentário social, sem pedir informação).${videoContext}
+
+Comentário: "${text}"
+
+Escreva uma resposta curta, simpática e natural para esse comentário (1 frase, pode usar emoji com moderação). NÃO mencione preços, produtos específicos ou informações técnicas — apenas reaja/agradeça no mesmo tom do comentário.
+
+Retorne SOMENTE o JSON: {"answer": "sua resposta aqui"}`;
+
+  const provider = OLLAMA_HOST ? "ollama" : "gemini";
+  const model = OLLAMA_HOST ? OLLAMA_MODEL : "gemini-2.0-flash";
+  const raw = OLLAMA_HOST ? await callOllama(prompt) : await callGemini(prompt);
+  const parsed = JSON.parse(raw) as { answer?: string };
+  const answer = (parsed.answer ?? "").trim();
+  if (!answer) throw new Error("IA não retornou resposta social.");
+
+  return {
+    found: true,
+    answer,
+    matchedIds: [],
+    confidence: 0.95,
+    reason: "Resposta social gerada por IA (comentário sem pedido de informação).",
+    provider,
+    model
+  };
+}
+
+export async function suggestReplyForComment(text: string, bank: BankItem[], context?: { videoTitle?: string }, ctx?: AuthContext): Promise<AiResult> {
+  const cleanText = text.trim();
+  if (!cleanText) {
+    return { found: false, answer: null, matchedIds: [], confidence: 0, reason: "Comentário vazio.", provider: "local", model: "heuristic" };
+  }
+
+  let intent = classifyCommentHeuristic(cleanText);
+  if (intent === "ambiguous") intent = await classifyCommentWithAi(cleanText);
+
+  if (intent === "social") {
+    try {
+      return await askSocialReply(cleanText, context);
+    } catch (err) {
+      console.error("[suggest-reply] askSocialReply falhou", err);
+      return { found: false, answer: null, matchedIds: [], confidence: 0, reason: "Não foi possível gerar resposta social.", provider: "local", model: "heuristic" };
+    }
+  }
+
+  return askKnowledgeAi(cleanText, bank, context, ctx);
 }
 
 export function mapSession(row: any) {
