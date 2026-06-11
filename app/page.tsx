@@ -17279,7 +17279,6 @@ function ComentariosSection({
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [replyError, setReplyError] = useState<Record<string, string>>({});
   const [likeError, setLikeError] = useState<Record<string, string>>({});
-  const [likingId, setLikingId] = useState<string | null>(null);
   const [suggestionState, setSuggestionState] = useState<Record<string, "loading" | "none" | "error">>({});
   const [pressedBtn, setPressedBtn] = useState<Record<string, boolean>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -17676,6 +17675,10 @@ function ComentariosSection({
     return url.toString();
   }
 
+  function instagramCommentUrl(comment: Comment) {
+    return comment.mediaPermalink || "";
+  }
+
   async function handleLikeComment(comment: Comment) {
     if (comment.source === "youtube") {
       const url = youtubeCommentUrl(comment);
@@ -17686,22 +17689,14 @@ function ComentariosSection({
       if (url) window.open(url, "_blank", "noopener,noreferrer");
       return;
     }
-    if (comment.source !== "instagram" || comment.likedByOrg) return;
-    setLikingId(comment.id);
-    setLikeError((prev) => { const next = { ...prev }; delete next[comment.id]; return next; });
-    try {
-      const res = await fetch("/api/comments/like", {
-        method: "POST",
-        headers: await commentAuthHeaders(),
-        body: JSON.stringify({ commentId: comment.id })
-      });
-      const data = await res.json().catch(() => ({})) as { error?: string };
-      if (!res.ok) throw new Error(data.error || "Erro ao curtir comentário.");
-      setComments(comments.map((c) => c.id === comment.id ? { ...c, likedByOrg: true, likes: c.likes + 1 } : c));
-    } catch (err) {
-      setLikeError((prev) => ({ ...prev, [comment.id]: err instanceof Error ? err.message : "Erro ao curtir comentário." }));
+    if (comment.source === "instagram") {
+      const url = instagramCommentUrl(comment);
+      setLikeError((prev) => ({
+        ...prev,
+        [comment.id]: "A Meta nao permite curtir este comentario pela integracao. Abra no Instagram para curtir por la."
+      }));
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
     }
-    setLikingId(null);
   }
 
   async function handleAddFilter() {
@@ -17961,17 +17956,25 @@ function ComentariosSection({
                     >
                       <ExternalLink size={12} /> Abrir no YouTube
                     </button>
+                  ) : selected.source === "instagram" ? (
+                    <button
+                      type="button"
+                      onClick={() => handleLikeComment(selected)}
+                      disabled={!selected.mediaPermalink}
+                      title={selected.mediaPermalink ? "Abrir no Instagram para curtir o comentario por la" : "Link do post indisponivel para abrir no Instagram"}
+                      className="mt-1 flex items-center justify-end gap-1 text-xs font-bold text-pink-600 hover:text-pink-700 disabled:cursor-not-allowed disabled:text-slate-300"
+                    >
+                      <ExternalLink size={12} /> Abrir no Instagram
+                    </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => handleLikeComment(selected)}
-                      disabled={selected.source !== "instagram" || selected.likedByOrg || likingId === selected.id}
-                      title={selected.source !== "instagram" ? `Curtir comentários não é suportado pela API do ${commentSourceBadgeConfig[selected.source]?.label ?? selected.source}` : selected.likedByOrg ? "Curtido" : "Curtir comentário"}
-                      className={`mt-1 flex items-center justify-end gap-1 text-xs font-bold ${
-                        selected.source !== "instagram" ? "cursor-not-allowed text-slate-300" : selected.likedByOrg ? "text-red-500" : "text-slate-400 hover:text-red-500"
-                      }`}
+                      disabled
+                      title={`Curtir comentários não é suportado pela API do ${commentSourceBadgeConfig[selected.source]?.label ?? selected.source}`}
+                      className="mt-1 flex cursor-not-allowed items-center justify-end gap-1 text-xs font-bold text-slate-300"
                     >
-                      <Heart size={12} className={selected.likedByOrg ? "fill-current" : ""} /> {selected.likes}
+                      <Heart size={12} /> {selected.likes}
                     </button>
                   )}
                 </div>
