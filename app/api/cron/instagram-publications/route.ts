@@ -117,6 +117,7 @@ async function processPublication(publicationId: string) {
 
     const published = await publishInstagramMedia(context, publishConnection, {
       assetUrl: publication.asset_url,
+      carouselAssets: Array.isArray(publication.carousel_assets) ? publication.carousel_assets : [],
       title: publication.title ?? "",
       caption: shouldUseInstagramCaption(publication.format) ? (publication.caption ?? "") : "",
       format: publication.format ?? "Story",

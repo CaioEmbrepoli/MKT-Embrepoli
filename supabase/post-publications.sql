@@ -33,6 +33,7 @@ alter table public.post_publications add column if not exists title text not nul
 alter table public.post_publications add column if not exists caption text not null default '';
 alter table public.post_publications add column if not exists format text not null default '';
 alter table public.post_publications add column if not exists asset_url text not null default '';
+alter table public.post_publications add column if not exists carousel_assets jsonb not null default '[]'::jsonb;
 alter table public.post_publications add column if not exists thumbnail_url text;
 alter table public.post_publications add column if not exists external_id text;
 alter table public.post_publications add column if not exists permalink text;

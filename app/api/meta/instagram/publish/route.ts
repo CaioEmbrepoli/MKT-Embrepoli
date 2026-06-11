@@ -12,6 +12,7 @@ export const maxDuration = 300;
 type PublishBody = {
   postId?: string;
   assetUrl?: string;
+  carouselAssets?: Array<{ assetUrl?: string; title?: string; order?: number }>;
   title?: string;
   caption?: string;
   format?: string;
@@ -19,6 +20,18 @@ type PublishBody = {
   thumbnailUrl?: string | null;
   allowDuplicate?: boolean;
 };
+
+function normalizeCarouselAssets(value: PublishBody["carouselAssets"]) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => ({
+      assetUrl: String(item?.assetUrl || "").trim(),
+      title: String(item?.title || ""),
+      order: Number.isFinite(Number(item?.order)) ? Number(item?.order) : index + 1
+    }))
+    .filter((item) => item.assetUrl)
+    .sort((a, b) => a.order - b.order || a.assetUrl.localeCompare(b.assetUrl));
+}
 
 function parseScheduledAt(value?: string | null) {
   const date = parseSaoPauloDateTime(value);
@@ -40,12 +53,18 @@ export async function POST(request: Request) {
     const context = await metaRequestContext(request);
     const body = await request.json().catch(() => ({})) as PublishBody;
 
-    if (!body.assetUrl) {
+    const connection = await getInstagramConnection(context);
+    const scheduledAt = parseScheduledAt(body.scheduledAt);
+    const carouselAssets = normalizeCarouselAssets(body.carouselAssets);
+    const assetUrl = carouselAssets[0]?.assetUrl || body.assetUrl;
+
+    if (!assetUrl) {
       return NextResponse.json({ error: "Selecione uma arte aprovada para publicar no Instagram." }, { status: 400 });
     }
 
-    const connection = await getInstagramConnection(context);
-    const scheduledAt = parseScheduledAt(body.scheduledAt);
+    if (carouselAssets.length > 0 && body.format !== "Feed") {
+      return NextResponse.json({ error: "Carrossel do Instagram so pode ser publicado como Feed." }, { status: 400 });
+    }
 
     if (scheduledAt) {
       if (!body.postId) {
@@ -89,7 +108,8 @@ export async function POST(request: Request) {
         title: body.title ?? "",
         caption: shouldPersistInstagramCaption(fmt) ? (body.caption ?? "") : "",
         format: fmt,
-        asset_url: body.assetUrl,
+        asset_url: assetUrl,
+        carousel_assets: carouselAssets,
         thumbnail_url: shouldPersistInstagramThumbnail(fmt) ? (body.thumbnailUrl ?? null) : null,
         scheduled_at: scheduledAt.toISOString(),
         attempts: 0,
@@ -116,7 +136,7 @@ export async function POST(request: Request) {
         publicationId,
         scheduledAt: scheduledAt.toISOString(),
         effectiveFormat: fmt,
-        contentType: "video/mp4"
+        contentType: carouselAssets.length ? "carousel" : "video/mp4"
       });
     }
 
@@ -140,7 +160,8 @@ export async function POST(request: Request) {
     }
 
     const result = await publishInstagramMedia(context, connection, {
-      assetUrl: body.assetUrl,
+      assetUrl,
+      carouselAssets,
       title: body.title,
       caption: body.caption,
       format: body.format ?? "Feed",
@@ -157,7 +178,8 @@ export async function POST(request: Request) {
         title: body.title ?? "",
         caption: shouldPersistInstagramCaption(result.effectiveFormat) ? (body.caption ?? "") : "",
         format: result.effectiveFormat,
-        asset_url: body.assetUrl,
+        asset_url: assetUrl,
+        carousel_assets: carouselAssets,
         thumbnail_url: shouldPersistInstagramThumbnail(result.effectiveFormat) ? (body.thumbnailUrl ?? null) : null,
         external_id: result.instagramMediaId,
         permalink: result.permalink,

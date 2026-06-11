@@ -1885,6 +1885,7 @@ function mapPostPublication(row: any): PostPublication {
     caption: String(row.caption ?? ""),
     format: String(row.format ?? ""),
     assetUrl: String(row.asset_url ?? ""),
+    carouselAssets: Array.isArray(row.carousel_assets) ? row.carousel_assets : [],
     thumbnailUrl: row.thumbnail_url ?? undefined,
     externalId: row.external_id ?? undefined,
     permalink: row.permalink ?? undefined,

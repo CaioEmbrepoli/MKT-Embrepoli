@@ -201,6 +201,7 @@ create table if not exists public.post_publications (
   caption text not null default '',
   format text not null default '',
   asset_url text not null default '',
+  carousel_assets jsonb not null default '[]'::jsonb,
   thumbnail_url text,
   external_id text,
   permalink text,

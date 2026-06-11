@@ -18,6 +18,7 @@ export type InstagramPublishConnection = {
 
 export type InstagramPublishPayload = {
   assetUrl: string;
+  carouselAssets?: Array<{ assetUrl: string; title?: string; order: number }>;
   title?: string;
   caption?: string;
   format: string;
@@ -47,10 +48,11 @@ type PreparedAsset = {
 };
 
 type MediaKind = "image" | "video";
+type PublishKind = MediaKind | "carousel";
 
 type InstagramPublishPlan = {
   effectiveFormat: InstagramPublishFormat;
-  kind: MediaKind;
+  kind: PublishKind;
   params: Record<string, string>;
 };
 
@@ -391,6 +393,17 @@ function validateStoryVideo(asset: PreparedAsset) {
 
 function buildInstagramPublishPlan(payload: InstagramPublishPayload, asset: PreparedAsset): InstagramPublishPlan {
   const requestedFormat = normalizeFormat(payload.format);
+  if (payload.carouselAssets?.length) {
+    if (requestedFormat !== "Feed") {
+      throw new Error("Carrossel do Instagram so pode ser publicado no Feed.");
+    }
+    return {
+      effectiveFormat: "Feed",
+      kind: "carousel",
+      params: {}
+    };
+  }
+
   let effectiveFormat = requestedFormat;
   const isVideo = asset.contentType.startsWith("video/");
   const isImage = asset.contentType.startsWith("image/");
@@ -512,6 +525,79 @@ async function waitForImageStoryContainer(connection: InstagramPublishConnection
   }
 }
 
+function orderedCarouselAssets(payload: InstagramPublishPayload) {
+  const assets = (payload.carouselAssets ?? [])
+    .filter((item) => item.assetUrl)
+    .sort((a, b) => (a.order ?? 9999) - (b.order ?? 9999) || String(a.assetUrl).localeCompare(String(b.assetUrl)));
+  if (!assets.length) return [];
+  if (assets.length < 2) throw new Error("Carrossel do Instagram precisa ter pelo menos 2 imagens.");
+  if (assets.length > 10) throw new Error("Carrossel do Instagram aceita no maximo 10 imagens.");
+  return assets;
+}
+
+async function prepareCarouselAssets(context: MetaRequestContext, payload: InstagramPublishPayload) {
+  const assets = orderedCarouselAssets(payload);
+  const prepared = [];
+  for (const item of assets) {
+    const asset = await preparePublicAsset(context, { ...payload, assetUrl: item.assetUrl, carouselAssets: undefined });
+    await assertMetaCanReadUrl(asset.publicUrl);
+    if (!asset.contentType.startsWith("image/")) {
+      throw new Error("Carrossel do Instagram aceita apenas imagens nesta etapa.");
+    }
+    prepared.push({ ...asset, title: item.title ?? "", order: item.order });
+  }
+  return prepared;
+}
+
+async function publishInstagramCarousel(
+  context: MetaRequestContext,
+  connection: InstagramPublishConnection,
+  payload: InstagramPublishPayload
+): Promise<InstagramPublishResult> {
+  const assets = await prepareCarouselAssets(context, payload);
+  const childIds: string[] = [];
+
+  for (const asset of assets) {
+    const child = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, {
+      image_url: asset.publicUrl,
+      is_carousel_item: "true"
+    });
+    if (!child.id) throw new Error("A Meta nao retornou um item do carrossel.");
+    await waitForImageStoryContainer(connection, child.id);
+    childIds.push(child.id);
+  }
+
+  const parent = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, {
+    media_type: "CAROUSEL",
+    children: childIds.join(","),
+    ...(payload.caption ? { caption: payload.caption } : {})
+  });
+  if (!parent.id) throw new Error("A Meta nao retornou o container do carrossel.");
+  await waitForImageStoryContainer(connection, parent.id);
+
+  const published = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media_publish`, {
+    creation_id: parent.id
+  });
+  if (!published.id) throw new Error("A Meta nao retornou o ID da publicacao.");
+
+  let validatedPermalink = "";
+  try {
+    const media = await graphGet<{ permalink?: string }>(connection, `/${published.id}`, { fields: "permalink" });
+    validatedPermalink = media.permalink || "";
+  } catch {
+    validatedPermalink = "";
+  }
+
+  return {
+    instagramMediaId: published.id,
+    permalink: validatedPermalink,
+    status: "published",
+    publishedAt: new Date().toISOString(),
+    effectiveFormat: "Feed",
+    contentType: "carousel"
+  };
+}
+
 export function assertInstagramPublishPermission(connection: InstagramPublishConnection) {
   const scopes = connection.scopes ?? [];
   const hasPublishScope =
@@ -543,6 +629,15 @@ export async function validateInstagramMediaForPublish(
   payload: InstagramPublishPayload
 ) {
   assertInstagramPublishPermission(connection);
+  if (payload.carouselAssets?.length) {
+    const assets = await prepareCarouselAssets(context, payload);
+    return {
+      effectiveFormat: "Feed",
+      contentType: "carousel",
+      publicUrl: assets[0]?.publicUrl ?? "",
+      kind: "carousel" as const
+    };
+  }
   const asset = await preparePublicAsset(context, payload);
   await assertMetaCanReadUrl(asset.publicUrl);
   const plan = buildInstagramPublishPlan(payload, asset);
@@ -561,6 +656,9 @@ export async function scheduleInstagramMedia(
   scheduledAt: Date
 ): Promise<InstagramScheduleResult> {
   assertInstagramPublishPermission(connection);
+  if (payload.carouselAssets?.length) {
+    throw new Error("Carrossel usa agendamento via QStash neste app.");
+  }
 
   const asset = await preparePublicAsset(context, payload);
   await assertMetaCanReadUrl(asset.publicUrl);
@@ -628,6 +726,9 @@ export async function publishInstagramMedia(
   payload: InstagramPublishPayload
 ): Promise<InstagramPublishResult> {
   assertInstagramPublishPermission(connection);
+  if (payload.carouselAssets?.length) {
+    return publishInstagramCarousel(context, connection, payload);
+  }
 
   const validatedAsset = await preparePublicAsset(context, payload);
   await assertMetaCanReadUrl(validatedAsset.publicUrl);

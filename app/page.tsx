@@ -14568,6 +14568,17 @@ function instagramFormatUnavailableReason(format: string, kind: PublishAssetKind
   return "";
 }
 
+function instagramCarouselUnavailableReason(format: string, carouselAssets: PostReviewAsset[]) {
+  if (carouselAssets.length <= 1) return "";
+  if (format !== "Feed") return "Carrossel do Instagram só pode ser publicado como Feed.";
+  if (carouselAssets.length > 10) return "Carrossel do Instagram aceita no máximo 10 imagens.";
+  const notApproved = carouselAssets.find((asset) => asset.status !== "Aprovado");
+  if (notApproved) return "Todos os itens do carrossel precisam estar aprovados.";
+  const notImage = carouselAssets.find((asset) => inferPublishAssetKind(asset) !== "image");
+  if (notImage) return "Carrossel do Instagram aceita apenas imagens nesta etapa.";
+  return "";
+}
+
 const duplicateBlockingPublicationStatuses: PostPublication["status"][] = ["pending", "processing", "published", "scheduled"];
 
 function isDuplicateBlockingPublication(status: PostPublication["status"]) {
@@ -14635,6 +14646,17 @@ function PublishModal({
 
   const selectedAsset = approvedAssets.find((a) => a.id === selectedAssetId) ?? approvedAssets[0];
   const selectedAssetKind = inferPublishAssetKind(selectedAsset);
+  const selectedCarouselAssets = selectedAsset?.carouselGroupId
+    ? postReviewAssets
+      .filter((asset) => asset.postId === post.id && asset.carouselGroupId === selectedAsset.carouselGroupId && !asset.isCover)
+      .sort(compareReviewCarouselAssets)
+    : [];
+  const selectedCarouselPayload = selectedCarouselAssets.map((asset, index) => ({
+    assetUrl: asset.url,
+    title: asset.name,
+    order: asset.carouselOrder ?? index + 1
+  }));
+  const selectedIsCarousel = selectedCarouselAssets.length > 1;
 
   const [localThumbnailUrl, setLocalThumbnailUrl] = useState<string | null>(null);
   const [localThumbnailPreview, setLocalThumbnailPreview] = useState<string | null>(null);
@@ -14692,10 +14714,11 @@ function PublishModal({
     setChannelConfigs((prev) => prev.map((config) => {
       const platform = publishPlatformKey(channelById.get(config.channelId)?.name ?? "");
       if (platform !== "instagram") return config;
+      if (selectedIsCarousel && config.format !== "Feed") return { ...config, format: "Feed" };
       if (!instagramFormatUnavailableReason(config.format, selectedAssetKind)) return config;
       return { ...config, format: selectedAssetKind === "image" ? "Feed" : "Reels" };
     }));
-  }, [selectedAsset?.id, selectedAssetKind, channelById]);
+  }, [selectedAsset?.id, selectedAssetKind, selectedIsCarousel, channelById]);
 
   const enabledPublishableConfigs = channelConfigs.filter((config) => {
     if (!config.enabled) return false;
@@ -14752,6 +14775,11 @@ function PublishModal({
             updateConfig(config.channelId, { status: "error", errorMessage: formatError });
             return;
           }
+          const carouselError = selectedIsCarousel ? instagramCarouselUnavailableReason(config.format, selectedCarouselAssets) : "";
+          if (carouselError) {
+            updateConfig(config.channelId, { status: "error", errorMessage: carouselError });
+            return;
+          }
           const instagramEffectiveFormat = effectiveInstagramFormat(config.format, selectedAssetKind);
           const instagramCaption = instagramFormatUsesCaption(instagramEffectiveFormat) ? config.description : "";
           const instagramThumbnailUrl = instagramFormatUsesCover(instagramEffectiveFormat) ? effectiveThumbnailUrl : null;
@@ -14762,6 +14790,7 @@ function PublishModal({
               body: JSON.stringify({
                 postId: post.id,
                 assetUrl: selectedAsset.url,
+                carouselAssets: selectedIsCarousel ? selectedCarouselPayload : undefined,
                 title: config.title,
                 caption: instagramCaption,
                 format: config.format,
@@ -14797,6 +14826,7 @@ function PublishModal({
                   status: "scheduled",
                   format: data.effectiveFormat ?? config.format,
                   assetUrl: selectedAsset.url,
+                  carouselAssets: selectedIsCarousel ? selectedCarouselPayload : [],
                   thumbnailUrl: effectiveThumbnailUrl ?? undefined,
                   scheduledAt: data.scheduledAt ?? effectiveScheduledAt ?? undefined,
                   title: config.title ?? "",
@@ -14861,6 +14891,19 @@ function PublishModal({
               {approvedAssets.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           )}
+          {selectedIsCarousel && (
+            <div className="mt-3 rounded-2xl border border-pink-100 bg-pink-50 p-3">
+              <p className="text-sm font-black text-pink-800">
+                Carrossel Instagram com {selectedCarouselAssets.length} imagens
+              </p>
+              <p className="mt-1 text-xs font-bold text-pink-700">
+                Será publicado no Feed na ordem aprovada: {selectedCarouselAssets.map((asset, index) => `${index + 1}. ${asset.name}`).join(" · ")}
+              </p>
+              {instagramCarouselUnavailableReason("Feed", selectedCarouselAssets) && (
+                <p className="mt-2 text-xs font-black text-rose-700">{instagramCarouselUnavailableReason("Feed", selectedCarouselAssets)}</p>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -14918,7 +14961,9 @@ function PublishModal({
           const isTikTok = platform === "tiktok";
           const supported = isPublishablePlatform(platform);
           const instagramEffectiveFormat = isInstagram ? effectiveInstagramFormat(config.format, selectedAssetKind) : config.format;
-          const instagramFormatError = isInstagram ? instagramFormatUnavailableReason(config.format, selectedAssetKind) : "";
+          const instagramFormatError = isInstagram
+            ? instagramFormatUnavailableReason(config.format, selectedAssetKind) || (selectedIsCarousel ? instagramCarouselUnavailableReason(config.format, selectedCarouselAssets) : "")
+            : "";
           const showInstagramCaption = isInstagram && instagramFormatUsesCaption(instagramEffectiveFormat);
           const showInstagramCover = isInstagram && instagramFormatUsesCover(instagramEffectiveFormat);
           return (
@@ -14954,7 +14999,10 @@ function PublishModal({
                 <p className="mb-1 text-xs font-black text-slate-500">Formato</p>
                 <div className="flex flex-wrap gap-3">
                   {formats.map((fmt) => {
-                    const disabled = isInstagram && Boolean(instagramFormatUnavailableReason(fmt, selectedAssetKind));
+                    const disabled = isInstagram && Boolean(
+                      instagramFormatUnavailableReason(fmt, selectedAssetKind) ||
+                      (selectedIsCarousel && fmt !== "Feed")
+                    );
                     return (
                     <label key={fmt} className={`flex items-center gap-1.5 ${disabled ? "cursor-not-allowed text-slate-300" : "cursor-pointer"}`}>
                       <input type="radio" name={`format-${config.channelId}`} checked={config.format === fmt} disabled={disabled} onChange={() => updateConfig(config.channelId, { format: fmt })} className="accent-blue-700 disabled:opacity-40" />
@@ -14980,7 +15028,7 @@ function PublishModal({
                 )}
                 {isInstagram && selectedAssetKind !== "unknown" && (
                   <p className="mt-2 text-xs font-bold text-slate-400">
-                    Instagram vai publicar como {instagramEffectiveFormat}.
+                    Instagram vai publicar como {selectedIsCarousel ? `carrossel no Feed (${selectedCarouselAssets.length} imagens)` : instagramEffectiveFormat}.
                   </p>
                 )}
                 {instagramFormatError && <p className="mt-2 text-xs font-black text-rose-700">{instagramFormatError}</p>}

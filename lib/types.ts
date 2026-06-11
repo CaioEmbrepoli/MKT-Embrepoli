@@ -165,6 +165,12 @@ export type PostPublicationPlatform = "youtube" | "tiktok" | "instagram" | "face
 
 export type PostPublicationStatus = "pending" | "processing" | "published" | "scheduled" | "error" | "cancelled";
 
+export type PostPublicationCarouselAsset = {
+  assetUrl: string;
+  title?: string;
+  order: number;
+};
+
 export type PostPublication = {
   id: string;
   postId: string;
@@ -174,6 +180,7 @@ export type PostPublication = {
   caption: string;
   format: string;
   assetUrl: string;
+  carouselAssets?: PostPublicationCarouselAsset[];
   thumbnailUrl?: string;
   externalId?: string;
   permalink?: string;
