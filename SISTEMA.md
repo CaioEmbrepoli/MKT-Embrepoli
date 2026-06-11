@@ -490,22 +490,23 @@ Em `localhost`, existe bypass automático de login via `/api/dev-login`.
 - **Import:** Processo multi-fase com indicador de progresso
 
 ### Ollama (IA Local — Primário)
-- **O que é:** LLM server local, exposto via Cloudflare Tunnel (URL permanente gratuita)
-- **Endpoint:** Configurado via variável `OLLAMA_HOST` (ex: `https://xyz.trycloudflare.com`)
-- **Modelo padrão:** `llama3.2` (configurável via `OLLAMA_MODEL`)
-- **Ativação:** Se `OLLAMA_HOST` estiver definido, todas as chamadas de IA usam Ollama
-- **APIs:** `/api/chat` (gemini-chat) e `/api/generate` com `format: "json"` (gemini-classify)
-- **Status:** Variável comentada no `.env.local` — ainda não configurado
+- **O que é:** LLM server local (PC do Caio), exposto via Cloudflare Tunnel rápido (`cloudflared tunnel --url`)
+- **Endpoint:** Configurado via variável `OLLAMA_HOST` (atualmente `https://ind-exotic-milton-quick.trycloudflare.com`)
+- **Modelo:** `gemma3:4b` (configurável via `OLLAMA_MODEL`) — escolhido por caber na GTX 1660 6GB
+- **Ativação:** Se `OLLAMA_HOST` estiver definido, `askKnowledgeAi` (Chat de Dúvidas e Sugestão de Resposta), `/api/gemini-chat` e `/api/gemini-classify` usam Ollama em vez do Gemini
+- **Status:** Configurado e ativo — `.env.local` (dev) e env vars `OLLAMA_HOST`/`OLLAMA_MODEL` na Vercel (Production e Development)
+- **Fallback:** se a chamada ao Ollama falhar (PC desligado, túnel caiu), `askKnowledgeAi` cai automaticamente para busca por palavras-chave (`searchBank`) — sem erro 500
 
-> **Setup para ativar (salvo para fazer depois):**
-> 1. Baixar Ollama: `https://ollama.com/download` → instalar no Windows
-> 2. No terminal: `ollama pull llama3.2`
-> 3. Instalar cloudflared: `winget install Cloudflare.cloudflared`
-> 4. Criar tunnel permanente: `cloudflared tunnel --url http://localhost:11434`
-> 5. Copiar a URL gerada (ex: `https://xyz.trycloudflare.com`)
-> 6. No `.env.local`: descomentar e preencher `OLLAMA_HOST=https://xyz.trycloudflare.com`
-> 7. Na Vercel: adicionar `OLLAMA_HOST` e `OLLAMA_MODEL=llama3.2` nas env vars
-> 8. Alternativa gratuita com domínio fixo: ngrok com 1 static domain (`ngrok http 11434`)
+> **⚠️ Atenção — URL do túnel rápido muda se reiniciar:**
+> O túnel atual roda como `cloudflared.exe tunnel --url http://localhost:11434` em processo solto (não é serviço/task agendada). Se o processo do `cloudflared` ou do `ollama serve` for reiniciado, a URL `*.trycloudflare.com` muda. Quando isso acontecer:
+> 1. Pegar a nova URL no log do `cloudflared` (`.cloudflared-tunnel.log`)
+> 2. Atualizar `OLLAMA_HOST` no `.env.local`
+> 3. Atualizar `OLLAMA_HOST` na Vercel: `npx vercel env rm OLLAMA_HOST production` + `npx vercel env add OLLAMA_HOST production` (e `development`)
+> 4. Redeploy: `npx vercel deploy --prod`
+>
+> **Configuração do Ollama:** rodando via `ollama.exe serve` direto (não a tray app) com `OLLAMA_ORIGINS` setado (via `setx`, escopo de usuário) para a URL do túnel atual — necessário porque o Ollama bloqueia por padrão requisições com Host header diferente de localhost (proteção DNS rebinding). Se a URL do túnel mudar, `OLLAMA_ORIGINS` também precisa ser atualizado e o `ollama serve` reiniciado.
+>
+> **Melhoria futura opcional:** migrar para túnel nomeado com subdomínio fixo (`ollama.seudominio.com`) via Cloudflare, exigindo mover o DNS do domínio próprio do Caio para a Cloudflare — URL deixaria de mudar a cada reinício.
 
 ### Gemini AI (Fallback — quando Ollama não configurado)
 - **Modelo:** `gemini-2.0-flash`
