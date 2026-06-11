@@ -99,8 +99,9 @@ export type InstagramCommentItem = {
 };
 
 export type InstagramCommentImportSummary = {
+  scope?: "recent" | "all";
   recentDays: number;
-  since: string;
+  since: string | null;
   maxMedia: number;
   maxCommentsPerMedia: number;
   mediaChecked: number;
@@ -150,8 +151,9 @@ export async function listInstagramMedia(): Promise<{ media: InstagramMedia[] }>
   return fetchJson<{ media: InstagramMedia[] }>("/api/meta/instagram/media", undefined, 90000);
 }
 
-export async function listInstagramComments(): Promise<{ comments: InstagramCommentItem[]; mediaCount: number; summary?: InstagramCommentImportSummary }> {
-  return fetchJson<{ comments: InstagramCommentItem[]; mediaCount: number; summary?: InstagramCommentImportSummary }>("/api/meta/instagram/comments", undefined, 120000);
+export async function listInstagramComments(scope: "recent" | "all" = "recent"): Promise<{ comments: InstagramCommentItem[]; mediaCount: number; summary?: InstagramCommentImportSummary }> {
+  const query = scope === "all" ? "?scope=all" : "";
+  return fetchJson<{ comments: InstagramCommentItem[]; mediaCount: number; summary?: InstagramCommentImportSummary }>(`/api/meta/instagram/comments${query}`, undefined, 120000);
 }
 
 export async function listInstagramMetrics(): Promise<{ metrics: InstagramMetricItem[] }> {

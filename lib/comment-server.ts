@@ -56,6 +56,7 @@ type ExistingCommentRow = {
   classification_status: "pendente" | "relevante" | "normal" | "erro" | null;
   suggested_reply: string | null;
   is_relevant: boolean | null;
+  author_name: string | null;
 };
 
 function supabaseEnv() {
@@ -190,7 +191,9 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
     import_signature: comment.importSignature ?? null,
     video_id: comment.videoId || null,
     video_title: comment.videoTitle || null,
-    author_name: comment.authorName,
+    author_name: (comment.authorName && comment.authorName !== "Cliente")
+      ? comment.authorName
+      : (existing?.author_name || comment.authorName),
     text: comment.text,
     likes: Number(comment.likes ?? 0),
     response,
@@ -223,7 +226,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (externalIds.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name")
       .eq("organization_id", organizationId)
       .in("external_id", externalIds);
     if (error) throw error;
@@ -233,7 +236,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (signatures.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name")
       .eq("organization_id", organizationId)
       .in("import_signature", signatures);
     if (error) throw error;

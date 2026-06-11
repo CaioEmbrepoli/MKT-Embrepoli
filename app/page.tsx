@@ -18517,7 +18517,7 @@ function CommentImportUnifiedModal({
     if (selected.includes("instagram")) {
       setCurrentChannel("instagram");
       try {
-        const { comments: igComments } = await listInstagramComments();
+        const { comments: igComments } = await listInstagramComments(scope);
         await onInstagramImport(igComments);
         collected.push({ channel: "instagram", count: igComments.length });
       } catch (e) {
@@ -18550,6 +18550,7 @@ function CommentImportUnifiedModal({
   const ytHasChanges = ytNew.length > 0 || ytUpdated.length > 0;
   const tiktokHasChanges = tiktokItems.length > 0;
   const needsScan = selected.includes("youtube") || selected.includes("tiktok");
+  const showScope = needsScan || selected.includes("instagram");
 
   return (
     <CenteredModal close={isLoading ? undefined : onClose} className="bg-black/40" variant="compact" panelClassName="rounded-3xl border-0">
@@ -18579,12 +18580,12 @@ function CommentImportUnifiedModal({
             ))}
           </div>
 
-          {needsScan && (
+          {showScope && (
             <div className="grid gap-2">
               <p className="text-xs font-black uppercase text-slate-500">Escopo dos comentários</p>
               <button type="button" onClick={() => setScope("recent")} className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "recent" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
                 <span className="block font-black">Últimos 30 dias</span>
-                <span className="text-xs font-bold opacity-75">Busca só comentários dos últimos 30 dias no YouTube/TikTok.</span>
+                <span className="text-xs font-bold opacity-75">Busca só comentários dos últimos 30 dias no YouTube/TikTok/Instagram.</span>
               </button>
               <button type="button" onClick={() => setScope("all")} className={`rounded-2xl border px-4 py-3 text-left transition ${scope === "all" ? "border-blue-500 bg-blue-50 text-blue-800" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}>
                 <span className="block font-black">Todos os comentários</span>
@@ -18659,7 +18660,11 @@ function CommentImportUnifiedModal({
           {selected.includes("instagram") && (
             <div className="rounded-2xl bg-pink-50 p-4">
               <p className="text-xs font-black uppercase text-slate-500 mb-1">Instagram</p>
-              <p className="text-sm font-bold text-slate-700">Os comentários serão importados diretamente ao confirmar.</p>
+              <p className="text-sm font-bold text-slate-700">
+                {scope === "recent"
+                  ? "Os comentários dos últimos 30 dias serão importados diretamente ao confirmar."
+                  : "Será feita uma varredura completa de todos os posts e comentários ao confirmar."}
+              </p>
             </div>
           )}
 

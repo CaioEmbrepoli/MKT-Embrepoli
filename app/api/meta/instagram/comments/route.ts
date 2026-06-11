@@ -3,6 +3,7 @@ import { fetchInstagramCommentsForMedia, fetchInstagramMedia, getInstagramConnec
 
 const DEFAULT_RECENT_DAYS = 30;
 const DEFAULT_MAX_MEDIA = 80;
+const DEFAULT_MAX_MEDIA_ALL = 500;
 const DEFAULT_MAX_COMMENTS_PER_MEDIA = 100;
 
 function positiveInt(value: string | null, fallback: number, max: number) {
@@ -14,10 +15,11 @@ function positiveInt(value: string | null, fallback: number, max: number) {
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
+    const scope = url.searchParams.get("scope") === "all" ? "all" : "recent";
     const recentDays = positiveInt(url.searchParams.get("days"), DEFAULT_RECENT_DAYS, 365);
-    const maxMedia = positiveInt(url.searchParams.get("maxMedia"), DEFAULT_MAX_MEDIA, 250);
+    const maxMedia = positiveInt(url.searchParams.get("maxMedia"), scope === "all" ? DEFAULT_MAX_MEDIA_ALL : DEFAULT_MAX_MEDIA, 1000);
     const maxCommentsPerMedia = positiveInt(url.searchParams.get("maxCommentsPerMedia"), DEFAULT_MAX_COMMENTS_PER_MEDIA, 250);
-    const since = new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000);
+    const since = scope === "all" ? undefined : new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000);
 
     const context = await metaRequestContext(request);
     const connection = await getInstagramConnection(context);
@@ -49,8 +51,9 @@ export async function GET(request: Request) {
       comments,
       mediaCount: media.length,
       summary: {
+        scope,
         recentDays,
-        since: since.toISOString(),
+        since: since ? since.toISOString() : null,
         maxMedia,
         maxCommentsPerMedia,
         mediaChecked: media.length,
