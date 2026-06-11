@@ -492,7 +492,7 @@ Em `localhost`, existe bypass automático de login via `/api/dev-login`.
 ### Ollama (IA Local — Primário)
 - **O que é:** LLM server local (PC do Caio), exposto via Cloudflare Tunnel rápido (`cloudflared tunnel --url`)
 - **Endpoint:** Configurado via variável `OLLAMA_HOST` (atualmente `https://ind-exotic-milton-quick.trycloudflare.com`)
-- **Modelo:** `gemma3:4b` (configurável via `OLLAMA_MODEL`) — escolhido por caber na GTX 1660 6GB
+- **Modelo:** `llama3.1:8b` (configurável via `OLLAMA_MODEL`) — `gemma3:4b` (4B) copiava o texto do banco literalmente em vez de adaptar a resposta; `llama3.1:8b` (4.9GB) segue corretamente a instrução de reescrever a resposta com base na referência. Roda na GTX 1660 6GB
 - **Ativação:** Se `OLLAMA_HOST` estiver definido, `askKnowledgeAi` (Chat de Dúvidas e Sugestão de Resposta), `/api/gemini-chat` e `/api/gemini-classify` usam Ollama em vez do Gemini
 - **Status:** Configurado e ativo — `.env.local` (dev) e env vars `OLLAMA_HOST`/`OLLAMA_MODEL` na Vercel (Production e Development)
 - **Fallback:** se a chamada ao Ollama falhar (PC desligado, túnel caiu), `askKnowledgeAi` cai automaticamente para busca por palavras-chave (`searchBank`) — sem erro 500
@@ -507,6 +507,12 @@ Em `localhost`, existe bypass automático de login via `/api/dev-login`.
 > **Configuração do Ollama:** rodando via `ollama.exe serve` direto (não a tray app) com `OLLAMA_ORIGINS` setado (via `setx`, escopo de usuário) para a URL do túnel atual — necessário porque o Ollama bloqueia por padrão requisições com Host header diferente de localhost (proteção DNS rebinding). Se a URL do túnel mudar, `OLLAMA_ORIGINS` também precisa ser atualizado e o `ollama serve` reiniciado.
 >
 > **Melhoria futura opcional:** migrar para túnel nomeado com subdomínio fixo (`ollama.seudominio.com`) via Cloudflare, exigindo mover o DNS do domínio próprio do Caio para a Cloudflare — URL deixaria de mudar a cada reinício.
+
+> **🔄 Refresh automático diário (PC liga 8h / desliga 18h):**
+> Como o PC do Caio é desligado todo dia, a URL do túnel mudaria toda manhã. Duas automações resolvem isso:
+> 1. **Tarefa do Windows `OllamaTunnelRefresh`** (`C:\Caio\app\scripts\refresh-ollama-tunnel.ps1`, `Register-ScheduledTask`, trigger `AtLogOn` + 1 min de delay): reinicia `cloudflared`/`ollama serve`, atualiza `OLLAMA_ORIGINS`, `.env.local`, env vars `OLLAMA_HOST` na Vercel (production e development) e dispara `vercel deploy --prod` — totalmente autônoma, roda sozinha ao ligar o PC.
+> 2. **Tarefa agendada do Claude `check-ollama-tunnel-refresh`** (cron `30 8 * * *`): verifica o log `.tunnel-refresh.log`. Só age (corrige manualmente) se o script do Windows tiver falhado; se tudo correu bem, fica em silêncio.
+> - Logs: `.tunnel-refresh.log` (log geral), `.cloudflared-tunnel.log`, `.ollama-serve.log`.
 
 ### Gemini AI (Fallback — quando Ollama não configurado)
 - **Modelo:** `gemini-2.0-flash`
