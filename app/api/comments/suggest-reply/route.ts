@@ -14,7 +14,7 @@ export async function POST(request: Request) {
     const ctx = await authContext(request);
     const { data: comment, error: commentError } = await ctx.service
       .from("comments")
-      .select("id, organization_id, text, suggested_reply")
+      .select("id, organization_id, text, video_title, suggested_reply")
       .eq("organization_id", ctx.organizationId)
       .eq("id", commentId)
       .maybeSingle();
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     }
 
     const bank = await loadAnswerBank(ctx);
-    const result = searchBank(String(comment.text ?? ""), bank);
+    const result = searchBank(String(comment.text ?? ""), bank, { videoTitle: comment.video_title ?? undefined });
     if (!result.found || !result.answer) {
       return NextResponse.json({
         found: false,

@@ -175,6 +175,35 @@ function tokenize(text: string): Set<string> {
   );
 }
 
+// Palavras genéricas que aparecem com frequência em títulos de vídeo (em title case)
+// e não devem ser tratadas como nome de modelo/produto.
+const GENERIC_TITLE_WORDS = new Set(["tutorial", "video", "parte", "instalacao", "instalando",
+  "manometro", "pressao", "kit", "kits", "intercooler", "turbo", "caminhao", "caminhonete",
+  "trator", "tratores", "aumento", "ganho", "potencia", "teste", "testando", "resultado",
+  "resultados", "antes", "depois", "dica", "dicas", "diesel", "motor", "remap", "remapeamento"]);
+
+// Tokens que provavelmente identificam um modelo/produto (veículo, trator, etc.):
+// palavras com dígito (ex.: "S10", "MF275", "4x4") ou nomes próprios (iniciam com
+// maiúscula fora do começo da frase, ex.: "Hilux", "Ranger", "Valtra").
+function extractEntityTokens(text: string): Set<string> {
+  const raw = String(text ?? "");
+  const words = raw.split(/\s+/).filter(Boolean);
+  const entities = new Set<string>();
+  words.forEach((word, index) => {
+    const cleaned = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    if (cleaned.length < 3) return;
+    const hasDigit = /\d/.test(cleaned);
+    const isCapitalized = index > 0 && /^[A-ZÀ-Ý]/.test(cleaned);
+    if (hasDigit || isCapitalized) {
+      const normalized = normalizeText(cleaned);
+      if (normalized && !STOPWORDS.has(normalized) && !GENERIC_TITLE_WORDS.has(normalized)) {
+        entities.add(normalized);
+      }
+    }
+  });
+  return entities;
+}
+
 function jaccardScore(a: Set<string>, b: Set<string>): number {
   if (!a.size || !b.size) return 0;
   let intersection = 0;
@@ -183,24 +212,31 @@ function jaccardScore(a: Set<string>, b: Set<string>): number {
   return intersection / union;
 }
 
-export function searchBank(question: string, bank: BankItem[]): AiResult {
+export function searchBank(question: string, bank: BankItem[], context?: { videoTitle?: string }): AiResult {
   if (!bank.length) {
     return { found: false, answer: null, matchedIds: [], confidence: 0, reason: "Banco de dúvidas vazio.", provider: "local", model: "keyword-search" };
   }
 
   const queryTokens = tokenize(question);
+  const queryEntities = extractEntityTokens(`${question} ${context?.videoTitle ?? ""}`);
   let best: { item: BankItem; score: number } | null = null;
 
   for (const item of bank) {
+    const itemEntities = extractEntityTokens(`${item.questionText} ${item.videoTitle ?? ""}`);
+    let intersects = false;
+    for (const e of queryEntities) if (itemEntities.has(e)) { intersects = true; break; }
+    if (queryEntities.size && itemEntities.size && !intersects) continue; // perguntas sobre modelos/produtos diferentes não se confundem
+
     const qTokens = tokenize(item.questionText);
     const aTokens = tokenize(item.answerText);
     const vTokens = tokenize(item.videoTitle ?? "");
     // pontua contra pergunta (1.0), resposta (0.6) e título do vídeo (0.4 — contexto de produto)
-    const score = Math.max(
+    let score = Math.max(
       jaccardScore(queryTokens, qTokens),
       jaccardScore(queryTokens, aTokens) * 0.6,
       jaccardScore(queryTokens, vTokens) * 0.4
     );
+    if (intersects) score = Math.min(1, score + 0.25);
     if (!best || score > best.score) best = { item, score };
   }
 
