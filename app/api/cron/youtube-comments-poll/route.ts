@@ -245,11 +245,20 @@ export async function GET() {
         questionsCreated: bankResult.created
       });
     } catch (e) {
+      let errorMessage = "erro desconhecido";
+      if (e instanceof Error) {
+        errorMessage = e.message;
+      } else if (e && typeof e === "object") {
+        const obj = e as Record<string, unknown>;
+        errorMessage = String(obj.message ?? obj.error ?? obj.error_description ?? JSON.stringify(e));
+      } else if (e) {
+        errorMessage = String(e);
+      }
       results.push({
         connectionId: conn.id as string,
         organizationId: conn.organization_id as string,
         status: "error",
-        error: e instanceof Error ? e.message : "erro desconhecido"
+        error: errorMessage
       });
     }
   }
