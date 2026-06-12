@@ -163,6 +163,34 @@ async function processPublication(publicationId: string) {
     return NextResponse.json({ ok: true, status: "published", permalink: published.permalink });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Erro ao publicar Story no Instagram.";
+
+    // "Failed to decrypt" e um erro intermitente conhecido do lado da Meta
+    // (graph.instagram.com) — tenta novamente automaticamente algumas vezes
+    // antes de marcar como erro definitivo.
+    const isTransientMetaError = /failed to decrypt/i.test(message);
+    const maxAttempts = 3;
+
+    if (isTransientMetaError && attempts < maxAttempts) {
+      await service
+        .from("post_publications")
+        .update({ status: "scheduled", error: message, attempts, last_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq("id", publicationId);
+
+      const qstashToken = process.env.QSTASH_TOKEN;
+      if (qstashToken) {
+        const { Client: QStashClient } = await import("@upstash/qstash");
+        const qstash = new QStashClient({ token: qstashToken });
+        const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "").replace(/\/$/, "");
+        await qstash.publishJSON({
+          url: `${siteUrl}/api/cron/instagram-publications`,
+          body: { publicationId },
+          delay: 60
+        });
+      }
+
+      return NextResponse.json({ ok: true, status: "retry_scheduled", attempts, error: message });
+    }
+
     await service
       .from("post_publications")
       .update({ status: "error", error: message, attempts, last_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
