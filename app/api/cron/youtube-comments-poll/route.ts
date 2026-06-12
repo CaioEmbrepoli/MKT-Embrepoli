@@ -7,12 +7,22 @@ export const dynamic = "force-dynamic";
 
 // Polling de comentários recentes do canal YouTube.
 //
-// Roda via cron externo (ex: cron-job.org) a cada 30 min das 8h às 18h.
-// Usa allThreadsRelatedToChannelId para buscar os 100 comentários mais recentes
-// do canal inteiro em UMA única chamada (custo: ~2 unidades de quota por rodada).
+// Roda via cron externo (ex: cron-job.org) a cada 5 min.
+// channels?mine=true pode resolver para um canal/Brand Account diferente do
+// canal oficial quando a conta autenticada gerencia múltiplos canais, fazendo
+// allThreadsRelatedToChannelId retornar vazio. Por isso resolvemos o canal
+// pelo handle público da Embrepoli (forHandle) e usamos esse channelId.
+// Com o channelId correto, allThreadsRelatedToChannelId traz comentários
+// recentes de QUALQUER vídeo do canal em uma única chamada. Se ainda assim
+// vier vazio, caímos de volta para buscar comentários por vídeo (playlist de
+// uploads) como segurança.
 // Deduplicação automática via external_id — rodar várias vezes é seguro.
 
+const EMBREPOLI_YT_HANDLE = "EmbrepoliTurbos";
 const MAX_RESULTS = 100;
+const MAX_VIDEOS = 15;
+const MAX_VIDEO_AGE_DAYS = 60;
+const MAX_COMMENTS_PER_VIDEO = 25;
 
 async function ytFetch(url: string, token: string) {
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -59,6 +69,7 @@ export async function GET() {
     status: string;
     channelId?: string;
     channelTitle?: string;
+    videosChecked?: number;
     fetched?: number;
     upserted?: number;
     questionsCreated?: number;
@@ -83,13 +94,14 @@ export async function GET() {
           .eq("id", conn.id);
       }
 
-      // Busca o ID e nome do canal (1 unidade de quota)
+      // Resolve o canal oficial da Embrepoli pelo handle público (1 unidade de quota)
       const channelData = await ytFetch(
-        "https://www.googleapis.com/youtube/v3/channels?part=id,snippet&mine=true",
+        `https://www.googleapis.com/youtube/v3/channels?part=id,snippet,contentDetails&forHandle=${encodeURIComponent(`@${EMBREPOLI_YT_HANDLE}`)}`,
         accessToken
       );
       const channelId = channelData.items?.[0]?.id as string | undefined;
       const channelTitle = (channelData.items?.[0]?.snippet?.title as string) ?? "Canal YouTube";
+      const uploadsPlaylistId = channelData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads as string | undefined;
       if (!channelId) {
         results.push({
           connectionId: conn.id as string,
@@ -99,59 +111,121 @@ export async function GET() {
         continue;
       }
 
-      // Busca os comentários mais recentes do canal inteiro (1 unidade de quota)
-      const params = new URLSearchParams({
+      const commentInputs: ServerCommentInput[] = [];
+      let videosChecked = 0;
+      let usedFallback = false;
+
+      // Tentativa 1: comentários recentes de QUALQUER vídeo do canal, em uma única chamada
+      const channelParams = new URLSearchParams({
         part: "snippet",
         allThreadsRelatedToChannelId: channelId,
         order: "time",
         maxResults: String(MAX_RESULTS),
         textFormat: "plainText"
       });
-      const commentsData = await ytFetch(
-        `https://www.googleapis.com/youtube/v3/commentThreads?${params}`,
+      const channelCommentsData = await ytFetch(
+        `https://www.googleapis.com/youtube/v3/commentThreads?${channelParams}`,
         accessToken
       );
+      const channelItems = (channelCommentsData.items as Array<Record<string, unknown>>) ?? [];
 
-      const items: unknown[] = commentsData.items ?? [];
-      if (!items.length) {
+      for (const item of channelItems) {
+        const snippet = (item.snippet as Record<string, unknown>) ?? {};
+        const topLevel = (snippet.topLevelComment as Record<string, unknown>) ?? {};
+        const s = (topLevel.snippet as Record<string, unknown>) ?? {};
+        const text = String(s.textDisplay ?? "");
+        const externalId = `yt_comment:${String(item.id ?? "")}`;
+        if (!text || externalId === "yt_comment:") continue;
+        commentInputs.push({
+          source: "youtube" as const,
+          externalId,
+          videoId: String(snippet.videoId ?? ""),
+          videoTitle: String(s.videoTitle ?? channelTitle),
+          authorName: String(s.authorDisplayName ?? "Usuário YouTube"),
+          text,
+          likes: Number(s.likeCount ?? 0),
+          publishedAt: String(s.publishedAt ?? new Date().toISOString())
+        });
+      }
+
+      // Tentativa 2 (fallback): se a busca pelo canal não trouxe nada, busca por vídeo
+      if (!commentInputs.length && uploadsPlaylistId) {
+        usedFallback = true;
+        const playlistParams = new URLSearchParams({
+          part: "snippet,contentDetails",
+          playlistId: uploadsPlaylistId,
+          maxResults: String(MAX_VIDEOS)
+        });
+        const playlistData = await ytFetch(
+          `https://www.googleapis.com/youtube/v3/playlistItems?${playlistParams}`,
+          accessToken
+        );
+
+        const minPublishedAt = Date.now() - MAX_VIDEO_AGE_DAYS * 24 * 60 * 60 * 1000;
+        const videos: Array<{ videoId: string; title: string }> = (playlistData.items ?? [])
+          .map((item: Record<string, unknown>) => {
+            const snippet = (item.snippet as Record<string, unknown>) ?? {};
+            const contentDetails = (item.contentDetails as Record<string, unknown>) ?? {};
+            return {
+              videoId: String(contentDetails.videoId ?? ""),
+              title: String(snippet.title ?? channelTitle),
+              publishedAt: String(contentDetails.videoPublishedAt ?? snippet.publishedAt ?? "")
+            };
+          })
+          .filter((v: { videoId: string; publishedAt: string }) => v.videoId && (!v.publishedAt || new Date(v.publishedAt).getTime() >= minPublishedAt));
+
+        videosChecked = videos.length;
+
+        for (const video of videos) {
+          const commentParams = new URLSearchParams({
+            part: "snippet",
+            videoId: video.videoId,
+            order: "time",
+            maxResults: String(MAX_COMMENTS_PER_VIDEO),
+            textFormat: "plainText"
+          });
+          let commentsData: Record<string, unknown>;
+          try {
+            commentsData = await ytFetch(
+              `https://www.googleapis.com/youtube/v3/commentThreads?${commentParams}`,
+              accessToken
+            );
+          } catch {
+            // Comentários desativados ou erro pontual nesse vídeo - segue para o próximo
+            continue;
+          }
+
+          const items = (commentsData.items as Array<Record<string, unknown>>) ?? [];
+          for (const item of items) {
+            const snippet = (item.snippet as Record<string, unknown>) ?? {};
+            const topLevel = (snippet.topLevelComment as Record<string, unknown>) ?? {};
+            const s = (topLevel.snippet as Record<string, unknown>) ?? {};
+            const text = String(s.textDisplay ?? "");
+            const externalId = `yt_comment:${String(item.id ?? "")}`;
+            if (!text || externalId === "yt_comment:") continue;
+            commentInputs.push({
+              source: "youtube" as const,
+              externalId,
+              videoId: String(snippet.videoId ?? video.videoId),
+              videoTitle: video.title,
+              authorName: String(s.authorDisplayName ?? "Usuário YouTube"),
+              text,
+              likes: Number(s.likeCount ?? 0),
+              publishedAt: String(s.publishedAt ?? new Date().toISOString())
+            });
+          }
+        }
+      }
+
+      if (!commentInputs.length) {
         results.push({
           connectionId: conn.id as string,
           organizationId: conn.organization_id as string,
           status: "no_comments",
           channelId,
           channelTitle,
+          videosChecked: usedFallback ? videosChecked : undefined,
           fetched: 0,
-          upserted: 0
-        });
-        continue;
-      }
-
-      const commentInputs: ServerCommentInput[] = (items as Array<Record<string, unknown>>)
-        .map((item) => {
-          const snippet = (item.snippet as Record<string, unknown>) ?? {};
-          const topLevel = (snippet.topLevelComment as Record<string, unknown>) ?? {};
-          const s = (topLevel.snippet as Record<string, unknown>) ?? {};
-          return {
-            source: "youtube" as const,
-            externalId: `yt_comment:${String(item.id ?? "")}`,
-            videoId: String(snippet.videoId ?? ""),
-            videoTitle: String(s.videoTitle ?? channelTitle),
-            authorName: String(s.authorDisplayName ?? "Usuário YouTube"),
-            text: String(s.textDisplay ?? ""),
-            likes: Number(s.likeCount ?? 0),
-            publishedAt: String(s.publishedAt ?? new Date().toISOString())
-          };
-        })
-        .filter((c) => c.text && c.externalId !== "yt_comment:");
-
-      if (!commentInputs.length) {
-        results.push({
-          connectionId: conn.id as string,
-          organizationId: conn.organization_id as string,
-          status: "no_valid_comments",
-          channelId,
-          channelTitle,
-          fetched: items.length,
           upserted: 0
         });
         continue;
@@ -165,7 +239,8 @@ export async function GET() {
         status: "ok",
         channelId,
         channelTitle,
-        fetched: items.length,
+        videosChecked: usedFallback ? videosChecked : undefined,
+        fetched: commentInputs.length,
         upserted: upserted.length,
         questionsCreated: bankResult.created
       });
