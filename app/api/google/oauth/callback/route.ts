@@ -84,6 +84,12 @@ export async function GET(request: Request) {
 
     return siteRedirect(request, { google: "connected", service: googleService });
   } catch (error) {
-    return siteRedirect(request, { google: "error", message: error instanceof Error ? error.message : "oauth_failed" });
+    console.error("Erro no callback OAuth do Google:", error);
+    const message = error instanceof Error
+      ? error.message
+      : (error && typeof error === "object" && "message" in error)
+        ? String((error as { message: unknown }).message)
+        : "oauth_failed";
+    return siteRedirect(request, { google: "error", message });
   }
 }

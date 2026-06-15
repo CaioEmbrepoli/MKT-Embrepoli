@@ -1370,6 +1370,26 @@ export default function Home() {
     setActiveSection("marketing-configuracoes");
   }, [loggedIn]);
 
+  // Lê ?google=connected|error após retorno do OAuth e navega para Configurações
+  useEffect(() => {
+    if (!loggedIn) return;
+    const params = new URLSearchParams(window.location.search);
+    const googleParam = params.get("google");
+    if (!googleParam) return;
+    try {
+      sessionStorage.setItem("embrepoli_google_oauth_notice", JSON.stringify({
+        status: googleParam,
+        service: params.get("service") ?? "",
+        message: params.get("message") ?? ""
+      }));
+    } catch {
+      // ignore
+    }
+    window.history.replaceState({}, "", window.location.pathname);
+    setActiveArea("marketing");
+    setActiveSection("marketing-configuracoes");
+  }, [loggedIn]);
+
   useEffect(() => {
     const unreadIds = currentNotifications.filter((item) => !item.read).map((item) => item.id);
     const fresh = unreadIds.some((id) => !seenNotificationIds.current.has(id));
@@ -11205,6 +11225,7 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
   const [metaAdsLoading, setMetaAdsLoading] = useState(true);
   const [metaAdsBusy, setMetaAdsBusy] = useState(false);
   const [metaAdsError, setMetaAdsError] = useState("");
+  const [googleOauthNotice, setGoogleOauthNotice] = useState<{ status: string; service: string; message: string } | null>(null);
 
   async function loadGoogleStatus() {
     setGoogleLoading(true);
@@ -11259,6 +11280,18 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     loadTikTokStatus();
     loadInstagramStatus();
     loadMetaAdsStatus();
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem("embrepoli_google_oauth_notice");
+      if (!raw) return;
+      sessionStorage.removeItem("embrepoli_google_oauth_notice");
+      const parsed = JSON.parse(raw) as { status: string; service: string; message: string };
+      setGoogleOauthNotice(parsed);
+    } catch {
+      // ignore
+    }
   }, []);
 
   async function connectGoogle(service: GoogleService) {
@@ -11422,6 +11455,16 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
               </p>
             )}
             {googleError && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{googleError}</p>}
+            {googleOauthNotice && (
+              <div className={`mt-3 flex items-start justify-between gap-3 rounded-2xl px-3 py-2 text-sm font-bold ${googleOauthNotice.status === "connected" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                <span>
+                  {googleOauthNotice.status === "connected"
+                    ? `${googleServiceLabels[googleOauthNotice.service as GoogleService] ?? "Integração"} conectado com sucesso!`
+                    : `Erro ao conectar ${googleServiceLabels[googleOauthNotice.service as GoogleService] ?? "integração Google"}: ${googleOauthNotice.message}`}
+                </span>
+                <button type="button" onClick={() => setGoogleOauthNotice(null)} className="shrink-0 font-black">×</button>
+              </div>
+            )}
           </div>
           {/* ── Cards de integração redesenhados ── */}
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
