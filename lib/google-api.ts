@@ -285,12 +285,31 @@ export type AnalyticsChannelRow = {
   users: number;
 };
 
+export type AnalyticsDailyRow = {
+  date: string;
+  sessions: number;
+  users: number;
+};
+
+export type AnalyticsDeviceRow = {
+  device: string;
+  sessions: number;
+};
+
+export type AnalyticsPageRow = {
+  page: string;
+  views: number;
+};
+
 export type AnalyticsOverview = {
   rows: AnalyticsChannelRow[];
   totalSessions: number;
   totalUsers: number;
   startDate: string;
   endDate: string;
+  daily: AnalyticsDailyRow[];
+  devices: AnalyticsDeviceRow[];
+  topPages: AnalyticsPageRow[];
 };
 
 export async function getAnalyticsOverview(days = 30): Promise<AnalyticsOverview> {

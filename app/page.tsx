@@ -9436,21 +9436,29 @@ function Metrics({
         <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} />
       ) : (
       <>
-      <SiteAnalyticsPanel />
       <div className="mb-4 -mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1">
-        {[{ id: "all", name: "Geral", color: "#0f172a" } as Channel, ...channels].map((ch) => {
-          const count = ch.id === "all" ? resolvedMetrics.length : (channelCounts.get(ch.id) ?? 0);
+        {[
+          { id: "all", name: "Geral", color: "#0f172a" } as Channel,
+          ...channels.filter((c) => c.id !== "facebook" && c.name.toLowerCase() !== "facebook"),
+          { id: "analytics", name: "Analytics", color: "#f59e0b" } as Channel
+        ].map((ch) => {
+          const count = ch.id === "all" ? resolvedMetrics.length : ch.id === "analytics" ? null : (channelCounts.get(ch.id) ?? 0);
           const isActive = activeChannel === ch.id;
           return (
             <button key={ch.id} type="button" onClick={() => setActiveChannel(ch.id)}
               className={`shrink-0 border-b-2 px-4 py-2 text-sm font-black transition ${isActive ? "text-slate-950" : "border-transparent text-slate-500 hover:text-slate-700"}`}
               style={isActive ? { borderColor: ch.color } : undefined}
             >
-              {ch.name} <span className="ml-1 text-xs font-bold text-slate-400">({count})</span>
+              {ch.name} {count !== null && <span className="ml-1 text-xs font-bold text-slate-400">({count})</span>}
             </button>
           );
         })}
       </div>
+
+      {activeChannel === "analytics" ? (
+        <GoogleAnalyticsPanel />
+      ) : (
+      <>
 
       <div className="mb-5 flex flex-wrap items-end gap-3">
         <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["30", "Últimos 30 dias"], ["7", "Últimos 7 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
@@ -9922,6 +9930,8 @@ function Metrics({
           onClose={() => setAllVideosOpen(false)}
           onPick={(id) => { setAllVideosOpen(false); setModal({ kind: "metric", id }); }}
         />
+      )}
+      </>
       )}
       </>
       )}
@@ -10779,65 +10789,139 @@ function buildTrackableLinkUrl(slugValue: string) {
   return `${site}/l/${slugValue}`;
 }
 
-function SiteAnalyticsPanel() {
+function GoogleAnalyticsPanel() {
   const [data, setData] = useState<AnalyticsOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [days, setDays] = useState("30");
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError("");
-    getAnalyticsOverview(30)
+    getAnalyticsOverview(Number(days))
       .then((result) => { if (active) setData(result); })
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : "Erro ao carregar Google Analytics."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [days]);
 
-  if (loading) {
-    return (
-      <div className="mb-5 rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">
-        Carregando tráfego do site (Google Analytics)...
-      </div>
-    );
-  }
+  const deviceLabels: Record<string, string> = {
+    mobile: "Celular",
+    desktop: "Computador",
+    tablet: "Tablet"
+  };
 
-  if (error) {
-    return (
-      <div className="mb-5 rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-700">
-        Não foi possível carregar o Google Analytics: {error}
-      </div>
-    );
-  }
+  const deviceColors = ["#2563eb", "#38bdf8", "#64748b", "#22c55e"];
+  const deviceData = (data?.devices ?? []).map((row, index) => ({
+    id: row.device,
+    name: deviceLabels[row.device.toLowerCase()] ?? row.device,
+    value: row.sessions,
+    color: deviceColors[index % deviceColors.length]
+  }));
 
-  if (!data) return null;
+  const sourceRanking = (data?.rows ?? []).slice(0, 8).map((row) => ({
+    name: `${row.source} / ${row.medium}`,
+    sessions: row.sessions
+  }));
 
   return (
-    <div className="mb-5 rounded-2xl bg-slate-50 p-4">
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-black">Tráfego do site (Google Analytics)</p>
-        <p className="text-xs font-bold text-slate-400">{data.startDate} – {data.endDate}</p>
-      </div>
-      <div className="mb-3 flex gap-4">
-        <div className="rounded-xl bg-white px-4 py-2">
-          <p className="text-xs font-bold text-slate-400">Sessões</p>
-          <p className="text-lg font-black text-slate-800">{data.totalSessions.toLocaleString("pt-BR")}</p>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="font-black">Tráfego do site (Google Analytics)</p>
+          {data && <p className="text-xs font-bold text-slate-400">{data.startDate} – {data.endDate}</p>}
         </div>
-        <div className="rounded-xl bg-white px-4 py-2">
-          <p className="text-xs font-bold text-slate-400">Usuários</p>
-          <p className="text-lg font-black text-slate-800">{data.totalUsers.toLocaleString("pt-BR")}</p>
-        </div>
+        <FilterSelect label="Período" value={days} onChange={setDays} options={[["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["90", "Últimos 90 dias"]]} />
       </div>
-      <div className="space-y-1">
-        {data.rows.map((row, index) => (
-          <div key={`${row.source}-${row.medium}-${index}`} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm">
-            <span className="font-black text-slate-700">{row.source} / {row.medium}</span>
-            <span className="font-bold text-slate-500">{row.sessions.toLocaleString("pt-BR")} sessões · {row.users.toLocaleString("pt-BR")} usuários</span>
+
+      {loading && (
+        <div className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">
+          Carregando tráfego do site (Google Analytics)...
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-700">
+          Não foi possível carregar o Google Analytics: {error}
+        </div>
+      )}
+
+      {!loading && !error && data && (
+        <>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <MetricKpiCard label="Sessões" value={formatNumber(data.totalSessions)} />
+            <MetricKpiCard label="Usuários" value={formatNumber(data.totalUsers)} />
           </div>
-        ))}
-        {!data.rows.length && <p className="text-sm font-bold text-slate-400">Sem dados no período.</p>}
-      </div>
+
+          <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+            <h3 className="font-black">Evolução de sessões e usuários</h3>
+            <div className="mt-4 h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data.daily}>
+                  <defs>
+                    <linearGradient id="gaSessionsGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#2563eb" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gaUsersGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                  <YAxis tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} tickFormatter={(v) => formatNumber(Number(v))} />
+                  <Tooltip formatter={(value: number, name: string) => [formatNumber(Number(value)), name === "sessions" ? "Sessões" : "Usuários"]} />
+                  <Area type="monotone" dataKey="sessions" stroke="#2563eb" fill="url(#gaSessionsGradient)" name="sessions" />
+                  <Area type="monotone" dataKey="users" stroke="#22c55e" fill="url(#gaUsersGradient)" name="users" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            {!data.daily.length && <p className="mt-2 text-sm font-bold text-slate-400">Sem dados no período.</p>}
+          </div>
+
+          <div className="grid gap-5 xl:grid-cols-2">
+            <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+              <h3 className="font-black">Origem / mídia</h3>
+              <div className="mt-4 h-56">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={sourceRanking} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis type="number" tickFormatter={(v) => formatNumber(Number(v))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
+                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fontWeight: 700, fill: "#334155" }} />
+                    <Tooltip formatter={(v: number) => [formatNumber(v), "Sessões"]} />
+                    <Bar dataKey="sessions" fill="#2563eb" radius={[0, 6, 6, 0]} name="Sessões" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              {!sourceRanking.length && <p className="mt-2 text-sm font-bold text-slate-400">Sem dados no período.</p>}
+            </div>
+
+            {deviceData.length ? (
+              <BreakdownChart title="Sessões por dispositivo" data={deviceData} unit="sessões" />
+            ) : (
+              <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+                <h3 className="font-black">Sessões por dispositivo</h3>
+                <p className="mt-3 text-sm font-bold text-slate-400">Sem dados no período.</p>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
+            <h3 className="font-black">Páginas mais acessadas</h3>
+            <div className="mt-3 space-y-1">
+              {data.topPages.map((row, index) => (
+                <div key={`${row.page}-${index}`} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm">
+                  <span className="min-w-0 truncate font-black text-slate-700">{row.page}</span>
+                  <span className="shrink-0 font-bold text-slate-500">{formatNumber(row.views)} visualizações</span>
+                </div>
+              ))}
+              {!data.topPages.length && <p className="text-sm font-bold text-slate-400">Sem dados no período.</p>}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -11208,6 +11292,18 @@ function GoogleTokenExpiryAlert({ label, connectedAt }: { label: string; connect
   );
 }
 
+function IntegrationBlock({ title, description, children, className = "" }: { title: string; description: string; children: ReactNode; className?: string }) {
+  return (
+    <section className={`rounded-3xl bg-white p-4 ring-1 ring-slate-100 ${className}`}>
+      <div className="mb-4">
+        <p className="text-base font-black text-slate-900">{title}</p>
+        <p className="mt-1 text-sm font-bold text-slate-500">{description}</p>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>>; canManageIntegrations: boolean }) {
   const [googleStatus, setGoogleStatus] = useState<GoogleConnectionStatus | null>(null);
   const [googleLoading, setGoogleLoading] = useState(true);
@@ -11443,12 +11539,8 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
           </span>
           <input type="checkbox" checked={currentUser.notificationSound} onChange={(event) => setProfiles((current) => current.map((profile) => profile.id === currentUser.id ? { ...profile, notificationSound: event.target.checked } : profile))} className="h-5 w-5" />
         </label>
-        <div className="rounded-3xl bg-white p-4">
-          <div>
-            <p className="font-black">Integrações Google corporativas</p>
-            <p className="mt-1 text-sm font-bold text-slate-500">
-              Conecte Drive, YouTube e Google Planilhas separadamente. Cada integracao fica salva para toda a equipe.
-            </p>
+        <div className="flex flex-col gap-5">
+          <IntegrationBlock title="Google" description="Drive, YouTube, Planilhas e Analytics conectados para toda a equipe.">
             {!canManageIntegrations && (
               <p className="mt-2 text-xs font-bold text-slate-400">
                 Apenas Administrador ou Gestor pode conectar ou desconectar integrações Google.
@@ -11465,8 +11557,6 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                 <button type="button" onClick={() => setGoogleOauthNotice(null)} className="shrink-0 font-black">×</button>
               </div>
             )}
-          </div>
-          {/* ── Cards de integração redesenhados ── */}
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             {/* Google Drive */}
             {googleIntegrations.filter((i) => i.service === "drive").map((integration) => {
@@ -11708,6 +11798,11 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
               );
             })}
 
+          </div>
+          </IntegrationBlock>
+
+          <IntegrationBlock title="TikTok" description="Perfil, estatísticas e vídeos da conta conectada." className="order-3">
+          <div className="grid gap-4 lg:grid-cols-2">
             {/* TikTok */}
             <div className="overflow-hidden rounded-[26px] border border-slate-800 bg-white shadow-sm">
               <div className="flex items-center gap-3 border-b border-slate-700 bg-slate-950 px-4 py-3">
@@ -11756,6 +11851,11 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
               </div>
             </div>
 
+          </div>
+          </IntegrationBlock>
+
+          <IntegrationBlock title="Meta" description="Instagram / Meta para orgânico e Meta Ads para mídia paga." className="order-2">
+          <div className="grid gap-4 lg:grid-cols-2">
             {/* Instagram / Meta */}
             <div className="overflow-hidden rounded-[26px] border border-fuchsia-200 bg-white shadow-sm">
               <div className="flex items-center gap-3 border-b border-fuchsia-100 bg-gradient-to-r from-purple-50 to-pink-50 px-4 py-3">
@@ -11857,6 +11957,7 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
               </div>
             </div>
           </div>
+          </IntegrationBlock>
         </div>
       </div>
     </Panel>
