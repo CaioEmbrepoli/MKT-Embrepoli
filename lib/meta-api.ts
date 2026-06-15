@@ -97,6 +97,7 @@ export type InstagramCommentItem = {
     isOwnReply?: boolean;
   }[];
   channelReply?: string;
+  channelReplyExternalId?: string;
 };
 
 export type InstagramCommentImportSummary = {

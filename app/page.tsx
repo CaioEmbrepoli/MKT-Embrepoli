@@ -258,7 +258,7 @@ type PostReviewUploadOptions = { carousel?: boolean };
 type AuthMode = "login" | "signup" | "forgot" | "reset" | "checkEmail" | "pending";
 type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
 
-type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Conta e Permissões";
+type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Links Rastreáveis" | "Conta e Permissões";
 type MenuItem = { sectionId: string; moduleId: string; area: AppArea; label: string; icon: LucideIcon };
 
 const moduleIcons: Record<string, LucideIcon> = {
@@ -17549,6 +17549,7 @@ function ComentariosSection({
         externalReplies: mediaFields.externalReplies ?? [],
         status: (item.channelReply ? "respondido" : "novo") as CommentStatus,
         response: item.channelReply,
+        responseExternalId: "channelReplyExternalId" in item ? item.channelReplyExternalId : undefined,
         addedToBank: autoAdded,
         publishedAt: item.publishedAt,
         retentionUntil: addDaysIso(importStartedAt, 90),

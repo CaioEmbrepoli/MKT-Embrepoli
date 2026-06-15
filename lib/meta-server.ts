@@ -106,6 +106,7 @@ export type InstagramCommentItem = {
     isOwnReply?: boolean;
   }[];
   channelReply?: string;
+  channelReplyExternalId?: string;
 };
 
 type InstagramCommentReplyItem = NonNullable<InstagramCommentItem["externalReplies"]>[number];
@@ -486,8 +487,8 @@ export async function fetchInstagramCommentsForMedia(
           isOwnReply
         };
       }).filter((reply: InstagramCommentReplyItem) => Boolean(reply.id && reply.text));
-      const channelReply = mappedReplies
-        .filter((reply) => reply.isOwnReply)
+      const ownReplies = mappedReplies.filter((reply) => reply.isOwnReply);
+      const channelReply = ownReplies
         .map((reply) => reply.text)
         .filter(Boolean)
         .join("\n\n") || undefined;
@@ -505,7 +506,8 @@ export async function fetchInstagramCommentsForMedia(
         likes: Number(item.like_count || 0),
         publishedAt,
         externalReplies,
-        channelReply
+        channelReply,
+        channelReplyExternalId: ownReplies[0]?.id
       });
       if (comments.length >= maxComments) break;
     }
