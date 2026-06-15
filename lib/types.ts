@@ -72,6 +72,17 @@ export type Channel = {
   color: string;
 };
 
+export type TrackableLink = {
+  id: string;
+  organizationId: string;
+  slug: string;
+  destinationUrl: string;
+  label: string;
+  clickCount: number;
+  createdAt: string;
+  createdBy?: string;
+};
+
 export type ProductLine = {
   id: string;
   name: string;

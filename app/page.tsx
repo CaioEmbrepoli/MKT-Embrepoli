@@ -71,6 +71,9 @@ import {
   Play,
   Columns2,
   ExternalLink,
+  Copy,
+  Check,
+  Link2,
   type LucideIcon
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
@@ -115,6 +118,7 @@ import {
   deleteTask,
   deleteTaskBoard,
   deleteTaskColumn,
+  deleteTrackableLink,
   deleteVehicleType,
   ensureCurrentProfile,
   loadAppData,
@@ -154,6 +158,7 @@ import {
   saveTask,
   saveTaskBoard,
   saveTaskColumn,
+  saveTrackableLink,
   saveVehicleType,
   saveFeedback,
   loadFeedbacks,
@@ -209,6 +214,7 @@ import type {
   TaskPriority,
   TaskProgress,
   TaskResetFrequency,
+  TrackableLink,
   VehicleType,
   SalesClient,
   SalesClientStatus,
@@ -258,7 +264,7 @@ type PostReviewUploadOptions = { carousel?: boolean };
 type AuthMode = "login" | "signup" | "forgot" | "reset" | "checkEmail" | "pending";
 type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
 
-type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Links Rastreáveis" | "Conta e Permissões";
+type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Conta e Permissões";
 type MenuItem = { sectionId: string; moduleId: string; area: AppArea; label: string; icon: LucideIcon };
 
 const moduleIcons: Record<string, LucideIcon> = {
@@ -860,6 +866,14 @@ function deltaPercent(current: number, previous: number): { pct: number; positiv
 const slug = (value: string) =>
   value.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
+const generateTrackableLinkSlug = (existing: TrackableLink[]) => {
+  let candidate = "";
+  do {
+    candidate = Math.random().toString(36).slice(2, 9);
+  } while (existing.some((link) => link.slug === candidate));
+  return candidate;
+};
+
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
 function addDaysIso(dateLike: string | undefined, days: number) {
@@ -1100,6 +1114,7 @@ export default function Home() {
   const [currentUserId, setCurrentUserId] = useState("");
   const [sessionUserId, setSessionUserId] = useState("");
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [trackableLinks, setTrackableLinks] = useState<TrackableLink[]>([]);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
@@ -1426,6 +1441,7 @@ export default function Home() {
     setProfileAreas(data.profileAreas);
     setProfileModulePermissions(data.profileModulePermissions);
     setChannels(data.channels);
+    setTrackableLinks(data.trackableLinks);
     setProductLines(data.productLines);
     setVehicleTypes(data.vehicleTypes);
     setContentTypes(data.contentTypes);
@@ -1604,6 +1620,7 @@ export default function Home() {
   const syncProfileAreas = syncState("profileAreas", setProfileAreas, (previous, next) => persistArrayChanges(previous, next, (item) => saveProfileArea(supabase!, item), (id) => deleteProfileArea(supabase!, id)));
   const syncProfileModulePermissions = syncState("profileModulePermissions", setProfileModulePermissions, (previous, next) => persistArrayChanges(previous, next, (item) => saveProfileModulePermission(supabase!, item), (id) => deleteProfileModulePermission(supabase!, id)));
   const syncChannels = syncState("channels", setChannels, (previous, next) => persistArrayChanges(previous, next, (item) => saveChannel(supabase!, item), (id) => deleteChannel(supabase!, id)));
+  const syncTrackableLinks = syncState("trackableLinks", setTrackableLinks, (previous, next) => persistArrayChanges(previous, next, (item) => saveTrackableLink(supabase!, item), (id) => deleteTrackableLink(supabase!, id)));
   const syncProductLines = syncState("productLines", setProductLines, (previous, next) => persistArrayChanges(previous, next, (item) => saveProductLine(supabase!, item), (id) => deleteProductLine(supabase!, id)));
   const syncVehicleTypes = syncState("vehicleTypes", setVehicleTypes, (previous, next) => persistArrayChanges(previous, next, (item) => saveVehicleType(supabase!, item), (id) => deleteVehicleType(supabase!, id)));
   const syncContentTypes = syncState("contentTypes", setContentTypes, (previous, next) => persistArrayChanges(previous, next, (item) => saveContentType(supabase!, item), (id) => deleteContentType(supabase!, id)));
@@ -2586,6 +2603,8 @@ export default function Home() {
               posts={posts}
               campaigns={campaigns}
               channels={channels}
+              trackableLinks={trackableLinks}
+              setTrackableLinks={syncTrackableLinks}
               productLines={productLines}
               vehicleTypes={vehicleTypes}
               contentTypes={contentTypes}
@@ -9028,6 +9047,8 @@ function Metrics({
   posts,
   campaigns,
   channels,
+  trackableLinks,
+  setTrackableLinks,
   productLines,
   vehicleTypes,
   contentTypes,
@@ -9055,6 +9076,8 @@ function Metrics({
   posts: EditorialPost[];
   campaigns: Campaign[];
   channels: Channel[];
+  trackableLinks: TrackableLink[];
+  setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
   productLines: ProductLine[];
   vehicleTypes: VehicleType[];
   contentTypes: ContentType[];
@@ -9078,7 +9101,7 @@ function Metrics({
   reloadData?: () => Promise<void>;
 }) {
   const [period, setPeriod] = useState("all");
-  const [metricsMode, setMetricsMode] = useState<"organic" | "ads">("organic");
+  const [metricsMode, setMetricsMode] = useState<"organic" | "ads" | "links">("organic");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
   const [metaAdsImportOpen, setMetaAdsImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
@@ -9357,21 +9380,22 @@ function Metrics({
           </button>
           <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
         </div>
-      ) : (
+      ) : metricsMode === "ads" ? (
         <button type="button" onClick={() => setMetaAdsImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white shadow-sm transition hover:bg-blue-800">
           <Megaphone size={16} /> Importar Meta Ads
         </button>
-      )
+      ) : null
     }>
       <div className="mb-5 flex w-fit rounded-2xl bg-slate-100 p-1">
         {[
           ["organic", "Orgânico"],
-          ["ads", "Anúncios"]
+          ["ads", "Anúncios"],
+          ["links", "Links Rastreáveis"]
         ].map(([id, label]) => (
           <button
             key={id}
             type="button"
-            onClick={() => setMetricsMode(id as "organic" | "ads")}
+            onClick={() => setMetricsMode(id as "organic" | "ads" | "links")}
             className={`rounded-xl px-4 py-2 text-sm font-black transition ${metricsMode === id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
           >
             {label}
@@ -9388,6 +9412,8 @@ function Metrics({
           adInsightsDaily={adInsightsDaily}
           adAlerts={adAlerts}
         />
+      ) : metricsMode === "links" ? (
+        <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} />
       ) : (
       <>
       <div className="mb-4 -mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1">
@@ -10723,6 +10749,89 @@ function ChannelsLinesSettings({
       <SimpleConfigPanel title="Linhas de produto" addLabel="Adicionar linha" promptLabel="Nova linha de produto" deleteLabel="Excluir linha de produto?" items={productLines} setItems={setProductLines} />
       <SimpleConfigPanel title="Tipos de veículo" addLabel="Adicionar tipo" promptLabel="Novo tipo de veículo" deleteLabel="Excluir tipo de veículo?" items={vehicleTypes} setItems={setVehicleTypes} />
       <SimpleConfigPanel title="Tipos de conteúdo" addLabel="Adicionar tipo" promptLabel="Novo tipo de conteúdo" deleteLabel="Excluir tipo de conteúdo?" items={contentTypes} setItems={setContentTypes} />
+    </div>
+  );
+}
+
+function buildTrackableLinkUrl(slugValue: string) {
+  const site = (process.env.NEXT_PUBLIC_SITE_URL || (typeof window !== "undefined" ? window.location.origin : "")).replace(/\/$/, "");
+  return `${site}/l/${slugValue}`;
+}
+
+function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackableLinks: TrackableLink[]; setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>> }) {
+  const [destinationUrl, setDestinationUrl] = useState("");
+  const [label, setLabel] = useState("");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const copyLink = (id: string, url: string) => {
+    void navigator.clipboard.writeText(url).then(() => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
+    });
+  };
+
+  const addLink = () => {
+    const url = destinationUrl.trim();
+    if (!url) return;
+    const newLink: TrackableLink = {
+      id: crypto.randomUUID(),
+      organizationId: "",
+      slug: generateTrackableLinkSlug(trackableLinks),
+      destinationUrl: url,
+      label: label.trim(),
+      clickCount: 0,
+      createdAt: new Date().toISOString()
+    };
+    setTrackableLinks((current) => [newLink, ...current]);
+    setDestinationUrl("");
+    setLabel("");
+  };
+
+  return (
+    <div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <input
+          value={destinationUrl}
+          onChange={(event) => setDestinationUrl(event.target.value)}
+          placeholder="URL de destino (ex: https://instagram.com/embrepoli)"
+          lang="pt-BR" spellCheck autoCorrect="on"
+          className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500"
+        />
+        <input
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+          placeholder="Nome do link (opcional)"
+          lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences"
+          className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500"
+        />
+      </div>
+      <button onClick={addLink} disabled={!destinationUrl.trim()} className="mt-3 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white disabled:opacity-40">
+        Gerar link
+      </button>
+
+      <div className="mt-5 space-y-2">
+        {trackableLinks.map((link) => {
+          const shortUrl = buildTrackableLinkUrl(link.slug);
+          return (
+            <div key={link.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-slate-50 p-3">
+              <Link2 size={18} className="text-blue-700" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-black">{link.label || link.destinationUrl}</p>
+                <p className="truncate text-xs font-bold text-slate-400">{link.destinationUrl}</p>
+              </div>
+              <span className="rounded-xl bg-white px-3 py-1 text-xs font-black text-blue-700">{shortUrl}</span>
+              <span className="rounded-xl bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">{link.clickCount} clicks</span>
+              <button onClick={() => copyLink(link.id, shortUrl)} title="Copiar URL" className="rounded-xl bg-white p-2 text-slate-600">
+                {copiedId === link.id ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} />}
+              </button>
+              <button onClick={() => window.confirm("Excluir link rastreável?") && setTrackableLinks((current) => current.filter((item) => item.id !== link.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700">
+                <Trash2 size={16} />
+              </button>
+            </div>
+          );
+        })}
+        {!trackableLinks.length && <p className="text-sm font-bold text-slate-400">Nenhum link cadastrado ainda.</p>}
+      </div>
     </div>
   );
 }

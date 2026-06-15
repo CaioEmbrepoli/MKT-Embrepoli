@@ -34,6 +34,7 @@ import type {
   TaskBoard,
   TaskColumn,
   TaskComment,
+  TrackableLink,
   VehicleType,
   SalesClient,
   SalesProposal,
@@ -78,6 +79,7 @@ export type AppData = {
   salesFunnelStages: SalesFunnelStage[];
   callSchedules: CallSchedule[];
   postPublications: PostPublication[];
+  trackableLinks: TrackableLink[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -151,7 +153,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adSetsData,
     adsData,
     adInsightsDailyData,
-    adAlertsData
+    adAlertsData,
+    trackableLinksData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("profile_areas").select("*").eq("organization_id", organizationId),
@@ -193,7 +196,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("ad_sets").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("ads").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }),
-    client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false })
+    client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
+    client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false })
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -238,7 +242,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     salesClients: (salesClientsData.data ?? []).map(mapSalesClient),
     salesFunnelStages: (salesFunnelStagesData.data ?? []).map(mapSalesFunnelStage),
     callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule),
-    postPublications: (postPublicationsData.data ?? []).map(mapPostPublication)
+    postPublications: (postPublicationsData.data ?? []).map(mapPostPublication),
+    trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink)
   };
 }
 
@@ -320,6 +325,25 @@ export async function saveChannel(client: SupabaseClient, channel: Channel) {
 
 export async function deleteChannel(client: SupabaseClient, id: string) {
   await deleteById(client, "channels", id);
+}
+
+export async function replaceTrackableLinks(client: SupabaseClient, trackableLinks: TrackableLink[], previous: TrackableLink[] = []) {
+  await replaceSimple(client, "trackable_links", trackableLinks, previous, (item, organizationId) => ({
+    id: item.id,
+    organization_id: organizationId,
+    slug: item.slug,
+    destination_url: item.destinationUrl,
+    label: item.label,
+    created_by: item.createdBy ?? null
+  }));
+}
+
+export async function saveTrackableLink(client: SupabaseClient, trackableLink: TrackableLink) {
+  await replaceTrackableLinks(client, [trackableLink], [trackableLink]);
+}
+
+export async function deleteTrackableLink(client: SupabaseClient, id: string) {
+  await deleteById(client, "trackable_links", id);
 }
 
 export async function replaceProductLines(client: SupabaseClient, productLines: ProductLine[], previous: ProductLine[] = []) {
@@ -1008,6 +1032,19 @@ function mapProfileModulePermission(row: any): ProfileModulePermission {
 
 function mapChannel(row: any): Channel {
   return { id: row.id, name: row.name, color: row.color };
+}
+
+function mapTrackableLink(row: any): TrackableLink {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    slug: row.slug,
+    destinationUrl: row.destination_url,
+    label: row.label ?? "",
+    clickCount: row.click_count ?? 0,
+    createdAt: row.created_at,
+    createdBy: row.created_by ?? undefined
+  };
 }
 
 function mapProductLine(row: any): ProductLine {
