@@ -514,7 +514,33 @@ export async function fetchInstagramCommentsForMedia(
     nextUrl = data.paging?.next || "";
     pages += 1;
   }
-  return comments.filter((item) => item.commentId && item.text);
+  const replyCommentIds = new Set<string>();
+  const replySignatures = new Set<string>();
+  for (const comment of comments) {
+    for (const reply of comment.externalReplies ?? []) {
+      const cleanReplyId = reply.id.replace(/^instagram:/, "");
+      if (cleanReplyId) replyCommentIds.add(cleanReplyId);
+      replySignatures.add([
+        comment.videoId,
+        normalizeInstagramUsername(reply.authorName),
+        normalizeInstagramCommentText(reply.text),
+        reply.publishedAt
+      ].join("|"));
+    }
+  }
+
+  return comments.filter((item) => {
+    if (!item.commentId || !item.text) return false;
+    const cleanCommentId = item.commentId.replace(/^instagram:/, "");
+    if (replyCommentIds.has(cleanCommentId)) return false;
+    const signature = [
+      item.videoId,
+      normalizeInstagramUsername(item.authorName),
+      normalizeInstagramCommentText(item.text),
+      item.publishedAt
+    ].join("|");
+    return !replySignatures.has(signature);
+  });
 }
 
 export async function fetchInstagramCommentById(accessToken: string, commentId: string, fallbackMediaId = "") {
