@@ -10820,10 +10820,6 @@ function GoogleAnalyticsPanel() {
     color: deviceColors[index % deviceColors.length]
   }));
 
-  const sourceRanking = (data?.rows ?? []).slice(0, 8).map((row) => ({
-    name: `${row.source} / ${row.medium}`,
-    sessions: row.sessions
-  }));
 
   return (
     <div className="space-y-5">
@@ -10884,18 +10880,15 @@ function GoogleAnalyticsPanel() {
           <div className="grid gap-5 xl:grid-cols-2">
             <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
               <h3 className="font-black">Origem / mídia</h3>
-              <div className="mt-4 h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={sourceRanking} layout="vertical" margin={{ left: 8, right: 24, top: 8, bottom: 8 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis type="number" tickFormatter={(v) => formatNumber(Number(v))} tick={{ fontSize: 11, fontWeight: 700, fill: "#334155" }} />
-                    <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 10, fontWeight: 700, fill: "#334155" }} />
-                    <Tooltip formatter={(v: number) => [formatNumber(v), "Sessões"]} />
-                    <Bar dataKey="sessions" fill="#2563eb" radius={[0, 6, 6, 0]} name="Sessões" />
-                  </BarChart>
-                </ResponsiveContainer>
+              <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
+                {data.rows.map((row, index) => (
+                  <div key={`${row.source}-${row.medium}-${index}`} className="flex items-center justify-between gap-2 rounded-xl bg-white px-3 py-2 text-sm">
+                    <span className="min-w-0 truncate font-black text-slate-700">{row.source} / {row.medium}</span>
+                    <span className="shrink-0 font-bold text-slate-500">{formatNumber(row.sessions)} sessões · {formatNumber(row.users)} usuários</span>
+                  </div>
+                ))}
               </div>
-              {!sourceRanking.length && <p className="mt-2 text-sm font-bold text-slate-400">Sem dados no período.</p>}
+              {!data.rows.length && <p className="mt-2 text-sm font-bold text-slate-400">Sem dados no período.</p>}
             </div>
 
             {deviceData.length ? (

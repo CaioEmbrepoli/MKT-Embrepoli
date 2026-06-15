@@ -29,7 +29,7 @@ export async function GET(request: Request) {
             dimensions: [{ name: "sessionSource" }, { name: "sessionMedium" }],
             metrics: [{ name: "sessions" }, { name: "totalUsers" }],
             orderBys: [{ metric: { metricName: "sessions" }, desc: true }],
-            limit: 25
+            limit: 100
           },
           {
             dateRanges,
