@@ -334,7 +334,10 @@ export async function replaceTrackableLinks(client: SupabaseClient, trackableLin
     slug: item.slug,
     destination_url: item.destinationUrl,
     label: item.label,
-    created_by: item.createdBy ?? null
+    created_by: item.createdBy ?? null,
+    utm_source: item.utmSource || null,
+    utm_medium: item.utmMedium || null,
+    utm_campaign: item.utmCampaign || null
   }));
 }
 
@@ -1043,7 +1046,10 @@ function mapTrackableLink(row: any): TrackableLink {
     label: row.label ?? "",
     clickCount: row.click_count ?? 0,
     createdAt: row.created_at,
-    createdBy: row.created_by ?? undefined
+    createdBy: row.created_by ?? undefined,
+    utmSource: row.utm_source ?? undefined,
+    utmMedium: row.utm_medium ?? undefined,
+    utmCampaign: row.utm_campaign ?? undefined
   };
 }
 

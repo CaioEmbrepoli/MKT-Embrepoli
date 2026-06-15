@@ -21,6 +21,7 @@
 - Tabelas: `trackable_links` (slug único global, `click_count`) e `trackable_link_clicks` (log de cliques).
 - Slug gerado client-side via `generateTrackableLinkSlug` (em `app/page.tsx`), garantindo não-colisão com links já carregados.
 - `app/l/[slug]/route.ts` usa o service role do Supabase (sem RLS), busca o link pelo slug, faz `insert` em `trackable_link_clicks` + RPC `increment_trackable_link_clicks` (ambos `await`ados, não fire-and-forget — em rotas de redirect o processo pode terminar antes de promises soltas completarem) e redireciona (302) para `destination_url`. Slug inexistente redireciona para `/`.
+- **UTM automático**: `trackable_links` tem colunas opcionais `utm_source`, `utm_medium`, `utm_campaign` (text, nullable). No formulário de "Gerar link" há 3 campos opcionais (Origem/Mídia/Campanha, com `<datalist>` de sugestões). Se preenchidos, `app/l/[slug]/route.ts` anexa esses parâmetros na `destination_url` via `URL`/`searchParams.set` antes do redirect (302); se `destination_url` for inválida ou nenhum UTM definido, redireciona direto sem alterações. Links com UTM mostram um badge compacto (`origem / mídia / campanha`) na lista.
 - Em Next.js 15, `params` de route handlers é uma Promise — sempre `const { slug } = await params`.
 - Tipo `TrackableLink` em `lib/types.ts`; CRUD em `lib/supabase-data.ts` (`saveTrackableLink`, `deleteTrackableLink`, `replaceTrackableLinks`).
 

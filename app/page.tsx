@@ -10761,6 +10761,9 @@ function buildTrackableLinkUrl(slugValue: string) {
 function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackableLinks: TrackableLink[]; setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>> }) {
   const [destinationUrl, setDestinationUrl] = useState("");
   const [label, setLabel] = useState("");
+  const [utmSource, setUtmSource] = useState("");
+  const [utmMedium, setUtmMedium] = useState("");
+  const [utmCampaign, setUtmCampaign] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const copyLink = (id: string, url: string) => {
@@ -10780,11 +10783,17 @@ function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackab
       destinationUrl: url,
       label: label.trim(),
       clickCount: 0,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      utmSource: utmSource.trim() || undefined,
+      utmMedium: utmMedium.trim() || undefined,
+      utmCampaign: utmCampaign.trim() || undefined
     };
     setTrackableLinks((current) => [newLink, ...current]);
     setDestinationUrl("");
     setLabel("");
+    setUtmSource("");
+    setUtmMedium("");
+    setUtmCampaign("");
   };
 
   return (
@@ -10805,6 +10814,45 @@ function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackab
           className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500"
         />
       </div>
+      <div className="mt-3 grid gap-3 sm:grid-cols-3">
+        <input
+          value={utmSource}
+          onChange={(event) => setUtmSource(event.target.value)}
+          placeholder="Origem (utm_source)"
+          list="utm-source-options"
+          lang="pt-BR" spellCheck={false} autoCorrect="off" autoCapitalize="off"
+          className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500"
+        />
+        <datalist id="utm-source-options">
+          <option value="instagram" />
+          <option value="facebook" />
+          <option value="tiktok" />
+          <option value="youtube" />
+          <option value="whatsapp" />
+        </datalist>
+        <input
+          value={utmMedium}
+          onChange={(event) => setUtmMedium(event.target.value)}
+          placeholder="Mídia (utm_medium)"
+          list="utm-medium-options"
+          lang="pt-BR" spellCheck={false} autoCorrect="off" autoCapitalize="off"
+          className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500"
+        />
+        <datalist id="utm-medium-options">
+          <option value="organico" />
+          <option value="pago" />
+          <option value="bio" />
+          <option value="stories" />
+          <option value="email" />
+        </datalist>
+        <input
+          value={utmCampaign}
+          onChange={(event) => setUtmCampaign(event.target.value)}
+          placeholder="Campanha (utm_campaign)"
+          lang="pt-BR" spellCheck={false} autoCorrect="off" autoCapitalize="off"
+          className="rounded-2xl border border-slate-100 bg-slate-50 px-3 py-2 font-black outline-none focus:border-blue-500"
+        />
+      </div>
       <button onClick={addLink} disabled={!destinationUrl.trim()} className="mt-3 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white disabled:opacity-40">
         Gerar link
       </button>
@@ -10818,6 +10866,11 @@ function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackab
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-black">{link.label || link.destinationUrl}</p>
                 <p className="truncate text-xs font-bold text-slate-400">{link.destinationUrl}</p>
+                {(link.utmSource || link.utmMedium || link.utmCampaign) && (
+                  <span className="mt-1 inline-block rounded-lg bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                    {[link.utmSource, link.utmMedium, link.utmCampaign].filter(Boolean).join(" / ")}
+                  </span>
+                )}
               </div>
               <span className="rounded-xl bg-white px-3 py-1 text-xs font-black text-blue-700">{shortUrl}</span>
               <span className="rounded-xl bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">{link.clickCount} clicks</span>

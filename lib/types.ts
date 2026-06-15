@@ -81,6 +81,9 @@ export type TrackableLink = {
   clickCount: number;
   createdAt: string;
   createdBy?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
 };
 
 export type ProductLine = {

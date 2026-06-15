@@ -19,7 +19,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
 
   const { data: link } = await service
     .from("trackable_links")
-    .select("id, destination_url")
+    .select("id, destination_url, utm_source, utm_medium, utm_campaign")
     .eq("slug", slug)
     .maybeSingle();
 
@@ -36,5 +36,18 @@ export async function GET(request: Request, { params }: { params: Promise<{ slug
     service.rpc("increment_trackable_link_clicks", { p_link_id: link.id })
   ]);
 
-  return NextResponse.redirect(link.destination_url, 302);
+  let destination = link.destination_url;
+  if (link.utm_source || link.utm_medium || link.utm_campaign) {
+    try {
+      const target = new URL(link.destination_url);
+      if (link.utm_source) target.searchParams.set("utm_source", link.utm_source);
+      if (link.utm_medium) target.searchParams.set("utm_medium", link.utm_medium);
+      if (link.utm_campaign) target.searchParams.set("utm_campaign", link.utm_campaign);
+      destination = target.toString();
+    } catch {
+      destination = link.destination_url;
+    }
+  }
+
+  return NextResponse.redirect(destination, 302);
 }
