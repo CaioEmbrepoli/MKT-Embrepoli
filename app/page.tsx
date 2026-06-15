@@ -895,6 +895,27 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
   for (const reply of incoming.externalReplies ?? []) {
     externalRepliesById.set(reply.id, reply);
   }
+  const mergedExternalReplies = Array.from(externalRepliesById.values());
+  const incomingExternalReplyTexts = new Set((incoming.externalReplies ?? [])
+    .filter((reply) => !reply.isOwnReply)
+    .map((reply) => normalizeCommentPart(reply.text))
+    .filter(Boolean));
+  const hasTrustedOwnResponse = Boolean(
+    existing.responseExternalId ||
+    (existing.responseHistory ?? []).some((item) => item.kind === "primary" && item.externalReplyId)
+  );
+  const shouldClearMisclassifiedInstagramResponse = Boolean(
+    incoming.source === "instagram" &&
+    existing.response &&
+    !incoming.response &&
+    !hasTrustedOwnResponse &&
+    incomingExternalReplyTexts.has(normalizeCommentPart(existing.response))
+  );
+  const response = shouldClearMisclassifiedInstagramResponse ? undefined : (incoming.response ?? existing.response);
+  const responseExternalId = shouldClearMisclassifiedInstagramResponse ? undefined : (existing.responseExternalId ?? incoming.responseExternalId);
+  const status = shouldClearMisclassifiedInstagramResponse
+    ? (existing.status === "ignorado" ? "ignorado" : incoming.status)
+    : (existing.status === "respondido" && incoming.status !== "respondido" ? existing.status : incoming.status);
   return {
     ...existing,
     source: incoming.source,
@@ -906,13 +927,14 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
     mediaUrl: incoming.mediaUrl ?? existing.mediaUrl,
     mediaPermalink: incoming.mediaPermalink ?? existing.mediaPermalink,
     authorName: incoming.authorName || existing.authorName,
+    authorAvatarUrl: incoming.authorAvatarUrl ?? existing.authorAvatarUrl,
     text: incoming.text || existing.text,
     likes: incoming.likes,
-    externalReplies: Array.from(externalRepliesById.values()),
-    response: incoming.response ?? existing.response,
-    responseExternalId: existing.responseExternalId ?? incoming.responseExternalId,
+    externalReplies: mergedExternalReplies,
+    response,
+    responseExternalId,
     responseHistory: existing.responseHistory ?? incoming.responseHistory,
-    status: existing.status === "respondido" && incoming.status !== "respondido" ? existing.status : incoming.status,
+    status,
     addedToBank,
     bankQuestionId: existing.bankQuestionId ?? incoming.bankQuestionId,
     publishedAt: incoming.publishedAt ?? existing.publishedAt,
@@ -17273,6 +17295,20 @@ function CommentChannelIcon({ source, className }: { source: Comment["source"]; 
   );
 }
 
+function CommentAuthorAvatar({ source, name, avatarUrl, className }: { source: Comment["source"]; name: string; avatarUrl?: string; className?: string }) {
+  const sizeClass = className ?? "h-7 w-7";
+  if (avatarUrl) {
+    return (
+      <img
+        src={proxiedThumbnailUrl(avatarUrl)}
+        alt={name}
+        className={`${sizeClass} shrink-0 rounded-full object-cover ring-2 ring-white`}
+      />
+    );
+  }
+  return <CommentChannelIcon source={source} className={sizeClass} />;
+}
+
 function CommentSourceBadge({ source }: { source: Comment["source"] }) {
   const config = commentSourceBadgeConfig[source] ?? commentSourceBadgeConfig.youtube;
   return (
@@ -17489,7 +17525,7 @@ function ComentariosSection({
 
     const newComments: Comment[] = items.map((item) => {
       const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
-      const mediaFields = item as Partial<Pick<Comment, "mediaThumbnailUrl" | "mediaUrl" | "mediaPermalink" | "externalReplies">>;
+      const mediaFields = item as Partial<Pick<Comment, "mediaThumbnailUrl" | "mediaUrl" | "mediaPermalink" | "authorAvatarUrl" | "externalReplies">>;
       const incoming: Comment = {
         id: crypto.randomUUID(),
         source,
@@ -17507,6 +17543,7 @@ function ComentariosSection({
         mediaUrl: mediaFields.mediaUrl,
         mediaPermalink: mediaFields.mediaPermalink,
         authorName: item.authorName,
+        authorAvatarUrl: mediaFields.authorAvatarUrl,
         text: item.text,
         likes: item.likes,
         externalReplies: mediaFields.externalReplies ?? [],
@@ -17987,7 +18024,7 @@ function ComentariosSection({
                 >
                   <div className="mb-1 flex items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
-                      <CommentChannelIcon source={comment.source} className="h-7 w-7" />
+                      <CommentAuthorAvatar source={comment.source} name={comment.authorName} avatarUrl={comment.authorAvatarUrl} className="h-7 w-7" />
                       <span className="truncate text-sm font-black text-slate-800">{comment.authorName}</span>
                     </div>
                     {comment.addedToBank ? (
@@ -18020,7 +18057,7 @@ function ComentariosSection({
               {/* Detail header */}
               <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
                 <div className="flex items-center gap-3">
-                  <CommentChannelIcon source={selected.source} className="h-11 w-11" />
+                  <CommentAuthorAvatar source={selected.source} name={selected.authorName} avatarUrl={selected.authorAvatarUrl} className="h-11 w-11" />
                   <div>
                     <p className="text-base font-black text-slate-900">{selected.authorName}</p>
                     <p className="text-xs font-bold text-slate-400">
@@ -18113,6 +18150,29 @@ function ComentariosSection({
                 <p className="text-sm text-slate-700">{selected.text}</p>
               </div>
 
+              {(selected.externalReplies ?? []).filter((reply) => !reply.isOwnReply).length > 0 && (
+                <div className="mb-4 ml-6 flex flex-col gap-3 border-l-2 border-slate-100 pl-4 sm:ml-10">
+                  {(selected.externalReplies ?? []).filter((reply) => !reply.isOwnReply).map((reply) => {
+                    const replyAuthor = reply.authorName.replace(/^@+/, "") || "Instagram";
+                    return (
+                      <div key={reply.id} className="rounded-2xl bg-white p-3 ring-1 ring-slate-100">
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <CommentAuthorAvatar source={selected.source} name={replyAuthor} avatarUrl={reply.authorAvatarUrl} className="h-7 w-7" />
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-black text-slate-700">@{replyAuthor}</p>
+                              <p className="text-[11px] font-bold text-slate-400">Resposta ao comentário</p>
+                            </div>
+                          </div>
+                          <span className="shrink-0 text-[11px] font-bold text-slate-400">{formatCommentTimestamp(reply.publishedAt)}</span>
+                        </div>
+                        <p className="text-sm text-slate-600">{reply.text}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* AI suggestion / classification */}
               <div className="mb-4 rounded-2xl border border-blue-100 bg-blue-50/60 p-4">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -18171,23 +18231,6 @@ function ComentariosSection({
                   </div>
                 )}
               </div>
-
-              {(selected.externalReplies ?? []).filter((reply) => !reply.isOwnReply).length > 0 && (
-                <div className="mb-4 rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
-                  <p className="mb-3 text-xs font-black uppercase text-slate-400">Outras respostas</p>
-                  <div className="flex flex-col gap-3">
-                    {(selected.externalReplies ?? []).filter((reply) => !reply.isOwnReply).map((reply) => (
-                      <div key={reply.id} className="rounded-xl bg-white p-3 ring-1 ring-slate-100">
-                        <div className="mb-1 flex items-center justify-between gap-2">
-                          <span className="truncate text-xs font-black text-slate-700">@{reply.authorName.replace(/^@+/, "")}</span>
-                          <span className="shrink-0 text-[11px] font-bold text-slate-400">{formatCommentTimestamp(reply.publishedAt)}</span>
-                        </div>
-                        <p className="text-sm text-slate-600">{reply.text}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               {/* Reply box */}
               <div className="mb-4">

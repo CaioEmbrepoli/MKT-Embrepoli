@@ -1524,6 +1524,7 @@ create table if not exists public.comments (
   media_url text,
   media_permalink text,
   author_name text,
+  author_avatar_url text,
   text text not null,
   likes integer not null default 0,
   external_replies jsonb not null default '[]'::jsonb,
@@ -1549,6 +1550,7 @@ alter table public.comments add column if not exists bank_question_id text refer
 alter table public.comments add column if not exists media_thumbnail_url text;
 alter table public.comments add column if not exists media_url text;
 alter table public.comments add column if not exists media_permalink text;
+alter table public.comments add column if not exists author_avatar_url text;
 alter table public.comments add column if not exists external_replies jsonb not null default '[]'::jsonb;
 alter table public.comments add column if not exists response_external_id text;
 alter table public.comments add column if not exists response_history jsonb not null default '[]'::jsonb;

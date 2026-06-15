@@ -13,6 +13,7 @@ import type {
   Channel,
   ChecklistItem,
   Comment,
+  CommentResponseHistoryItem,
   ContentType,
   CustomerQuestion,
   EditorialPost,
@@ -1493,6 +1494,7 @@ function mapYtComment(row: any): Comment {
     mediaUrl: row.media_url ?? undefined,
     mediaPermalink: row.media_permalink ?? undefined,
     authorName: row.author_name ?? "",
+    authorAvatarUrl: row.author_avatar_url ?? undefined,
     text: row.text ?? "",
     likes: row.likes ?? 0,
     likedByOrg: row.liked_by_org ?? false,
@@ -1560,6 +1562,32 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
   const bankQuestionId = existing?.bank_question_id ?? comment.bankQuestionId ?? null;
   const classificationStatus = preserveCommentClassification(existing, comment);
   const isRelevant = existing?.is_relevant ?? comment.isRelevant ?? addedToBank;
+  const incomingExternalReplies = Array.isArray(comment.externalReplies) ? comment.externalReplies : [];
+  const existingExternalReplies = Array.isArray(existing?.external_replies) ? existing.external_replies : [];
+  const externalRepliesById = new Map(existingExternalReplies.map((reply: any) => [reply.id, reply]));
+  for (const reply of incomingExternalReplies) externalRepliesById.set(reply.id, reply);
+  const responseHistory: CommentResponseHistoryItem[] = mergeResponseHistory(existing, comment);
+  const incomingExternalReplyTexts = new Set(incomingExternalReplies
+    .filter((reply) => !reply.isOwnReply)
+    .map((reply) => normalizeCommentText(reply.text ?? ""))
+    .filter(Boolean));
+  const existingResponse = String(existing?.response ?? "").trim();
+  const hasTrustedOwnResponse = Boolean(
+    existing?.response_external_id ||
+    responseHistory.some((item) => item.kind === "primary" && item.externalReplyId)
+  );
+  const shouldClearMisclassifiedInstagramResponse = Boolean(
+    comment.source === "instagram" &&
+    existingResponse &&
+    !comment.response &&
+    !hasTrustedOwnResponse &&
+    incomingExternalReplyTexts.has(normalizeCommentText(existingResponse))
+  );
+  const response = shouldClearMisclassifiedInstagramResponse ? null : (comment.response ?? existing?.response ?? null);
+  const responseExternalId = shouldClearMisclassifiedInstagramResponse ? null : (comment.responseExternalId ?? existing?.response_external_id ?? null);
+  const status = shouldClearMisclassifiedInstagramResponse
+    ? (existing?.status === "ignorado" ? "ignorado" : comment.status)
+    : preserveCommentStatus(existing, comment);
   return {
     id: existing?.id ?? comment.id,
     organization_id: organizationId,
@@ -1572,14 +1600,15 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
     media_url: comment.mediaUrl ?? existing?.media_url ?? null,
     media_permalink: comment.mediaPermalink ?? existing?.media_permalink ?? null,
     author_name: comment.authorName,
+    author_avatar_url: comment.authorAvatarUrl ?? existing?.author_avatar_url ?? null,
     text: comment.text,
     likes: comment.likes,
     liked_by_org: comment.likedByOrg ?? existing?.liked_by_org ?? false,
-    external_replies: comment.externalReplies ?? existing?.external_replies ?? [],
-    response: comment.response ?? existing?.response ?? null,
-    response_external_id: comment.responseExternalId ?? existing?.response_external_id ?? null,
-    response_history: mergeResponseHistory(existing, comment),
-    status: preserveCommentStatus(existing, comment),
+    external_replies: Array.from(externalRepliesById.values()),
+    response,
+    response_external_id: responseExternalId,
+    response_history: responseHistory,
+    status,
     added_to_bank: addedToBank,
     bank_question_id: bankQuestionId,
     published_at: comment.publishedAt ?? null,

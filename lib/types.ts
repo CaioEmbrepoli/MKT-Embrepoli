@@ -514,6 +514,7 @@ export type CommentClassificationStatus = "pendente" | "relevante" | "normal" | 
 export type CommentExternalReply = {
   id: string;
   authorName: string;
+  authorAvatarUrl?: string;
   text: string;
   publishedAt: string;
   likes?: number;
@@ -541,6 +542,7 @@ export type Comment = {
   mediaUrl?: string;
   mediaPermalink?: string;
   authorName: string;
+  authorAvatarUrl?: string;
   text: string;
   likes: number;
   likedByOrg?: boolean;

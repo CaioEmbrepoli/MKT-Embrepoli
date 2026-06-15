@@ -90,6 +90,7 @@ export type InstagramCommentItem = {
   externalReplies?: {
     id: string;
     authorName: string;
+    authorAvatarUrl?: string;
     text: string;
     publishedAt: string;
     likes?: number;

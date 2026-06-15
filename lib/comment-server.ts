@@ -7,6 +7,7 @@ export type CommentSource = "youtube" | "instagram" | "facebook" | "tiktok";
 export type CommentExternalReplyInput = {
   id: string;
   authorName: string;
+  authorAvatarUrl?: string;
   text: string;
   publishedAt: string;
   likes?: number;
@@ -33,6 +34,7 @@ export type ServerCommentInput = {
   mediaUrl?: string;
   mediaPermalink?: string;
   authorName: string;
+  authorAvatarUrl?: string;
   text: string;
   likes?: number;
   externalReplies?: CommentExternalReplyInput[];
@@ -72,6 +74,7 @@ type ExistingCommentRow = {
   suggested_reply: string | null;
   is_relevant: boolean | null;
   author_name: string | null;
+  author_avatar_url: string | null;
 };
 
 function supabaseEnv() {
@@ -129,6 +132,7 @@ function normalizeExternalReplies(value: unknown): CommentExternalReplyInput[] {
     byId.set(id, {
       id,
       authorName: sanitizeText(row.authorName) || "Instagram",
+      authorAvatarUrl: sanitizeText(row.authorAvatarUrl) || undefined,
       text,
       publishedAt: sanitizeText(row.publishedAt) || new Date().toISOString(),
       likes: Number(row.likes ?? 0),
@@ -202,6 +206,7 @@ function normalizeComment(comment: ServerCommentInput): ServerCommentInput {
     mediaUrl: comment.mediaUrl ? sanitizeText(comment.mediaUrl) : undefined,
     mediaPermalink: comment.mediaPermalink ? sanitizeText(comment.mediaPermalink) : undefined,
     authorName: sanitizeText(comment.authorName) || "Cliente",
+    authorAvatarUrl: comment.authorAvatarUrl ? sanitizeText(comment.authorAvatarUrl) : undefined,
     text: sanitizeText(comment.text),
     externalReplies: normalizeExternalReplies(comment.externalReplies),
     response: comment.response ? sanitizeText(comment.response) : undefined,
@@ -219,16 +224,33 @@ function normalizeComment(comment: ServerCommentInput): ServerCommentInput {
 function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput, existing?: ExistingCommentRow) {
   const createdAt = existing?.created_at ?? new Date().toISOString();
   const retentionUntil = existing?.retention_until ?? comment.retentionUntil ?? addDaysIso(90);
-  const response = existing?.response ?? comment.response ?? null;
-  const responseExternalId = existing?.response_external_id ?? comment.responseExternalId ?? null;
   const responseHistory = comment.responseHistory?.length
     ? comment.responseHistory
     : (existing?.response_history ?? []);
-  const status = existing?.status === "respondido" || response
-    ? "respondido"
-    : existing?.status === "ignorado"
-      ? "ignorado"
-      : (comment.status ?? "novo");
+  const incomingExternalReplies = normalizeExternalReplies(comment.externalReplies);
+  const existingExternalReplies = normalizeExternalReplies(existing?.external_replies);
+  const externalRepliesById = new Map(existingExternalReplies.map((reply) => [reply.id, reply]));
+  for (const reply of incomingExternalReplies) externalRepliesById.set(reply.id, reply);
+  const externalReplies = Array.from(externalRepliesById.values());
+  const existingResponse = sanitizeText(existing?.response ?? "");
+  const hasTrustedOwnResponse = Boolean(existing?.response_external_id || responseHistory.some((item) => item.kind === "primary" && item.externalReplyId));
+  const incomingExternalTexts = new Set(incomingExternalReplies.map((reply) => normalizeCommentText(reply.text)).filter(Boolean));
+  const shouldClearMisclassifiedInstagramResponse = Boolean(
+    comment.source === "instagram" &&
+    existingResponse &&
+    !comment.response &&
+    !hasTrustedOwnResponse &&
+    incomingExternalTexts.has(normalizeCommentText(existingResponse))
+  );
+  const response = shouldClearMisclassifiedInstagramResponse ? null : (existing?.response ?? comment.response ?? null);
+  const responseExternalId = shouldClearMisclassifiedInstagramResponse ? null : (existing?.response_external_id ?? comment.responseExternalId ?? null);
+  const status = shouldClearMisclassifiedInstagramResponse
+    ? (existing?.status === "ignorado" ? "ignorado" : (comment.status ?? "novo"))
+    : existing?.status === "respondido" || response
+      ? "respondido"
+      : existing?.status === "ignorado"
+        ? "ignorado"
+        : (comment.status ?? "novo");
   const addedToBank = Boolean(existing?.added_to_bank || comment.addedToBank);
   const bankQuestionId = existing?.bank_question_id ?? comment.bankQuestionId ?? null;
   const classificationStatus = existing?.classification_status && existing.classification_status !== "pendente"
@@ -246,6 +268,7 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
     author_name: (comment.authorName && comment.authorName !== "Cliente")
       ? comment.authorName
       : (existing?.author_name || comment.authorName),
+    author_avatar_url: comment.authorAvatarUrl ?? existing?.author_avatar_url ?? null,
     text: comment.text,
     likes: Number(comment.likes ?? 0),
     response,
@@ -253,7 +276,7 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
     media_thumbnail_url: comment.mediaThumbnailUrl ?? existing?.media_thumbnail_url ?? null,
     media_url: comment.mediaUrl ?? existing?.media_url ?? null,
     media_permalink: comment.mediaPermalink ?? existing?.media_permalink ?? null,
-    external_replies: comment.externalReplies?.length ? comment.externalReplies : (existing?.external_replies ?? []),
+    external_replies: externalReplies,
     added_to_bank: addedToBank,
     response_external_id: responseExternalId,
     response_history: responseHistory,
@@ -280,7 +303,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (externalIds.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name,author_avatar_url")
       .eq("organization_id", organizationId)
       .in("external_id", externalIds);
     if (error) throw error;
@@ -290,7 +313,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (signatures.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name")
+      .select("id,source,external_id,import_signature,retention_until,created_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name,author_avatar_url")
       .eq("organization_id", organizationId)
       .in("import_signature", signatures);
     if (error) throw error;

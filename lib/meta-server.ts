@@ -92,12 +92,14 @@ export type InstagramCommentItem = {
   mediaUrl?: string;
   mediaPermalink?: string;
   authorName: string;
+  authorAvatarUrl?: string;
   text: string;
   likes: number;
   publishedAt: string;
   externalReplies?: {
     id: string;
     authorName: string;
+    authorAvatarUrl?: string;
     text: string;
     publishedAt: string;
     likes?: number;
@@ -435,14 +437,28 @@ export async function fetchInstagramCommentsForMedia(
   const maxComments = options.maxComments ?? 1000;
   const maxPages = options.maxPages ?? 20;
   const comments: InstagramCommentItem[] = [];
-  let nextUrl = `${igApiBase(accessToken)}/${media.id}/comments?fields=${encodeURIComponent("id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}")}&limit=100`;
+  const baseFields = "id,text,username,timestamp,like_count,replies{id,text,username,timestamp,like_count}";
+  const richFields = "id,text,username,timestamp,like_count,from{id,username,profile_picture_url},replies{id,text,username,timestamp,like_count,from{id,username,profile_picture_url}}";
+  const commentsUrl = (fields: string) => `${igApiBase(accessToken)}/${media.id}/comments?fields=${encodeURIComponent(fields)}&limit=100`;
+  let useRichFields = true;
+  let nextUrl = commentsUrl(richFields);
   let pages = 0;
   const videoTitle = media.caption?.slice(0, 140) || "Post Instagram";
   const ownUsername = normalizeInstagramUsername(options.ownUsername);
   const ownAccountId = sanitizeText(options.ownAccountId ?? "");
 
   while (nextUrl && pages < maxPages && comments.length < maxComments) {
-    const data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
+    let data: { data?: any[]; paging?: { next?: string } };
+    try {
+      data = await graphGet<{ data?: any[]; paging?: { next?: string } }>(nextUrl, accessToken);
+    } catch (error) {
+      if (useRichFields && pages === 0) {
+        useRichFields = false;
+        nextUrl = commentsUrl(baseFields);
+        continue;
+      }
+      throw error;
+    }
     for (const item of data.data ?? []) {
       const publishedAt = String(item.timestamp || media.timestamp || new Date().toISOString());
       const publishedDate = publishedAt ? new Date(publishedAt) : null;
@@ -451,15 +467,19 @@ export async function fetchInstagramCommentsForMedia(
       }
       const replies = Array.isArray(item.replies?.data) ? item.replies.data : [];
       const mappedReplies: InstagramCommentReplyItem[] = replies.map((reply: any): InstagramCommentReplyItem => {
-        const authorName = sanitizeText(String(reply.username || "Instagram"));
+        const authorName = sanitizeText(String(reply.from?.username || reply.username || "Instagram"));
+        const authorAvatarUrl = sanitizeText(String(reply.from?.profile_picture_url || reply.profile_picture_url || ""));
         const replyId = String(reply.id || "");
+        const actorId = sanitizeText(String(reply.from?.id || reply.owner?.id || ""));
+        const actorUsername = normalizeInstagramUsername(reply.from?.username || reply.username);
         const isOwnReply = Boolean(
-          (ownUsername && normalizeInstagramUsername(authorName) === ownUsername) ||
-          (ownAccountId && String(reply.from?.id || reply.owner?.id || "") === ownAccountId)
+          (ownAccountId && actorId === ownAccountId) ||
+          (ownUsername && actorUsername === ownUsername)
         );
         return {
           id: replyId,
           authorName,
+          authorAvatarUrl: authorAvatarUrl || undefined,
           text: sanitizeText(String(reply.text || "")),
           publishedAt: String(reply.timestamp || publishedAt),
           likes: Number(reply.like_count || 0),
@@ -479,7 +499,8 @@ export async function fetchInstagramCommentsForMedia(
         mediaThumbnailUrl: media.thumbnailUrl || media.mediaUrl || undefined,
         mediaUrl: media.mediaUrl || undefined,
         mediaPermalink: media.permalink || undefined,
-        authorName: sanitizeText(String(item.username || "Instagram")),
+        authorName: sanitizeText(String(item.from?.username || item.username || "Instagram")),
+        authorAvatarUrl: sanitizeText(String(item.from?.profile_picture_url || item.profile_picture_url || "")) || undefined,
         text: sanitizeText(String(item.text || "")),
         likes: Number(item.like_count || 0),
         publishedAt,
@@ -496,9 +517,16 @@ export async function fetchInstagramCommentsForMedia(
 
 export async function fetchInstagramCommentById(accessToken: string, commentId: string, fallbackMediaId = "") {
   const cleanId = commentId.replace(/^instagram:/, "");
-  const data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
-    fields: "id,text,username,timestamp,like_count,media{id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count}"
-  });
+  let data: any;
+  try {
+    data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
+      fields: "id,text,username,timestamp,like_count,from{id,username,profile_picture_url},media{id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count}"
+    });
+  } catch (error) {
+    data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
+      fields: "id,text,username,timestamp,like_count,media{id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count}"
+    });
+  }
   const media = data?.media ?? {};
   const mediaId = String(media.id || fallbackMediaId || "");
   const normalizedMedia = mediaId ? normalizeMedia({ id: mediaId, ...media }) : null;
@@ -509,7 +537,8 @@ export async function fetchInstagramCommentById(accessToken: string, commentId: 
     mediaThumbnailUrl: normalizedMedia?.thumbnailUrl || normalizedMedia?.mediaUrl || undefined,
     mediaUrl: normalizedMedia?.mediaUrl || undefined,
     mediaPermalink: normalizedMedia?.permalink || undefined,
-    authorName: sanitizeText(String(data.username || "Instagram")),
+    authorName: sanitizeText(String(data.from?.username || data.username || "Instagram")),
+    authorAvatarUrl: sanitizeText(String(data.from?.profile_picture_url || data.profile_picture_url || "")) || undefined,
     text: sanitizeText(String(data.text || "")),
     likes: Number(data.like_count || 0),
     publishedAt: String(data.timestamp || media.timestamp || new Date().toISOString())

@@ -52,6 +52,13 @@ function isOwnInstagramActor(value: any, connection: MetaConnection) {
   );
 }
 
+function hasInstagramActor(value: any) {
+  return Boolean(
+    safeText(value?.from?.id || value?.user_id || value?.owner?.id) ||
+    normalizeInstagramUsername(value?.from?.username || value?.from?.name || value?.username)
+  );
+}
+
 function isDeleteEvent(value: any, change: any) {
   const parts = [
     value?.verb,
@@ -142,12 +149,13 @@ function extractCommentEvent(payload: any, entry: any, change: any) {
   const mediaId = safeText(value.media_id || value.media?.id || value.post_id || value.video_id);
   const text = safeText(value.text || value.comment?.text || value.message);
   const authorName = safeText(value.from?.username || value.from?.name || value.username || "Instagram");
+  const authorAvatarUrl = safeText(value.from?.profile_picture_url || value.profile_picture_url);
   const publishedAt = value.created_time
     ? new Date(Number(value.created_time) * 1000).toISOString()
     : safeText(value.timestamp || new Date().toISOString());
   const eventId = safeText(value.id || value.comment_id || change?.field || entry?.time || crypto.randomUUID());
 
-  return { value, commentId, parentCommentId, mediaId, text, authorName, publishedAt, eventId, payload };
+  return { value, commentId, parentCommentId, mediaId, text, authorName, authorAvatarUrl, publishedAt, eventId, payload };
 }
 
 export async function GET(request: Request) {
@@ -251,7 +259,8 @@ export async function POST(request: Request) {
         if (event.parentCommentId && event.commentId && event.text) {
           const parentExternalId = instagramExternalCommentId(event.parentCommentId);
           const replyExternalId = instagramExternalCommentId(event.commentId);
-          const isOwnReply = isOwnInstagramActor(event.value, connection);
+          const hasActor = hasInstagramActor(event.value);
+          const isOwnReply = hasActor && isOwnInstagramActor(event.value, connection);
           let updated = null;
           if (isOwnReply) {
             updated = await updateServerCommentResponseByExternalId(
@@ -271,6 +280,7 @@ export async function POST(request: Request) {
               {
                 id: replyExternalId,
                 authorName: event.authorName,
+                authorAvatarUrl: event.authorAvatarUrl || undefined,
                 text: event.text,
                 publishedAt: event.publishedAt,
                 likes: Number(event.value.like_count || 0),
@@ -285,12 +295,13 @@ export async function POST(request: Request) {
             externalCommentId: parentExternalId,
             externalMediaId: event.mediaId,
             eventType: updated
-              ? (isOwnReply ? "comment_reply_own_processed" : "comment_reply_external_processed")
+              ? (isOwnReply ? "comment_reply_own_processed" : (hasActor ? "comment_reply_external_processed" : "comment_reply_external_processed_uncertain"))
               : "comment_reply_parent_not_found",
             payload: {
               field: safeText(change?.field || "comment"),
               replyId: replyExternalId,
               authorName: event.authorName,
+              hasActor,
               isOwnReply,
               hasText: Boolean(event.text)
             },
@@ -331,6 +342,7 @@ export async function POST(request: Request) {
             mediaUrl: media?.mediaUrl || undefined,
             mediaPermalink: media?.permalink || undefined,
             authorName: event.authorName,
+            authorAvatarUrl: event.authorAvatarUrl || undefined,
             text: event.text,
             likes: Number(event.value.like_count || 0),
             publishedAt: event.publishedAt
@@ -361,6 +373,7 @@ export async function POST(request: Request) {
               mediaUrl: fetched.mediaUrl,
               mediaPermalink: fetched.mediaPermalink,
               authorName: fetched.authorName,
+              authorAvatarUrl: fetched.authorAvatarUrl,
               text: fetched.text,
               likes: fetched.likes,
               publishedAt: fetched.publishedAt
