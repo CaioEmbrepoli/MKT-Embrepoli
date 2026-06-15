@@ -93,7 +93,7 @@ import {
 } from "@/lib/modules";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
-import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
+import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getAnalyticsOverview, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type AnalyticsOverview, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import { disconnectInstagramConnection, disconnectMetaAdsConnection, getInstagramStatus, getMetaAdsStatus, importMetaAdsData, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportSummary } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
@@ -9416,6 +9416,7 @@ function Metrics({
         <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} />
       ) : (
       <>
+      <SiteAnalyticsPanel />
       <div className="mb-4 -mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1">
         {[{ id: "all", name: "Geral", color: "#0f172a" } as Channel, ...channels].map((ch) => {
           const count = ch.id === "all" ? resolvedMetrics.length : (channelCounts.get(ch.id) ?? 0);
@@ -10758,6 +10759,69 @@ function buildTrackableLinkUrl(slugValue: string) {
   return `${site}/l/${slugValue}`;
 }
 
+function SiteAnalyticsPanel() {
+  const [data, setData] = useState<AnalyticsOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    getAnalyticsOverview(30)
+      .then((result) => { if (active) setData(result); })
+      .catch((err) => { if (active) setError(err instanceof Error ? err.message : "Erro ao carregar Google Analytics."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="mb-5 rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">
+        Carregando tráfego do site (Google Analytics)...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mb-5 rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-700">
+        Não foi possível carregar o Google Analytics: {error}
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  return (
+    <div className="mb-5 rounded-2xl bg-slate-50 p-4">
+      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+        <p className="font-black">Tráfego do site (Google Analytics)</p>
+        <p className="text-xs font-bold text-slate-400">{data.startDate} – {data.endDate}</p>
+      </div>
+      <div className="mb-3 flex gap-4">
+        <div className="rounded-xl bg-white px-4 py-2">
+          <p className="text-xs font-bold text-slate-400">Sessões</p>
+          <p className="text-lg font-black text-slate-800">{data.totalSessions.toLocaleString("pt-BR")}</p>
+        </div>
+        <div className="rounded-xl bg-white px-4 py-2">
+          <p className="text-xs font-bold text-slate-400">Usuários</p>
+          <p className="text-lg font-black text-slate-800">{data.totalUsers.toLocaleString("pt-BR")}</p>
+        </div>
+      </div>
+      <div className="space-y-1">
+        {data.rows.map((row, index) => (
+          <div key={`${row.source}-${row.medium}-${index}`} className="flex items-center justify-between rounded-xl bg-white px-3 py-2 text-sm">
+            <span className="font-black text-slate-700">{row.source} / {row.medium}</span>
+            <span className="font-bold text-slate-500">{row.sessions.toLocaleString("pt-BR")} sessões · {row.users.toLocaleString("pt-BR")} usuários</span>
+          </div>
+        ))}
+        {!data.rows.length && <p className="text-sm font-bold text-slate-400">Sem dados no período.</p>}
+      </div>
+    </div>
+  );
+}
+
 function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackableLinks: TrackableLink[]; setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>> }) {
   const [destinationUrl, setDestinationUrl] = useState("");
   const [label, setLabel] = useState("");
@@ -11212,7 +11276,8 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
   const googleServiceLabels: Record<GoogleService, string> = {
     drive: "Google Drive",
     youtube: "YouTube",
-    sheets: "Google Planilhas"
+    sheets: "Google Planilhas",
+    analytics: "Google Analytics"
   };
 
   async function disconnectGoogle(service: GoogleService) {
@@ -11321,6 +11386,11 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
       service: "sheets",
       title: "Google Planilhas",
       description: "Leitura e edição de planilhas autorizadas pela conta corporativa."
+    },
+    {
+      service: "analytics",
+      title: "Google Analytics",
+      description: "Dados de tráfego e origem de visitantes do site embrepoli.com.br."
     }
   ];
 
@@ -11520,6 +11590,67 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
                     {canManageIntegrations && (
                       <div className="mt-4 flex flex-wrap gap-2">
                         <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-black text-white transition hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400">
+                          {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
+                        </button>
+                        {serviceStatus?.connected && (
+                          <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => disconnectGoogle(integration.service)} className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-600 transition hover:bg-rose-50 hover:text-rose-700 disabled:opacity-50">
+                            Desconectar
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+
+            {/* Google Analytics */}
+            {googleIntegrations.filter((i) => i.service === "analytics").map((integration) => {
+              const serviceStatus = googleStatus?.[integration.service];
+              const busy = googleBusy === integration.service;
+              const connectedEmail = serviceStatus?.googleEmail?.trim();
+              const initial = connectedEmail?.[0]?.toUpperCase() ?? "A";
+              return (
+                <div key={integration.service} className="overflow-hidden rounded-[26px] border border-amber-100 bg-white shadow-sm">
+                  <div className="flex items-center gap-3 border-b border-amber-100 bg-amber-50 px-4 py-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500">
+                      <svg viewBox="0 0 24 24" className="h-5 w-5 fill-white" aria-hidden="true">
+                        <path d="M4 14h4v6H4v-6Zm6-6h4v12h-4V8Zm6-4h4v16h-4V4Z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-black text-slate-800">{integration.title}</p>
+                      <p className="text-xs font-bold text-slate-400 truncate">{integration.description}</p>
+                    </div>
+                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${serviceStatus?.connected ? "bg-emerald-100 text-emerald-700" : "bg-white/70 text-slate-500"}`}>
+                      {googleLoading ? "…" : serviceStatus?.connected ? "Conectado" : "Desconectado"}
+                    </span>
+                  </div>
+                  <div className="p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100 text-sm font-black text-amber-700">
+                        {initial}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black text-slate-800">
+                          {googleLoading ? "Verificando..." : connectedEmail || (serviceStatus?.connected ? "Email não identificado" : "Nenhuma conta conectada")}
+                        </p>
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">Conectado em {new Date(serviceStatus.connectedAt).toLocaleDateString("pt-BR")}</p>
+                        )}
+                        {serviceStatus?.connectedAt && (
+                          <p className="text-xs font-bold text-slate-400">
+                            Expira ~{new Date(new Date(serviceStatus.connectedAt).getTime() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString("pt-BR")} (estimativa)
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {currentUser.role === "admin" && serviceStatus?.connected && (
+                      <GoogleTokenExpiryAlert label="Google Analytics" connectedAt={serviceStatus?.connectedAt} />
+                    )}
+                    {canManageIntegrations && (
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <button type="button" disabled={Boolean(googleBusy) || googleLoading} onClick={() => connectGoogle(integration.service)} className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-black text-white transition hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400">
                           {busy ? "Abrindo..." : serviceStatus?.connected ? "Reconectar" : "Conectar"}
                         </button>
                         {serviceStatus?.connected && (

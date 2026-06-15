@@ -52,7 +52,7 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 20000):
   }
 }
 
-export type GoogleService = "drive" | "youtube" | "sheets";
+export type GoogleService = "drive" | "youtube" | "sheets" | "analytics";
 
 export type GoogleServiceConnectionStatus = {
   connected: boolean;
@@ -66,6 +66,7 @@ export type GoogleConnectionStatus = {
   drive: GoogleServiceConnectionStatus;
   youtube: GoogleServiceConnectionStatus;
   sheets: GoogleServiceConnectionStatus;
+  analytics: GoogleServiceConnectionStatus;
   canManage: boolean;
 };
 
@@ -275,4 +276,23 @@ export async function listMyYouTubeChannelVideos(
   const data = await fetchJson<{ videos: YouTubeChannelVideo[] }>("/api/google/youtube/uploads");
   onProgress?.({ phase: "stats", done: data.videos.length, total: data.videos.length });
   return data.videos;
+}
+
+export type AnalyticsChannelRow = {
+  source: string;
+  medium: string;
+  sessions: number;
+  users: number;
+};
+
+export type AnalyticsOverview = {
+  rows: AnalyticsChannelRow[];
+  totalSessions: number;
+  totalUsers: number;
+  startDate: string;
+  endDate: string;
+};
+
+export async function getAnalyticsOverview(days = 30): Promise<AnalyticsOverview> {
+  return fetchJson<AnalyticsOverview>(`/api/google/analytics/overview?days=${days}`);
 }

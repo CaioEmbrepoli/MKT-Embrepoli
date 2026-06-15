@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-export type GoogleService = "drive" | "youtube" | "sheets";
+export type GoogleService = "drive" | "youtube" | "sheets" | "analytics";
 
 export const GOOGLE_SCOPES_BY_SERVICE: Record<GoogleService, string[]> = {
   drive: ["https://www.googleapis.com/auth/drive.readonly"],
@@ -11,19 +11,22 @@ export const GOOGLE_SCOPES_BY_SERVICE: Record<GoogleService, string[]> = {
     "https://www.googleapis.com/auth/youtube.force-ssl",
     "https://www.googleapis.com/auth/yt-analytics.readonly"
   ],
-  sheets: ["https://www.googleapis.com/auth/spreadsheets"]
+  sheets: ["https://www.googleapis.com/auth/spreadsheets"],
+  analytics: ["https://www.googleapis.com/auth/analytics.readonly"]
 };
 
 export function normalizeGoogleService(value: string | null | undefined): GoogleService {
   if (value === "youtube") return "youtube";
   if (value === "sheets") return "sheets";
+  if (value === "analytics") return "analytics";
   return "drive";
 }
 
 export const GOOGLE_SERVICE_LABELS: Record<GoogleService, string> = {
   drive: "Google Drive",
   youtube: "YouTube",
-  sheets: "Google Planilhas"
+  sheets: "Google Planilhas",
+  analytics: "Google Analytics"
 };
 
 type GoogleConnectionRow = {
