@@ -10789,6 +10789,72 @@ function buildTrackableLinkUrl(slugValue: string) {
   return `${site}/l/${slugValue}`;
 }
 
+function describeAnalyticsSource(source: string, medium: string): { label: string; description: string } {
+  const s = source.toLowerCase().trim();
+  const m = medium.toLowerCase().trim();
+
+  if (s === "(direct)" && m === "(none)") {
+    return {
+      label: "Acesso direto",
+      description: "A pessoa chegou ao site sem clicar em um link rastreável: digitou o endereço, abriu um favorito, ou clicou em um link de app como WhatsApp/Instagram (que costumam não enviar essa informação)."
+    };
+  }
+
+  if (m === "paid") {
+    if (s === "ig") {
+      return { label: "Instagram (Anúncios)", description: "Tráfego vindo de um anúncio pago no Instagram (Meta Ads)." };
+    }
+    if (s === "fb") {
+      return { label: "Facebook (Anúncios)", description: "Tráfego vindo de um anúncio pago no Facebook (Meta Ads)." };
+    }
+    if (s === "an") {
+      return { label: "Rede de Parceiros Meta (Anúncios)", description: "Tráfego vindo de um anúncio pago exibido em apps e sites parceiros da Meta (Audience Network)." };
+    }
+    return { label: `${source} (Anúncios)`, description: `Tráfego vindo de um anúncio pago via ${source}.` };
+  }
+
+  if (m === "cpc") {
+    return { label: `${source} (Anúncios)`, description: `Tráfego vindo de um anúncio pago com custo por clique via ${source}.` };
+  }
+
+  if (m === "organic") {
+    if (s === "google") {
+      return { label: "Busca no Google", description: "A pessoa encontrou o site pesquisando no Google, sem clicar em anúncio (resultado orgânico)." };
+    }
+    return { label: `Busca orgânica (${source})`, description: `A pessoa encontrou o site através de uma busca orgânica (não paga) em ${source}.` };
+  }
+
+  if (m === "referral") {
+    if (s === "facebook.com" || s === "m.facebook.com") {
+      return { label: "Facebook (post orgânico)", description: "Clique em um link para o site publicado em uma postagem orgânica (não paga) no Facebook." };
+    }
+    if (s === "instagram.com" || s === "l.instagram.com") {
+      return { label: "Instagram (post orgânico)", description: "Clique em um link para o site publicado em uma postagem orgânica (não paga) no Instagram." };
+    }
+    return { label: `Link em ${source}`, description: `A pessoa clicou em um link para o site publicado em ${source}.` };
+  }
+
+  if (m === "email") {
+    return { label: "E-mail", description: "A pessoa clicou em um link recebido por e-mail." };
+  }
+
+  if (m === "social") {
+    return { label: `Rede social (${source})`, description: `Tráfego vindo de uma rede social (${source}), sem detalhes específicos de campanha.` };
+  }
+
+  if (m !== "(none)" && m !== "(not set)") {
+    return {
+      label: `${source} · ${medium}`,
+      description: `Origem identificada por um link rastreável (UTM) criado no app, com origem "${source}" e mídia "${medium}".`
+    };
+  }
+
+  return {
+    label: `${source} / ${medium}`,
+    description: `Origem "${source}" com mídia "${medium}", sem um padrão conhecido. O Google Analytics agrupa assim quando não consegue identificar a origem com mais detalhes.`
+  };
+}
+
 function GoogleAnalyticsPanel() {
   const [data, setData] = useState<AnalyticsOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -10881,12 +10947,21 @@ function GoogleAnalyticsPanel() {
             <div className="rounded-[28px] border border-slate-100 bg-slate-50 p-4">
               <h3 className="font-black">Origem / mídia</h3>
               <div className="mt-3 max-h-72 space-y-1 overflow-y-auto pr-1">
-                {data.rows.map((row, index) => (
-                  <div key={`${row.source}-${row.medium}-${index}`} className="flex items-center justify-between gap-2 rounded-xl bg-white px-3 py-2 text-sm">
-                    <span className="min-w-0 truncate font-black text-slate-700">{row.source} / {row.medium}</span>
-                    <span className="shrink-0 font-bold text-slate-500">{formatNumber(row.sessions)} sessões · {formatNumber(row.users)} usuários</span>
-                  </div>
-                ))}
+                {data.rows.map((row, index) => {
+                  const info = describeAnalyticsSource(row.source, row.medium);
+                  return (
+                    <div key={`${row.source}-${row.medium}-${index}`} className="group relative flex items-center justify-between gap-2 rounded-xl bg-white px-3 py-2 text-sm">
+                      <span className="flex min-w-0 items-center gap-1.5 truncate font-black text-slate-700">
+                        {info.label}
+                        <HelpCircle size={13} className="shrink-0 text-slate-300" />
+                      </span>
+                      <span className="shrink-0 font-bold text-slate-500">{formatNumber(row.sessions)} sessões · {formatNumber(row.users)} usuários</span>
+                      <div className="pointer-events-none absolute bottom-full left-0 z-20 mb-1 w-64 rounded-2xl bg-slate-900 px-3 py-2 text-xs font-bold text-white opacity-0 transition-opacity group-hover:opacity-100">
+                        {info.description}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               {!data.rows.length && <p className="mt-2 text-sm font-bold text-slate-400">Sem dados no período.</p>}
             </div>
