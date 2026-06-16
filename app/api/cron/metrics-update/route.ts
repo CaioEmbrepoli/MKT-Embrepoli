@@ -1,8 +1,43 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { exchangeRefreshToken } from "@/lib/google-server";
+import { fetchInstagramInsightsForMedia, fetchInstagramMedia, type InstagramMetricItem, type MetaRequestContext } from "@/lib/meta-server";
+import { importMetaAdsData } from "@/lib/meta-ads-server";
+import { fetchTikTokUserInfo, getTikTokAccessToken, tiktokEnvironment, type TikTokRequestContext } from "@/lib/tiktok-server";
 
 export const dynamic = "force-dynamic";
+
+type MetricRow = Record<string, any>;
+
+type OrganicUpsertSummary = {
+  posts: number;
+  created: number;
+  updated: number;
+  snapshots: number;
+};
+
+type CronChannelResult = {
+  ok: boolean;
+  orgId?: string;
+  connectionId?: string;
+  label?: string;
+  error?: string | null;
+} & Record<string, unknown>;
+
+const TIKTOK_VIDEO_FIELDS = [
+  "id",
+  "title",
+  "video_description",
+  "duration",
+  "cover_image_url",
+  "embed_link",
+  "share_url",
+  "create_time",
+  "view_count",
+  "like_count",
+  "comment_count",
+  "share_count"
+].join(",");
 
 async function ytFetch(url: string, token: string) {
   const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -22,6 +57,133 @@ function parseDurationSeconds(duration: string): number {
   const match = duration.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
   if (!match) return 0;
   return Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0);
+}
+
+function todayIso() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dateFromTimestamp(value: unknown, fallback = todayIso()) {
+  const date = value ? new Date(String(value)) : null;
+  if (!date || Number.isNaN(date.getTime())) return fallback;
+  return date.toISOString().slice(0, 10);
+}
+
+function maybeText(value: unknown) {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+
+function truncateText(value: string, max = 140) {
+  const chars = [...value.trim()];
+  return chars.length > max ? `${chars.slice(0, max).join("")}...` : chars.join("");
+}
+
+function isMetricChanged(existing: MetricRow, next: MetricRow) {
+  return (
+    Number(existing.reach ?? 0) !== Number(next.reach ?? 0) ||
+    Number(existing.likes ?? 0) !== Number(next.likes ?? 0) ||
+    Number(existing.comments ?? 0) !== Number(next.comments ?? 0) ||
+    Number(existing.shares ?? 0) !== Number(next.shares ?? 0)
+  );
+}
+
+async function resolveChannelId(client: SupabaseClient, organizationId: string, key: "youtube" | "instagram" | "tiktok") {
+  const candidates: Record<typeof key, string[]> = {
+    youtube: ["youtube", "you tube"],
+    instagram: ["instagram", "meta"],
+    tiktok: ["tiktok", "tik tok"]
+  };
+  const { data } = await client
+    .from("channels")
+    .select("id, name")
+    .eq("organization_id", organizationId);
+  const rows = data ?? [];
+  const byId = rows.find((row: any) => String(row.id).toLowerCase() === key);
+  if (byId?.id) return String(byId.id);
+  const found = rows.find((row: any) => {
+    const name = String(row.name ?? "").toLowerCase();
+    return candidates[key].some((candidate) => name.includes(candidate));
+  });
+  return found?.id ? String(found.id) : key;
+}
+
+async function upsertOrganicMetrics(
+  client: SupabaseClient,
+  organizationId: string,
+  rows: MetricRow[]
+): Promise<OrganicUpsertSummary> {
+  if (!rows.length) return { posts: 0, created: 0, updated: 0, snapshots: 0 };
+
+  const externalIds = rows.map((row) => String(row.external_id ?? "")).filter(Boolean);
+  const { data: existingRows, error: existingError } = await client
+    .from("post_metrics")
+    .select("*")
+    .eq("organization_id", organizationId)
+    .in("external_id", externalIds);
+  if (existingError) throw existingError;
+
+  const existingByExternalId = new Map<string, MetricRow>();
+  for (const row of existingRows ?? []) {
+    if (row.external_id) existingByExternalId.set(String(row.external_id), row);
+  }
+
+  const capturedAt = new Date().toISOString();
+  const snapshots: MetricRow[] = [];
+  const payload: MetricRow[] = rows.map((row) => {
+    const existing = existingByExternalId.get(String(row.external_id));
+    const next = {
+      ...row,
+      id: existing?.id ?? row.id ?? crypto.randomUUID(),
+      organization_id: organizationId,
+      post_id: existing?.post_id ?? row.post_id ?? null,
+      campaign_id: existing?.campaign_id ?? row.campaign_id ?? null,
+      product_line_id: existing?.product_line_id ?? row.product_line_id ?? null,
+      vehicle_type_id: existing?.vehicle_type_id ?? row.vehicle_type_id ?? null,
+      content_type_id: existing?.content_type_id ?? row.content_type_id ?? null,
+      funnel_stage_id: existing?.funnel_stage_id ?? row.funnel_stage_id ?? null,
+      clicks: existing?.clicks ?? row.clicks ?? 0,
+      leads: existing?.leads ?? row.leads ?? 0,
+      notes: existing?.notes ?? row.notes ?? "",
+      learning: existing?.learning ?? row.learning ?? ""
+    };
+
+    if (existing && isMetricChanged(existing, next)) {
+      snapshots.push({
+        id: crypto.randomUUID(),
+        organization_id: organizationId,
+        metric_id: existing.id,
+        captured_at: capturedAt,
+        reach: existing.reach ?? 0,
+        likes: existing.likes ?? 0,
+        comments: existing.comments ?? 0,
+        shares: existing.shares ?? 0,
+        clicks: existing.clicks ?? 0,
+        leads: existing.leads ?? 0
+      });
+    }
+
+    return next;
+  });
+
+  if (snapshots.length) {
+    const { error } = await client.from("post_metric_snapshots").insert(snapshots);
+    if (error) throw error;
+  }
+
+  for (let i = 0; i < payload.length; i += 50) {
+    const { error } = await client
+      .from("post_metrics")
+      .upsert(payload.slice(i, i + 50), { onConflict: "external_id" });
+    if (error) throw error;
+  }
+
+  return {
+    posts: rows.length,
+    created: payload.filter((row) => !existingByExternalId.has(String(row.external_id))).length,
+    updated: payload.filter((row) => existingByExternalId.has(String(row.external_id))).length,
+    snapshots: snapshots.length
+  };
 }
 
 type VideoAnalytics = {
@@ -54,7 +216,7 @@ function mergeAnalyticsRows(map: Map<string, VideoAnalytics>, data: any, fields:
 
 async function fetchYouTubeAnalyticsByVideo(videoIds: string[], accessToken: string) {
   const analytics = new Map<string, VideoAnalytics>();
-  const endDate = new Date().toISOString().slice(0, 10);
+  const endDate = todayIso();
   for (let i = 0; i < videoIds.length; i += 50) {
     const chunk = videoIds.slice(i, i + 50);
     if (!chunk.length) continue;
@@ -87,7 +249,7 @@ async function fetchYouTubeAnalyticsByVideo(videoIds: string[], accessToken: str
         impressionClickThroughRate: "impressionClickThroughRate"
       });
     } catch {
-      // Algumas contas/canais não retornam impressões por vídeo. Mantém o restante das métricas.
+      // Nem todo canal libera impressoes por video.
     }
   }
   return analytics;
@@ -142,9 +304,332 @@ async function fetchYouTubeVideos(accessToken: string) {
   return videos.map((video) => ({ ...video, ...(analytics.get(video.videoId) ?? {}) }));
 }
 
+async function runYouTube(client: SupabaseClient): Promise<CronChannelResult[]> {
+  const { data: connections, error } = await client
+    .from("google_connections")
+    .select("*")
+    .eq("service", "youtube");
+  if (error) throw error;
+  if (!connections?.length) return [{ ok: true, label: "youtube", skipped: true, reason: "Nenhuma conexao YouTube ativa." }];
+
+  const results: CronChannelResult[] = [];
+  for (const conn of connections) {
+    try {
+      let accessToken: string = conn.access_token ?? "";
+      const expiresAt = new Date(conn.expires_at || 0).getTime();
+      if (!accessToken || expiresAt <= Date.now() + 60_000) {
+        const refreshed = await exchangeRefreshToken(conn.refresh_token);
+        accessToken = refreshed.accessToken;
+        await client.from("google_connections").update({
+          access_token: refreshed.accessToken,
+          expires_at: refreshed.expiresAt,
+          updated_at: new Date().toISOString()
+        }).eq("id", conn.id);
+      }
+
+      const videos = await fetchYouTubeVideos(accessToken);
+      const channelId = await resolveChannelId(client, conn.organization_id, "youtube");
+      const { data: posts } = await client
+        .from("posts")
+        .select("id, published_video_id")
+        .eq("organization_id", conn.organization_id);
+      const postByVideoId = new Map(
+        (posts ?? []).filter((post: any) => post.published_video_id).map((post: any) => [String(post.published_video_id), post])
+      );
+
+      const rows = videos.map((video) => {
+        const linkedPost = postByVideoId.get(video.videoId);
+        return {
+          id: crypto.randomUUID(),
+          organization_id: conn.organization_id,
+          external_id: `yt:${video.videoId}`,
+          post_id: linkedPost?.id ?? null,
+          post_title: video.title || "Video YouTube",
+          channel_id: channelId,
+          metric_date: video.publishedAt || todayIso(),
+          reach: video.viewCount,
+          likes: video.likeCount,
+          comments: video.commentCount,
+          shares: 0,
+          clicks: 0,
+          leads: 0,
+          notes: "",
+          learning: "",
+          video_type: video.isShort ? "short" : "video",
+          privacy_status: video.privacyStatus,
+          watch_time_minutes: video.watchTimeMinutes ?? null,
+          average_view_duration_seconds: video.averageViewDurationSeconds ?? null,
+          average_view_percentage: video.averageViewPercentage ?? null,
+          subscribers_gained: video.subscribersGained ?? null,
+          subscribers_lost: video.subscribersLost ?? null,
+          impressions: video.impressions ?? null,
+          impression_click_through_rate: video.impressionClickThroughRate ?? null
+        };
+      });
+      const summary = await upsertOrganicMetrics(client, conn.organization_id, rows);
+      results.push({ ok: true, orgId: conn.organization_id, connectionId: conn.id, label: conn.google_email, ...summary });
+    } catch (err) {
+      results.push({
+        ok: false,
+        orgId: conn.organization_id,
+        connectionId: conn.id,
+        label: conn.google_email,
+        error: err instanceof Error ? err.message : "Erro desconhecido no YouTube."
+      });
+    }
+  }
+  return results;
+}
+
+async function runInstagram(client: SupabaseClient): Promise<CronChannelResult[]> {
+  const { data: connections, error } = await client
+    .from("meta_connections")
+    .select("*")
+    .eq("service", "instagram");
+  if (error) throw error;
+  if (!connections?.length) return [{ ok: true, label: "instagram", skipped: true, reason: "Nenhuma conexao Instagram ativa." }];
+
+  const results: CronChannelResult[] = [];
+  for (const conn of connections) {
+    try {
+      if (!conn.access_token || !conn.instagram_account_id) throw new Error("Instagram sem token ou conta vinculada.");
+      if (conn.expires_at && new Date(conn.expires_at).getTime() < Date.now()) {
+        throw new Error("Token do Instagram expirado. Reconecte ou aguarde o cron de refresh.");
+      }
+      const media = await fetchInstagramMedia(conn.access_token, conn.instagram_account_id);
+      const metrics: InstagramMetricItem[] = await Promise.all(media.map(async (item) => ({
+        ...item,
+        ...await fetchInstagramInsightsForMedia(conn.access_token, item)
+      })));
+      const channelId = await resolveChannelId(client, conn.organization_id, "instagram");
+      const rows = metrics.map((item) => {
+        const caption = truncateText(item.caption || "Post Instagram");
+        const reach = item.reach || item.impressions || item.views || 0;
+        return {
+          id: crypto.randomUUID(),
+          organization_id: conn.organization_id,
+          external_id: `instagram:${item.id}`,
+          post_title: caption || "Post Instagram",
+          channel_id: channelId,
+          metric_date: dateFromTimestamp(item.timestamp),
+          reach,
+          likes: item.likeCount,
+          comments: item.commentsCount,
+          shares: item.shares,
+          clicks: 0,
+          leads: 0,
+          notes: "Importado do Instagram / Meta.",
+          learning: "",
+          video_type: item.mediaType?.toLowerCase().includes("video") || item.mediaType?.toLowerCase().includes("reel") ? "short" : null,
+          privacy_status: "public",
+          impressions: item.impressions || null,
+          thumbnail_url: maybeText(item.thumbnailUrl) ?? maybeText(item.mediaUrl),
+          source_url: maybeText(item.permalink),
+          embed_url: maybeText(item.permalink)
+        };
+      });
+      const summary = await upsertOrganicMetrics(client, conn.organization_id, rows);
+      results.push({ ok: true, orgId: conn.organization_id, connectionId: conn.id, label: conn.username, ...summary });
+    } catch (err) {
+      results.push({
+        ok: false,
+        orgId: conn.organization_id,
+        connectionId: conn.id,
+        label: conn.username,
+        error: err instanceof Error ? err.message : "Erro desconhecido no Instagram."
+      });
+    }
+  }
+  return results;
+}
+
+function normalizeTikTokVideo(item: any) {
+  return {
+    id: String(item.id || ""),
+    title: String(item.title || item.video_description || "Video TikTok"),
+    description: String(item.video_description || item.title || ""),
+    coverImageUrl: String(item.cover_image_url || ""),
+    shareUrl: String(item.share_url || ""),
+    embedLink: String(item.embed_link || ""),
+    createTime: Number(item.create_time || 0),
+    viewCount: Number(item.view_count || 0),
+    likeCount: Number(item.like_count || 0),
+    commentCount: Number(item.comment_count || 0),
+    shareCount: Number(item.share_count || 0)
+  };
+}
+
+async function fetchTikTokVideos(accessToken: string) {
+  const videos: any[] = [];
+  let cursor: number | undefined;
+  let hasMore = true;
+  let pagesFetched = 0;
+  let stoppedByLimit = false;
+  const seenCursors = new Set<number>();
+
+  while (hasMore && pagesFetched < 50 && videos.length < 1000) {
+    const response = await fetch(`https://open.tiktokapis.com/v2/video/list/?fields=${encodeURIComponent(TIKTOK_VIDEO_FIELDS)}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        max_count: 20,
+        ...(cursor != null ? { cursor } : {})
+      })
+    });
+    const data = await response.json();
+    if (!response.ok || (data?.error?.code && data.error.code !== "ok")) {
+      throw new Error(data?.error?.message || data?.error?.code || "Nao foi possivel listar videos do TikTok.");
+    }
+    videos.push(...(data?.data?.videos ?? []));
+    pagesFetched += 1;
+    hasMore = Boolean(data?.data?.has_more);
+    const nextCursor = data?.data?.cursor;
+    if (nextCursor == null) {
+      hasMore = false;
+    } else if (seenCursors.has(Number(nextCursor))) {
+      stoppedByLimit = true;
+      hasMore = false;
+    } else {
+      cursor = Number(nextCursor);
+      seenCursors.add(cursor);
+    }
+  }
+
+  if (hasMore && (pagesFetched >= 50 || videos.length >= 1000)) stoppedByLimit = true;
+  return {
+    videos: videos.slice(0, 1000).map(normalizeTikTokVideo).filter((item) => item.id),
+    importSummary: { totalFetched: videos.length, pagesFetched, hasMore, stoppedByLimit }
+  };
+}
+
+async function runTikTok(client: SupabaseClient): Promise<CronChannelResult[]> {
+  const environment = tiktokEnvironment();
+  const { data: connections, error } = await client
+    .from("tiktok_connections")
+    .select("*")
+    .eq("environment", environment);
+  if (error) throw error;
+  if (!connections?.length) return [{ ok: true, label: "tiktok", skipped: true, reason: `Nenhuma conexao TikTok ${environment} ativa.` }];
+
+  const results: CronChannelResult[] = [];
+  for (const conn of connections) {
+    try {
+      const context: TikTokRequestContext = {
+        userId: conn.connected_by || "cron",
+        organizationId: conn.organization_id,
+        role: "admin",
+        active: true,
+        service: client
+      };
+      const accessToken = await getTikTokAccessToken(context);
+      const [profile, videoResult] = await Promise.all([
+        fetchTikTokUserInfo(accessToken).catch(() => null),
+        fetchTikTokVideos(accessToken)
+      ]);
+      const channelId = await resolveChannelId(client, conn.organization_id, "tiktok");
+      const rows = videoResult.videos.map((video) => ({
+        id: crypto.randomUUID(),
+        organization_id: conn.organization_id,
+        external_id: `tiktok:${video.id}`,
+        post_title: video.title || video.description || "Video TikTok",
+        channel_id: channelId,
+        metric_date: video.createTime ? new Date(video.createTime * 1000).toISOString().slice(0, 10) : todayIso(),
+        reach: video.viewCount,
+        likes: video.likeCount,
+        comments: video.commentCount,
+        shares: video.shareCount,
+        clicks: 0,
+        leads: 0,
+        notes: "Importado do TikTok.",
+        learning: "",
+        video_type: "video",
+        privacy_status: "public",
+        thumbnail_url: maybeText(video.coverImageUrl),
+        source_url: maybeText(video.shareUrl),
+        embed_url: maybeText(video.embedLink)
+      }));
+      const summary = await upsertOrganicMetrics(client, conn.organization_id, rows);
+      results.push({
+        ok: true,
+        orgId: conn.organization_id,
+        connectionId: conn.id,
+        label: conn.display_name,
+        profile: profile ? { displayName: profile.display_name, videoCount: Number(profile.video_count || 0) } : null,
+        importSummary: videoResult.importSummary,
+        ...summary
+      });
+    } catch (err) {
+      results.push({
+        ok: false,
+        orgId: conn.organization_id,
+        connectionId: conn.id,
+        label: conn.display_name,
+        error: err instanceof Error ? err.message : "Erro desconhecido no TikTok."
+      });
+    }
+  }
+  return results;
+}
+
+async function runMetaAds(client: SupabaseClient): Promise<CronChannelResult[]> {
+  const { data: connections, error } = await client
+    .from("meta_connections")
+    .select("*")
+    .eq("service", "ads");
+  if (error) throw error;
+  if (!connections?.length) return [{ ok: true, label: "metaAds", skipped: true, reason: "Nenhuma conexao Meta Ads ativa." }];
+
+  const results: CronChannelResult[] = [];
+  for (const conn of connections) {
+    try {
+      const context: MetaRequestContext = {
+        userId: conn.connected_by || "cron",
+        organizationId: conn.organization_id,
+        role: "admin",
+        active: true,
+        service: client
+      };
+      const summary = await importMetaAdsData(context);
+      results.push({
+        ok: true,
+        orgId: conn.organization_id,
+        connectionId: conn.id,
+        label: conn.ad_account_name || conn.username || conn.ad_account_id,
+        ...summary
+      });
+    } catch (err) {
+      results.push({
+        ok: false,
+        orgId: conn.organization_id,
+        connectionId: conn.id,
+        label: conn.ad_account_name || conn.username || conn.ad_account_id,
+        error: err instanceof Error ? err.message : "Erro desconhecido no Meta Ads."
+      });
+    }
+  }
+  return results;
+}
+
+function summarize(results: Record<string, CronChannelResult[]>) {
+  const summary: Record<string, { ok: number; failed: number; skipped: number; processed: number }> = {};
+  for (const [key, items] of Object.entries(results)) {
+    summary[key] = {
+      ok: items.filter((item) => item.ok && !item.skipped).length,
+      failed: items.filter((item) => !item.ok).length,
+      skipped: items.filter((item) => item.skipped).length,
+      processed: items.length
+    };
+  }
+  return summary;
+}
+
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && request.headers.get("authorization") !== `Bearer ${cronSecret}`) {
+  const isVercelCron = request.headers.get("x-vercel-cron") === "1";
+  if (cronSecret && request.headers.get("authorization") !== `Bearer ${cronSecret}` && !isVercelCron) {
     return NextResponse.json({ error: "Nao autorizado." }, { status: 401 });
   }
 
@@ -157,140 +642,38 @@ export async function GET(request: Request) {
   const adminClient = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
+  const executedAt = new Date().toISOString();
 
-  const { data: connections, error: connError } = await adminClient
-    .from("google_connections")
-    .select("*")
-    .eq("service", "youtube");
+  const results: Record<string, CronChannelResult[]> = {
+    youtube: [],
+    instagram: [],
+    tiktok: [],
+    metaAds: []
+  };
 
-  if (connError) return NextResponse.json({ error: connError.message }, { status: 500 });
-  if (!connections?.length) return NextResponse.json({ ok: true, results: [], message: "Nenhuma conexao YouTube ativa." });
-
-  const results = [];
-
-  for (const conn of connections) {
+  for (const [key, runner] of [
+    ["youtube", runYouTube],
+    ["instagram", runInstagram],
+    ["tiktok", runTikTok],
+    ["metaAds", runMetaAds]
+  ] as const) {
     try {
-      // Renovar access token se necessário
-      let accessToken: string = conn.access_token ?? "";
-      const expiresAt = new Date(conn.expires_at || 0).getTime();
-      if (!accessToken || expiresAt <= Date.now() + 60_000) {
-        const refreshed = await exchangeRefreshToken(conn.refresh_token);
-        accessToken = refreshed.accessToken;
-        await adminClient.from("google_connections").update({
-          access_token: refreshed.accessToken,
-          expires_at: refreshed.expiresAt,
-          updated_at: new Date().toISOString()
-        }).eq("id", conn.id);
-      }
-
-      const videos = await fetchYouTubeVideos(accessToken);
-
-      // Carregar métricas e posts existentes da org
-      const [{ data: existingMetrics }, { data: posts }] = await Promise.all([
-        adminClient.from("post_metrics").select("*").eq("organization_id", conn.organization_id),
-        adminClient.from("posts").select("id, published_video_id").eq("organization_id", conn.organization_id)
-      ]);
-
-      const byExt = new Map((existingMetrics ?? []).filter(m => m.external_id).map(m => [m.external_id as string, m]));
-      const byPostId = new Map(
-        (existingMetrics ?? []).filter(m => !m.external_id && m.post_id).map(m => [m.post_id as string, m])
-      );
-      const postByVideoId = new Map(
-        (posts ?? []).filter(p => p.published_video_id).map(p => [p.published_video_id as string, p])
-      );
-
-      const capturedAt = new Date().toISOString();
-      const snapshots: Record<string, unknown>[] = [];
-      const upsertRows: Record<string, unknown>[] = [];
-
-      for (const v of videos) {
-        const externalId = `yt:${v.videoId}`;
-        const linkedPost = postByVideoId.get(v.videoId);
-        const existing = byExt.get(externalId) ?? (linkedPost ? byPostId.get(linkedPost.id) : undefined);
-
-        // Snapshot dos valores ANTIGOS (só se houve mudança)
-        if (
-          existing &&
-          (existing.reach !== v.viewCount || existing.likes !== v.likeCount || existing.comments !== v.commentCount)
-        ) {
-          snapshots.push({
-            id: crypto.randomUUID(),
-            organization_id: conn.organization_id,
-            metric_id: existing.id,
-            captured_at: capturedAt,
-            reach: existing.reach ?? 0,
-            likes: existing.likes ?? 0,
-            comments: existing.comments ?? 0,
-            shares: existing.shares ?? 0,
-            clicks: existing.clicks ?? 0,
-            leads: existing.leads ?? 0
-          });
-        }
-
-        upsertRows.push({
-          id: existing?.id ?? crypto.randomUUID(),
-          organization_id: conn.organization_id,
-          external_id: externalId,
-          post_id: linkedPost?.id ?? existing?.post_id ?? null,
-          post_title: v.title,
-          metric_date: v.publishedAt,
-          reach: v.viewCount,
-          likes: v.likeCount,
-          comments: v.commentCount,
-          shares: existing?.shares ?? 0,
-          clicks: existing?.clicks ?? 0,
-          leads: existing?.leads ?? 0,
-          notes: existing?.notes ?? "",
-          learning: existing?.learning ?? "",
-          video_type: v.isShort ? "short" : "video",
-          privacy_status: v.privacyStatus,
-          watch_time_minutes: v.watchTimeMinutes ?? existing?.watch_time_minutes ?? null,
-          average_view_duration_seconds: v.averageViewDurationSeconds ?? existing?.average_view_duration_seconds ?? null,
-          average_view_percentage: v.averageViewPercentage ?? existing?.average_view_percentage ?? null,
-          subscribers_gained: v.subscribersGained ?? existing?.subscribers_gained ?? null,
-          subscribers_lost: v.subscribersLost ?? existing?.subscribers_lost ?? null,
-          impressions: v.impressions ?? existing?.impressions ?? null,
-          impression_click_through_rate: v.impressionClickThroughRate ?? existing?.impression_click_through_rate ?? null,
-          channel_id: existing?.channel_id ?? null,
-          campaign_id: existing?.campaign_id ?? null,
-          product_line_id: existing?.product_line_id ?? null,
-          vehicle_type_id: existing?.vehicle_type_id ?? null,
-          content_type_id: existing?.content_type_id ?? null,
-          funnel_stage_id: existing?.funnel_stage_id ?? null
-        });
-      }
-
-      // Inserir snapshots em batch
-      if (snapshots.length) {
-        const { error: snapError } = await adminClient.from("post_metric_snapshots").insert(snapshots);
-        if (snapError) console.error(`[metrics-cron] snapshot error org ${conn.organization_id}:`, snapError.message);
-      }
-
-      // Upsert métricas em batches de 50
-      let upsertError: string | null = null;
-      for (let i = 0; i < upsertRows.length; i += 50) {
-        const { error } = await adminClient
-          .from("post_metrics")
-          .upsert(upsertRows.slice(i, i + 50), { onConflict: "external_id" });
-        if (error) { upsertError = error.message; break; }
-      }
-
-      results.push({
-        orgId: conn.organization_id,
-        email: conn.google_email,
-        videos: videos.length,
-        snapshots: snapshots.length,
-        error: upsertError
-      });
+      results[key] = await runner(adminClient);
     } catch (err) {
-      results.push({
-        orgId: conn.organization_id,
-        error: err instanceof Error ? err.message : "Erro desconhecido"
-      });
+      results[key] = [{
+        ok: false,
+        label: key,
+        error: err instanceof Error ? err.message : `Erro desconhecido em ${key}.`
+      }];
     }
   }
 
-  return NextResponse.json({ ok: true, executedAt: new Date().toISOString(), results });
+  return NextResponse.json({
+    ok: Object.values(results).flat().every((item) => item.ok),
+    executedAt,
+    summary: summarize(results),
+    results
+  });
 }
 
 export const POST = GET;
