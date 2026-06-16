@@ -7042,7 +7042,7 @@ function ReviewDetailPanel({
       </div>
 
       {/* Image */}
-      {targetAsset.type === "foto" ? (
+      {targetAsset.type === "foto" && targetAsset.source !== "external" ? (
         <button type="button" onClick={() => openMediaPreview(targetAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
           <img
             src={targetAsset.previewUrl || targetAsset.url}
