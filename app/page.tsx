@@ -12800,12 +12800,13 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
       const existing = byExt.get(externalId);
       if (existing) updated++; else created++;
       const caption = (item.caption || "").trim();
+      const captionChars = [...caption];
       const reach = item.reach || item.impressions || item.views || 0;
       return {
         id: existing?.id ?? crypto.randomUUID(),
         externalId,
         postId: existing?.postId,
-        postTitle: caption ? (caption.length > 140 ? `${caption.slice(0, 140)}...` : caption) : "Post Instagram",
+        postTitle: captionChars.length > 140 ? `${captionChars.slice(0, 140).join("")}...` : (caption || "Post Instagram"),
         channelId: instagramChannelId,
         campaignId: existing?.campaignId ?? "",
         productLineId: existing?.productLineId ?? "",
@@ -13615,12 +13616,13 @@ function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadDa
         if (existing) updated += 1;
         else created += 1;
         const caption = (item.caption || "").trim();
+        const captionChars = [...caption];
         const reach = item.reach || item.impressions || item.views || 0;
         return {
           id: existing?.id ?? crypto.randomUUID(),
           externalId,
           postId: existing?.postId,
-          postTitle: caption ? (caption.length > 140 ? `${caption.slice(0, 140)}...` : caption) : "Post Instagram",
+          postTitle: captionChars.length > 140 ? `${captionChars.slice(0, 140).join("")}...` : (caption || "Post Instagram"),
           channelId: instagramChannelId,
           campaignId: existing?.campaignId ?? "",
           productLineId: existing?.productLineId ?? "",
