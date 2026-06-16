@@ -7044,7 +7044,7 @@ function ReviewDetailPanel({
       {/* Image / Video */}
       {targetAsset.source === "external" ? (
         <>
-          {driveFileId && (
+          {driveFileId && targetAsset.type !== "video" && (
             <img
               key={targetAsset.id}
               src={`https://drive.google.com/thumbnail?id=${driveFileId}&sz=w400`}
@@ -7079,7 +7079,7 @@ function ReviewDetailPanel({
             alt={targetAsset.name}
             onLoad={(e) => setImgAspect(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)}
             style={imgAspect ? { aspectRatio: imgAspect } : undefined}
-            className="w-full max-h-[85vh] object-contain bg-slate-50 transition-all duration-300 rounded-3xl"
+            className="w-full max-h-[60vh] object-contain bg-slate-50 transition-all duration-300 rounded-3xl"
           />
         </button>
       ) : targetAsset.type === "video" ? (
