@@ -163,7 +163,8 @@ import {
   saveFeedback,
   loadFeedbacks,
   replyFeedback,
-  deleteFeedback
+  deleteFeedback,
+  normalizePhone
 } from "@/lib/supabase-data";
 import type {
   Ad,
@@ -226,7 +227,9 @@ import type {
   CallLog,
   FeedbackKind,
   AppFeedback,
-  PostPublication
+  PostPublication,
+  Visitor,
+  Person
 } from "@/lib/types";
 import {
   Area,
@@ -1115,6 +1118,8 @@ export default function Home() {
   const [sessionUserId, setSessionUserId] = useState("");
   const [channels, setChannels] = useState<Channel[]>([]);
   const [trackableLinks, setTrackableLinks] = useState<TrackableLink[]>([]);
+  const [visitors, setVisitors] = useState<Visitor[]>([]);
+  const [persons, setPersons] = useState<Person[]>([]);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
@@ -1490,6 +1495,8 @@ export default function Home() {
     setSalesFunnelStages(data.salesFunnelStages);
     setCallSchedules(data.callSchedules);
     setPostPublications(data.postPublications);
+    setVisitors(data.visitors);
+    setPersons(data.persons);
     setNotifications(data.notifications);
     const { data: authData } = await supabase.auth.getUser();
     const authUserId = authData.user?.id ?? sessionUserId;
@@ -2625,6 +2632,8 @@ export default function Home() {
               channels={channels}
               trackableLinks={trackableLinks}
               setTrackableLinks={syncTrackableLinks}
+              visitors={visitors}
+              persons={persons}
               productLines={productLines}
               vehicleTypes={vehicleTypes}
               contentTypes={contentTypes}
@@ -9168,6 +9177,8 @@ function Metrics({
   channels,
   trackableLinks,
   setTrackableLinks,
+  visitors,
+  persons,
   productLines,
   vehicleTypes,
   contentTypes,
@@ -9197,6 +9208,8 @@ function Metrics({
   channels: Channel[];
   trackableLinks: TrackableLink[];
   setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
+  visitors: Visitor[];
+  persons: Person[];
   productLines: ProductLine[];
   vehicleTypes: VehicleType[];
   contentTypes: ContentType[];
@@ -9221,6 +9234,7 @@ function Metrics({
 }) {
   const [period, setPeriod] = useState("all");
   const [metricsMode, setMetricsMode] = useState<"organic" | "ads" | "links">("organic");
+  const [origemSubTab, setOrigemSubTab] = useState<"links" | "script" | "visitantes" | "leads">("links");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
   const [metaAdsImportOpen, setMetaAdsImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
@@ -9509,7 +9523,7 @@ function Metrics({
         {[
           ["organic", "Orgânico"],
           ["ads", "Anúncios"],
-          ["links", "Links Rastreáveis"]
+          ["links", "Origem"]
         ].map(([id, label]) => (
           <button
             key={id}
@@ -9532,7 +9546,14 @@ function Metrics({
           adAlerts={adAlerts}
         />
       ) : metricsMode === "links" ? (
-        <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} />
+        <OrigemSection
+          trackableLinks={trackableLinks}
+          setTrackableLinks={setTrackableLinks}
+          visitors={visitors}
+          persons={persons}
+          subTab={origemSubTab}
+          setSubTab={setOrigemSubTab}
+        />
       ) : (
       <>
       <div className="mb-4 -mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1">
@@ -11088,6 +11109,184 @@ function GoogleAnalyticsPanel() {
             </div>
           </div>
         </>
+      )}
+    </div>
+  );
+}
+
+function OrigemSection({
+  trackableLinks,
+  setTrackableLinks,
+  visitors,
+  persons,
+  subTab,
+  setSubTab
+}: {
+  trackableLinks: TrackableLink[];
+  setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
+  visitors: Visitor[];
+  persons: Person[];
+  subTab: "links" | "script" | "visitantes" | "leads";
+  setSubTab: Dispatch<SetStateAction<"links" | "script" | "visitantes" | "leads">>;
+}) {
+  const appUrl = typeof window !== "undefined" ? window.location.origin : "https://seu-app.vercel.app";
+  const trackingScript = `(function(){
+  var ORG='embrepoli';
+  var API='${appUrl}/api/tracking/visit';
+  var vid=localStorage.getItem('_emb_vid');
+  if(!vid){vid='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});localStorage.setItem('_emb_vid',vid);}
+  var p=new URLSearchParams(location.search);
+  fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitorId:vid,organizationId:ORG,utmSource:p.get('utm_source'),utmMedium:p.get('utm_medium'),utmCampaign:p.get('utm_campaign'),fbclid:p.get('fbclid'),gclid:p.get('gclid'),referrer:document.referrer,page:location.pathname})}).catch(function(){});
+})();`;
+
+  const visitorsBySource = visitors.reduce<Record<string, number>>((acc, v) => {
+    const key = v.firstTouchSource ?? "(direto)";
+    acc[key] = (acc[key] ?? 0) + 1;
+    return acc;
+  }, {});
+  const sourceEntries = Object.entries(visitorsBySource).sort((a, b) => b[1] - a[1]);
+
+  const channelColors: Record<string, string> = {
+    whatsapp: "green",
+    instagram: "purple",
+    facebook: "blue",
+    google: "cyan",
+    tiktok: "slate",
+    indicacao: "amber",
+    outro: "slate"
+  };
+
+  const [scriptCopied, setScriptCopied] = useState(false);
+  const copyScript = () => {
+    void navigator.clipboard.writeText(trackingScript).then(() => {
+      setScriptCopied(true);
+      setTimeout(() => setScriptCopied(false), 2000);
+    });
+  };
+
+  return (
+    <div>
+      <div className="mb-5 flex w-fit rounded-2xl bg-slate-100 p-1">
+        {(
+          [
+            ["links", "Links"],
+            ["script", "Script de Tracking"],
+            ["visitantes", "Visitantes"],
+            ["leads", "Leads"]
+          ] as const
+        ).map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setSubTab(id)}
+            className={`rounded-xl px-3 py-1.5 text-sm font-black transition ${subTab === id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === "links" && (
+        <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} />
+      )}
+
+      {subTab === "script" && (
+        <div className="space-y-4">
+          <div>
+            <p className="mb-2 text-sm font-black text-slate-700">Como instalar</p>
+            <ol className="space-y-1 text-sm font-bold text-slate-500 list-decimal list-inside">
+              <li>Acesse o painel da Tray → Configurações → Scripts personalizados (ou Google Tag Manager)</li>
+              <li>Adicione um novo tag/script do tipo "HTML personalizado"</li>
+              <li>Cole o código abaixo e configure para disparar em todas as páginas</li>
+            </ol>
+          </div>
+          <div className="relative">
+            <pre className="overflow-x-auto rounded-2xl bg-slate-900 p-4 text-xs text-emerald-300 leading-relaxed whitespace-pre-wrap break-all">
+              {trackingScript}
+            </pre>
+            <button
+              onClick={copyScript}
+              className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-slate-700 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-600 transition"
+            >
+              {scriptCopied ? <><Check size={13} className="text-emerald-400" /> Copiado</> : <><Copy size={13} /> Copiar</>}
+            </button>
+          </div>
+          <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3">
+            <p className="text-xs font-black text-amber-700">Endpoint do webhook para WhatsApp Business API e Meta Lead Ads:</p>
+            <code className="mt-1 block text-xs font-bold text-amber-900 break-all">{appUrl}/api/tracking/webhook</code>
+            <p className="mt-1 text-xs font-bold text-amber-600">Configure a variável TRACKING_WEBHOOK_SECRET no Vercel para proteger o endpoint.</p>
+          </div>
+        </div>
+      )}
+
+      {subTab === "visitantes" && (
+        <div>
+          <div className="mb-3 flex items-center gap-3">
+            <p className="text-sm font-black text-slate-700">Total de visitantes únicos</p>
+            <Badge tone="blue">{visitors.length}</Badge>
+          </div>
+          {sourceEntries.length > 0 ? (
+            <div className="space-y-2">
+              {sourceEntries.map(([source, count]) => {
+                const pct = visitors.length > 0 ? Math.round((count / visitors.length) * 100) : 0;
+                return (
+                  <div key={source} className="flex items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-black text-slate-700 capitalize">{source}</span>
+                        <span className="text-sm font-black text-blue-700">{count} visitante{count !== 1 ? "s" : ""}</span>
+                      </div>
+                      <div className="h-1.5 w-full rounded-full bg-slate-200">
+                        <div className="h-1.5 rounded-full bg-blue-500 transition-all" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                    <span className="text-xs font-black text-slate-400 w-8 text-right">{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-slate-50 p-8 text-center">
+              <p className="text-sm font-black text-slate-400">Nenhum visitante registrado ainda.</p>
+              <p className="mt-1 text-xs font-bold text-slate-400">Instale o script de tracking na aba "Script de Tracking".</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === "leads" && (
+        <div>
+          <div className="mb-3 flex items-center gap-3">
+            <p className="text-sm font-black text-slate-700">Leads capturados automaticamente</p>
+            <Badge tone="blue">{persons.length}</Badge>
+          </div>
+          {persons.length > 0 ? (
+            <div className="space-y-2">
+              {persons.map((person) => {
+                const phone = person.identifiers.find((i) => i.type === "phone")?.value ?? null;
+                const maskedPhone = phone ? `${phone.slice(0, 4)}****${phone.slice(-4)}` : null;
+                const tone = (channelColors[person.channel] ?? "slate") as "green" | "purple" | "blue" | "cyan" | "slate" | "amber";
+                return (
+                  <div key={person.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-slate-50 p-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-black text-slate-700">{person.name ?? maskedPhone ?? "Sem identificação"}</p>
+                      {maskedPhone && person.name && <p className="text-xs font-bold text-slate-400">{maskedPhone}</p>}
+                      {person.channelDetail && <p className="text-xs font-bold text-slate-400">{person.channelDetail}</p>}
+                    </div>
+                    <Badge tone={tone}>{person.channel}</Badge>
+                    {person.visitorId && <Badge tone="green">Atribuído</Badge>}
+                    <span className="text-xs font-bold text-slate-400">{new Date(person.createdAt).toLocaleDateString("pt-BR")}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-slate-50 p-8 text-center">
+              <p className="text-sm font-black text-slate-400">Nenhum lead capturado ainda.</p>
+              <p className="mt-1 text-xs font-bold text-slate-400">Leads são criados automaticamente via webhook quando alguém entra em contato.</p>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -19672,6 +19871,7 @@ function CommentImportUnifiedModal({
     </CenteredModal>
   );
 }
+
 
 
 

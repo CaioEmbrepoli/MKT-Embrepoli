@@ -42,7 +42,10 @@ import type {
   CallLog,
   CallFrequency,
   SalesFunnelStage,
-  PostPublication
+  PostPublication,
+  Visitor,
+  Person,
+  PersonIdentifier
 } from "./types";
 
 export type AppData = {
@@ -80,6 +83,8 @@ export type AppData = {
   callSchedules: CallSchedule[];
   postPublications: PostPublication[];
   trackableLinks: TrackableLink[];
+  visitors: Visitor[];
+  persons: Person[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -154,7 +159,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adsData,
     adInsightsDailyData,
     adAlertsData,
-    trackableLinksData
+    trackableLinksData,
+    visitorsData,
+    personsData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("profile_areas").select("*").eq("organization_id", organizationId),
@@ -197,7 +204,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("ads").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }),
     client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
-    client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false })
+    client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
+    client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false }).limit(500),
+    client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(200)
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -243,7 +252,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     salesFunnelStages: (salesFunnelStagesData.data ?? []).map(mapSalesFunnelStage),
     callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule),
     postPublications: (postPublicationsData.data ?? []).map(mapPostPublication),
-    trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink)
+    trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink),
+    visitors: (visitorsData.data ?? []).map(mapVisitor),
+    persons: (personsData.data ?? []).map(mapPerson)
   };
 }
 
@@ -1969,4 +1980,53 @@ function mapPostPublication(row: any): PostPublication {
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
   };
+}
+
+function mapVisitor(row: Record<string, unknown>): Visitor {
+  return {
+    id: String(row.id ?? ""),
+    organizationId: String(row.organization_id ?? ""),
+    firstTouchSource: (row.first_touch_source as string) ?? null,
+    firstTouchMedium: (row.first_touch_medium as string) ?? null,
+    firstTouchCampaign: (row.first_touch_campaign as string) ?? null,
+    firstTouchReferrer: (row.first_touch_referrer as string) ?? null,
+    firstTouchFbclid: (row.first_touch_fbclid as string) ?? null,
+    firstTouchGclid: (row.first_touch_gclid as string) ?? null,
+    firstTouchAt: String(row.first_touch_at ?? ""),
+    lastSeenAt: String(row.last_seen_at ?? ""),
+    sessionCount: Number(row.session_count ?? 1)
+  };
+}
+
+function mapPersonIdentifier(row: Record<string, unknown>): PersonIdentifier {
+  return {
+    id: Number(row.id ?? 0),
+    organizationId: String(row.organization_id ?? ""),
+    personId: String(row.person_id ?? ""),
+    type: (row.type as PersonIdentifier["type"]) ?? "phone",
+    value: String(row.value ?? "")
+  };
+}
+
+function mapPerson(row: Record<string, unknown>): Person {
+  const identifiers = Array.isArray(row.person_identifiers)
+    ? (row.person_identifiers as Record<string, unknown>[]).map(mapPersonIdentifier)
+    : [];
+  return {
+    id: String(row.id ?? ""),
+    organizationId: String(row.organization_id ?? ""),
+    name: (row.name as string) ?? null,
+    channel: String(row.channel ?? "outro"),
+    channelDetail: (row.channel_detail as string) ?? null,
+    visitorId: (row.visitor_id as string) ?? null,
+    createdAt: String(row.created_at ?? ""),
+    identifiers
+  };
+}
+
+export function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  if (digits.startsWith("55") && digits.length >= 12) return digits;
+  if (digits.length === 11 || digits.length === 10) return `55${digits}`;
+  return digits;
 }

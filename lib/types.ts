@@ -744,4 +744,53 @@ export type AppFeedback = {
   repliedAt?: string;
 };
 
+// Rastreamento de Origem de Leads
+
+export type Visitor = {
+  id: string;
+  organizationId: string;
+  firstTouchSource: string | null;
+  firstTouchMedium: string | null;
+  firstTouchCampaign: string | null;
+  firstTouchReferrer: string | null;
+  firstTouchFbclid: string | null;
+  firstTouchGclid: string | null;
+  firstTouchAt: string;
+  lastSeenAt: string;
+  sessionCount: number;
+};
+
+export type TrackingSession = {
+  id: string;
+  organizationId: string;
+  visitorId: string;
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  referrer: string | null;
+  fbclid: string | null;
+  gclid: string | null;
+  landingPage: string | null;
+  startedAt: string;
+};
+
+export type PersonIdentifier = {
+  id: number;
+  organizationId: string;
+  personId: string;
+  type: "phone" | "email" | "cpf" | "instagram_handle";
+  value: string;
+};
+
+export type Person = {
+  id: string;
+  organizationId: string;
+  name: string | null;
+  channel: string;
+  channelDetail: string | null;
+  visitorId: string | null;
+  createdAt: string;
+  identifiers: PersonIdentifier[];
+};
+
 
