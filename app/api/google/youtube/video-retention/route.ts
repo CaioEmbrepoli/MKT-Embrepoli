@@ -18,7 +18,8 @@ export async function GET(request: Request) {
       dimensions: "elapsedVideoTimeRatio",
       filters: `video==${videoId}`,
       startDate: "2005-02-14",
-      endDate: new Date().toISOString().slice(0, 10)
+      endDate: new Date().toISOString().slice(0, 10),
+      sort: "elapsedVideoTimeRatio"
     });
 
     const response = await fetch(`https://youtubeanalytics.googleapis.com/v2/reports?${params}`, {
@@ -27,12 +28,15 @@ export async function GET(request: Request) {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      return NextResponse.json({ retention: [] });
+      console.error("[video-retention] YT Analytics error:", response.status, JSON.stringify(data));
+      return NextResponse.json({ retention: [], error: data?.error?.message ?? `HTTP ${response.status}` });
     }
 
     const headers: string[] = (data?.columnHeaders ?? []).map((h: any) => String(h.name));
     const ratioIndex = headers.indexOf("elapsedVideoTimeRatio");
     const watchIndex = headers.indexOf("audienceWatchRatio");
+
+    console.log("[video-retention] rows:", data?.rows?.length ?? 0, "sample:", JSON.stringify((data?.rows ?? []).slice(0, 3)));
 
     const retention = (data?.rows ?? []).map((row: any) => ({
       position: Math.round(Number(row[ratioIndex] ?? 0) * 100),
