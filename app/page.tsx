@@ -7056,7 +7056,7 @@ function ReviewDetailPanel({
           <button
             type="button"
             onClick={() => openMediaPreview(targetAsset)}
-            style={{ aspectRatio: imgAspect ?? 1 }}
+            style={{ aspectRatio: imgAspect ?? (targetAsset.type === "video" ? 16 / 9 : 1) }}
             className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white transition-all duration-300"
           >
             <iframe
@@ -7086,15 +7086,15 @@ function ReviewDetailPanel({
         <button
           type="button"
           onClick={() => openMediaPreview(targetAsset)}
-          className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white"
+          style={{ aspectRatio: imgAspect ?? (16 / 9) }}
+          className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white transition-all duration-300"
         >
           <video
             key={targetAsset.id}
             src={targetAsset.previewUrl || targetAsset.url}
             controls
             onLoadedMetadata={(e) => setImgAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight)}
-            style={imgAspect ? { aspectRatio: imgAspect } : undefined}
-            className="w-full max-h-[85vh] rounded-3xl bg-black transition-all duration-300"
+            className="w-full h-full rounded-3xl bg-black"
           />
         </button>
       ) : (
@@ -7246,7 +7246,7 @@ function ReviewsPage({
 
   return (
     <div className="space-y-5 animate-task-switch">
-      <Panel title="Revisões" action={<Badge tone="amber">{assets.filter((a) => a.status === "Aguardando revisão" && !a.isCover).length} {assets.filter((a) => a.status === "Aguardando revisão" && !a.isCover).length === 1 ? "pendente" : "pendentes"}</Badge>}>
+      <Panel title="Revisões">
         {/* Abas */}
         <div className="mb-5 flex flex-wrap gap-2">
           {tabs.map((tab) => (
@@ -7258,10 +7258,10 @@ function ReviewsPage({
 
         {/* ── Vista Calendário ── */}
         {viewMode === "Calendário" && (
-          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div>
-              {/* Navegação de semana */}
-              <div className="mb-4 flex items-center gap-3">
+          <div className="space-y-2">
+            {/* Linha 1: navegação de semana (esq) + badge pendentes (dir) */}
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="flex items-center gap-3">
                 <button type="button" onClick={prevWeek} className="rounded-2xl bg-slate-100 p-2 text-slate-600 transition hover:bg-blue-50 hover:text-blue-700">
                   <ChevronLeft size={16} />
                 </button>
@@ -7272,7 +7272,14 @@ function ReviewsPage({
                   <ChevronRight size={16} />
                 </button>
               </div>
+              <div className="flex items-center justify-end">
+                {(() => { const n = assets.filter((a) => a.status === "Aguardando revisão" && !a.isCover).length; return <Badge tone="amber">{n} {n === 1 ? "pendente" : "pendentes"}</Badge>; })()}
+              </div>
+            </div>
 
+            {/* Linha 2: calendário (esq) + ReviewDetailPanel sticky (dir) */}
+            <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div>
               {/* Grade 7 colunas */}
               <div className="overflow-x-auto pb-2">
                 <div className="grid min-w-[560px] grid-cols-7 gap-2">
@@ -7353,26 +7360,28 @@ function ReviewsPage({
                   </div>
                 );
               })()}
-            </div>
+              </div>
 
-            {/* Painel de detalhe */}
-            {selectedAsset ? (
-              <ReviewDetailPanel
-                selectedAsset={selectedAsset}
-                allAssets={assets}
-                selectedPost={selectedPost}
-                profileById={profileById}
-                openMediaPreview={openMediaPreview}
-                setReviewAssetStatus={setReviewAssetStatus}
-                addReviewComment={addReviewComment}
-                deletePostReviewAsset={deletePostReviewAsset}
-                reorderPostReviewCarousel={reorderPostReviewCarousel}
-                setModal={setModal}
-                onDeleted={handleDeleted}
-              />
-            ) : (
-              <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma arte para revisar.</div>
-            )}
+              <div className="xl:sticky xl:top-5 xl:self-start">
+                {selectedAsset ? (
+                  <ReviewDetailPanel
+                    selectedAsset={selectedAsset}
+                    allAssets={assets}
+                    selectedPost={selectedPost}
+                    profileById={profileById}
+                    openMediaPreview={openMediaPreview}
+                    setReviewAssetStatus={setReviewAssetStatus}
+                    addReviewComment={addReviewComment}
+                    deletePostReviewAsset={deletePostReviewAsset}
+                    reorderPostReviewCarousel={reorderPostReviewCarousel}
+                    setModal={setModal}
+                    onDeleted={handleDeleted}
+                  />
+                ) : (
+                  <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma arte para revisar.</div>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -7396,23 +7405,28 @@ function ReviewsPage({
               })}
               {!filteredAssets.length && <p className="rounded-3xl bg-slate-50 p-6 text-center text-sm font-bold text-slate-400">Nenhuma revisão nesse filtro.</p>}
             </div>
-            {selectedAsset ? (
-              <ReviewDetailPanel
-                selectedAsset={selectedAsset}
-                allAssets={assets}
-                selectedPost={selectedPost}
-                profileById={profileById}
-                openMediaPreview={openMediaPreview}
-                setReviewAssetStatus={setReviewAssetStatus}
-                addReviewComment={addReviewComment}
-                deletePostReviewAsset={deletePostReviewAsset}
-                reorderPostReviewCarousel={reorderPostReviewCarousel}
-                setModal={setModal}
-                onDeleted={handleDeleted}
-              />
-            ) : (
-              <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma revisão.</div>
-            )}
+            <div className="space-y-2 xl:sticky xl:top-5 xl:self-start">
+              <div className="flex items-center justify-end">
+                {(() => { const n = assets.filter((a) => a.status === "Aguardando revisão" && !a.isCover).length; return <Badge tone="amber">{n} {n === 1 ? "pendente" : "pendentes"}</Badge>; })()}
+              </div>
+              {selectedAsset ? (
+                <ReviewDetailPanel
+                  selectedAsset={selectedAsset}
+                  allAssets={assets}
+                  selectedPost={selectedPost}
+                  profileById={profileById}
+                  openMediaPreview={openMediaPreview}
+                  setReviewAssetStatus={setReviewAssetStatus}
+                  addReviewComment={addReviewComment}
+                  deletePostReviewAsset={deletePostReviewAsset}
+                  reorderPostReviewCarousel={reorderPostReviewCarousel}
+                  setModal={setModal}
+                  onDeleted={handleDeleted}
+                />
+              ) : (
+                <div className="grid min-h-80 place-items-center rounded-[30px] bg-slate-50 text-sm font-bold text-slate-400">Selecione uma revisão.</div>
+              )}
+            </div>
           </div>
         )}
       </Panel>
