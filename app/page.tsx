@@ -6996,6 +6996,10 @@ function ReviewDetailPanel({
     setCarouselIndex(0);
   }, [selectedAsset.id, selectedAsset.carouselGroupId]);
 
+  useEffect(() => {
+    setImgAspect(null);
+  }, [targetAsset.id]);
+
   function requestAdjustments() {
     if (!adjustmentMessage.trim()) return;
     reviewTargets.forEach((asset) => setReviewAssetStatus(asset.id, "Ajustes solicitados", adjustmentMessage.trim()));
@@ -7016,13 +7020,9 @@ function ReviewDetailPanel({
     onDeleted();
   }
 
-  const imgHeightClass = imgAspect === null
-    ? "max-h-64"
-    : imgAspect < 0.75
-      ? "max-h-[70vh]"
-      : imgAspect > 1.3
-        ? "max-h-[40vh]"
-        : "max-h-[55vh]";
+  const driveFileId = targetAsset.source === "external"
+    ? targetAsset.url.match(/\/d\/([^/]+)/)?.[1] ?? null
+    : null;
 
   return (
     <div className="rounded-[30px] border border-slate-100 bg-slate-50 p-5">
@@ -7041,14 +7041,60 @@ function ReviewDetailPanel({
         </div>
       </div>
 
-      {/* Image */}
-      {targetAsset.type === "foto" && targetAsset.source !== "external" ? (
-        <button type="button" onClick={() => openMediaPreview(targetAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
+      {/* Image / Video */}
+      {targetAsset.source === "external" ? (
+        <>
+          {driveFileId && (
+            <img
+              key={targetAsset.id}
+              src={`https://drive.google.com/thumbnail?id=${driveFileId}&sz=w400`}
+              className="sr-only"
+              alt=""
+              onLoad={(e) => setImgAspect(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)}
+            />
+          )}
+          <button
+            type="button"
+            onClick={() => openMediaPreview(targetAsset)}
+            style={{ aspectRatio: imgAspect ?? 1 }}
+            className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white transition-all duration-300"
+          >
+            <iframe
+              src={targetAsset.previewUrl || targetAsset.url}
+              className="w-full h-full rounded-3xl"
+              allow="autoplay; encrypted-media; picture-in-picture"
+              allowFullScreen
+            />
+          </button>
+        </>
+      ) : targetAsset.type === "foto" ? (
+        <button
+          type="button"
+          onClick={() => openMediaPreview(targetAsset)}
+          className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white"
+        >
           <img
+            key={targetAsset.id}
             src={targetAsset.previewUrl || targetAsset.url}
             alt={targetAsset.name}
             onLoad={(e) => setImgAspect(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)}
-            className={`${imgHeightClass} w-full rounded-3xl object-contain bg-slate-50 transition-all duration-300`}
+            style={imgAspect ? { aspectRatio: imgAspect } : undefined}
+            className="w-full max-h-[85vh] object-contain bg-slate-50 transition-all duration-300 rounded-3xl"
+          />
+        </button>
+      ) : targetAsset.type === "video" ? (
+        <button
+          type="button"
+          onClick={() => openMediaPreview(targetAsset)}
+          className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white"
+        >
+          <video
+            key={targetAsset.id}
+            src={targetAsset.previewUrl || targetAsset.url}
+            controls
+            onLoadedMetadata={(e) => setImgAspect(e.currentTarget.videoWidth / e.currentTarget.videoHeight)}
+            style={imgAspect ? { aspectRatio: imgAspect } : undefined}
+            className="w-full max-h-[85vh] rounded-3xl bg-black transition-all duration-300"
           />
         </button>
       ) : (
