@@ -6985,6 +6985,7 @@ function ReviewDetailPanel({
   const [showAdjustInput, setShowAdjustInput] = useState(false);
   const [comment, setComment] = useState("");
   const [carouselIndex, setCarouselIndex] = useState(0);
+  const [imgAspect, setImgAspect] = useState<number | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const carouselAssets = selectedAsset.carouselGroupId ? carouselGroupForAsset(selectedAsset, allAssets) : [];
   const isCarousel = carouselAssets.length > 1;
@@ -7015,8 +7016,17 @@ function ReviewDetailPanel({
     onDeleted();
   }
 
+  const imgHeightClass = imgAspect === null
+    ? "max-h-64"
+    : imgAspect < 0.75
+      ? "max-h-[70vh]"
+      : imgAspect > 1.3
+        ? "max-h-[40vh]"
+        : "max-h-[55vh]";
+
   return (
-    <div className="rounded-[30px] border border-slate-100 bg-slate-50 p-4">
+    <div className="rounded-[30px] border border-slate-100 bg-slate-50 p-5">
+      {/* Header */}
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-black text-blue-700">Arte para revisão</p>
@@ -7024,14 +7034,30 @@ function ReviewDetailPanel({
           <p className="mt-1 text-sm font-bold text-slate-500">Enviado por {profileById.get(targetAsset.uploadedBy)?.name ?? "Equipe"} em {formatDate(targetAsset.uploadedAt)}</p>
           {isCarousel && <p className="mt-1 text-xs font-black uppercase text-blue-600">Carrossel com {carouselAssets.length} imagens</p>}
         </div>
-        <div className="flex flex-wrap gap-2">
-          {selectedPost && <button type="button" onClick={() => setModal({ kind: "post", id: selectedPost.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700">Abrir post</button>}
-          <button type="button" onClick={removeAsset} title="Excluir" className="rounded-2xl bg-rose-100 p-2 text-rose-700"><Trash2 size={16} /></button>
+        <div className="flex flex-wrap items-center gap-2">
+          {selectedPost && <button type="button" onClick={() => setModal({ kind: "post", id: selectedPost.id })} className="rounded-2xl bg-blue-100 px-3 py-2 text-sm font-black text-blue-700 hover:bg-blue-200">Abrir post</button>}
+          <FileActionButtons item={targetAsset} />
+          <button type="button" onClick={removeAsset} title="Excluir" className="rounded-2xl bg-rose-100 p-2 text-rose-700 hover:bg-rose-200"><Trash2 size={16} /></button>
         </div>
       </div>
-      <button type="button" onClick={() => openMediaPreview(targetAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
-        <MediaPreviewContent item={targetAsset} />
-      </button>
+
+      {/* Image */}
+      {targetAsset.type === "foto" ? (
+        <button type="button" onClick={() => openMediaPreview(targetAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
+          <img
+            src={targetAsset.previewUrl || targetAsset.url}
+            alt={targetAsset.name}
+            onLoad={(e) => setImgAspect(e.currentTarget.naturalWidth / e.currentTarget.naturalHeight)}
+            className={`${imgHeightClass} w-full rounded-3xl object-contain bg-slate-50 transition-all duration-300`}
+          />
+        </button>
+      ) : (
+        <button type="button" onClick={() => openMediaPreview(targetAsset)} className="block w-full overflow-hidden rounded-3xl border border-slate-200 bg-white">
+          <MediaPreviewContent item={targetAsset} />
+        </button>
+      )}
+
+      {/* Carousel thumbnails */}
       {isCarousel && (
         <DndContext
           sensors={sensors}
@@ -7057,9 +7083,8 @@ function ReviewDetailPanel({
           </SortableContext>
         </DndContext>
       )}
-      <div className="mt-2 flex justify-end">
-        <FileActionButtons item={targetAsset} />
-      </div>
+
+      {/* Actions */}
       <div className="mt-4">
         {reviewTargets.every((asset) => asset.status === "Aprovado") ? (
           showAdjustInput ? (
@@ -7074,20 +7099,34 @@ function ReviewDetailPanel({
             <button type="button" onClick={() => setShowAdjustInput(true)} className="w-full rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-black text-rose-700 hover:bg-rose-100">Solicitar ajuste</button>
           )
         ) : (
-          <div className="grid gap-3 lg:grid-cols-2">
-            <button type="button" onClick={() => reviewTargets.forEach((asset) => setReviewAssetStatus(asset.id, "Aprovado"))} className="rounded-2xl bg-emerald-600 px-4 py-3 font-black text-white">Aprovar{isCarousel ? " carrossel" : ""}</button>
+          <div className="space-y-3">
+            <button
+              type="button"
+              onClick={() => reviewTargets.forEach((asset) => setReviewAssetStatus(asset.id, "Aprovado"))}
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-4 font-black text-white shadow-sm transition-all hover:bg-emerald-700 active:scale-[0.98]"
+            >
+              <CheckCircle2 size={20} />
+              Aprovar{isCarousel ? " carrossel" : " arte"}
+            </button>
             <div className="rounded-3xl bg-white p-3">
-              <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="Descreva os ajustes necessários" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-24 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-              <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400">Solicitar ajustes</button>
+              <textarea value={adjustmentMessage} onChange={(e) => setAdjustmentMessage(e.target.value)} placeholder="Descreva os ajustes necessários" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="h-20 w-full resize-none rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-rose-400" />
+              <button type="button" onClick={requestAdjustments} disabled={!adjustmentMessage.trim()} className="mt-2 w-full rounded-2xl bg-rose-600 px-4 py-2.5 text-sm font-black text-white disabled:bg-slate-200 disabled:text-slate-400 hover:bg-rose-700 transition-colors">Solicitar ajustes</button>
             </div>
           </div>
         )}
       </div>
-      <form onSubmit={submitComment} className="mt-4 flex gap-2">
-        <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comentário interno sobre a revisão" lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
-        <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-4 text-white disabled:bg-slate-200"><MessageSquare size={16} /></button>
-      </form>
-      <div className="mt-4 space-y-2">
+
+      {/* Internal comment */}
+      <div className="mt-4">
+        <p className="mb-1.5 text-xs font-black text-slate-400">Comentário interno</p>
+        <form onSubmit={submitComment} className="flex gap-2">
+          <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Visível apenas para a equipe..." lang="pt-BR" spellCheck autoCorrect="on" autoCapitalize="sentences" className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500" />
+          <button disabled={!comment.trim()} className="rounded-2xl bg-blue-700 px-4 text-white disabled:bg-slate-200 hover:bg-blue-800 transition-colors"><MessageSquare size={16} /></button>
+        </form>
+      </div>
+
+      {/* Comment list */}
+      <div className="mt-3 space-y-2">
         {targetAsset.comments.map((item) => (
           <div key={item.id} className="rounded-2xl bg-white p-3">
             <p className="text-sm font-black">{profileById.get(item.authorId)?.name ?? "Equipe"}</p>
