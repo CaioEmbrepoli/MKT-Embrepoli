@@ -315,3 +315,16 @@ export type AnalyticsOverview = {
 export async function getAnalyticsOverview(days = 30): Promise<AnalyticsOverview> {
   return fetchJson<AnalyticsOverview>(`/api/google/analytics/overview?days=${days}`);
 }
+
+export type VideoTimelineRow = { date: string; views: number };
+export type VideoRetentionRow = { position: number; watchRatio: number };
+
+export async function getVideoTimeline(videoId: string, days = 30): Promise<VideoTimelineRow[]> {
+  const data = await fetchJson<{ daily: VideoTimelineRow[] }>(`/api/google/youtube/video-timeline?videoId=${encodeURIComponent(videoId)}&days=${days}`);
+  return data.daily ?? [];
+}
+
+export async function getVideoRetention(videoId: string): Promise<VideoRetentionRow[]> {
+  const data = await fetchJson<{ retention: VideoRetentionRow[] }>(`/api/google/youtube/video-retention?videoId=${encodeURIComponent(videoId)}`);
+  return data.retention ?? [];
+}

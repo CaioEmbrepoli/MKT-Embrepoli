@@ -93,7 +93,7 @@ import {
 } from "@/lib/modules";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
-import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getAnalyticsOverview, getGoogleStatus, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type AnalyticsOverview, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
+import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getAnalyticsOverview, getGoogleStatus, getVideoRetention, getVideoTimeline, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type AnalyticsOverview, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type VideoRetentionRow, type VideoTimelineRow, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import { disconnectInstagramConnection, disconnectMetaAdsConnection, getInstagramStatus, getMetaAdsStatus, importMetaAdsData, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportSummary } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
@@ -9439,7 +9439,7 @@ function Metrics({
       <div className="mb-4 -mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1">
         {[
           { id: "all", name: "Geral", color: "#0f172a" } as Channel,
-          ...channels.filter((c) => c.id !== "facebook" && c.name.toLowerCase() !== "facebook"),
+          ...channels.filter((c) => c.id !== "facebook" && c.name.toLowerCase() !== "facebook" && c.name.toLowerCase() !== "todos"),
           { id: "analytics", name: "Analytics", color: "#f59e0b" } as Channel
         ].map((ch) => {
           const count = ch.id === "all" ? resolvedMetrics.length : ch.id === "analytics" ? null : (channelCounts.get(ch.id) ?? 0);
@@ -15935,6 +15935,31 @@ function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, con
   const videoId = isYt ? editing!.externalId!.slice(3) : null;
   const thumbUrl = editing ? thumbnailForModal(editing) : null;
 
+  const [timelineDays, setTimelineDays] = useState(30);
+  const [timelineData, setTimelineData] = useState<VideoTimelineRow[] | null>(null);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [retentionData, setRetentionData] = useState<VideoRetentionRow[] | null>(null);
+  const [retentionLoading, setRetentionLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isYt || !videoId) return;
+    setTimelineLoading(true);
+    setTimelineData(null);
+    getVideoTimeline(videoId, timelineDays)
+      .then(setTimelineData)
+      .catch(() => setTimelineData([]))
+      .finally(() => setTimelineLoading(false));
+  }, [videoId, timelineDays, isYt]);
+
+  useEffect(() => {
+    if (!isYt || !videoId) return;
+    setRetentionLoading(true);
+    getVideoRetention(videoId)
+      .then(setRetentionData)
+      .catch(() => setRetentionData([]))
+      .finally(() => setRetentionLoading(false));
+  }, [videoId, isYt]);
+
   const engagement = editing ? editing.likes + editing.comments + editing.shares : 0;
   const engagementBase = engagement || 1;
   const likePct = editing ? Math.round((editing.likes / engagementBase) * 100) : 0;
@@ -16081,6 +16106,84 @@ function MetricModalV2({ modal, posts, channels, productLines, vehicleTypes, con
           <StatCard label="Engajamento" value={formatNumber(engagement)} color="violet" />
           <StatCard label="Cliques" value={formatNumber(editing.clicks)} color="cyan" />
           <StatCard label="Leads" value={formatNumber(editing.leads)} color="green" />
+        </div>
+      )}
+
+      {/* ── Visualizações ao longo do tempo ─────────────────── */}
+      {isYt && (
+        <div className="mb-5 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h4 className="font-black text-slate-700">Visualizações ao longo do tempo</h4>
+            <div className="flex gap-1">
+              {([7, 30, 90, 365] as const).map((d) => (
+                <button key={d} type="button" onClick={() => setTimelineDays(d)}
+                  className={`rounded-lg px-2 py-0.5 text-xs font-black transition ${timelineDays === d ? "bg-blue-600 text-white" : "bg-white text-slate-500 hover:bg-slate-100"}`}>
+                  {d}d
+                </button>
+              ))}
+            </div>
+          </div>
+          {timelineLoading && (
+            <div className="flex h-36 items-center justify-center">
+              <span className="block h-5 w-5 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" />
+            </div>
+          )}
+          {!timelineLoading && timelineData && timelineData.length > 0 && (
+            <div className="h-36">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={timelineData}>
+                  <defs>
+                    <linearGradient id="ytTimelineGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#2563eb" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="date" tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} />
+                  <YAxis tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} tickFormatter={(v) => formatNumber(Number(v))} width={40} />
+                  <Tooltip formatter={(v: number) => [formatNumber(Number(v)), "Visualizações"]} />
+                  <Area type="monotone" dataKey="views" stroke="#2563eb" fill="url(#ytTimelineGrad)" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {!timelineLoading && timelineData !== null && timelineData.length === 0 && (
+            <p className="text-sm font-bold text-slate-400">Sem dados no período.</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Curva de retenção ────────────────────────────────── */}
+      {isYt && (
+        <div className="mb-5 rounded-3xl border border-slate-100 bg-slate-50 p-4">
+          <h4 className="mb-3 font-black text-slate-700">Curva de retenção</h4>
+          {retentionLoading && (
+            <div className="flex h-36 items-center justify-center">
+              <span className="block h-5 w-5 animate-spin rounded-full border-2 border-emerald-400 border-t-transparent" />
+            </div>
+          )}
+          {!retentionLoading && retentionData && retentionData.length > 0 && (
+            <div className="h-36">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={retentionData}>
+                  <defs>
+                    <linearGradient id="ytRetentionGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                  <XAxis dataKey="position" tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} tickFormatter={(v) => `${v}%`} />
+                  <YAxis tick={{ fontSize: 10, fontWeight: 700, fill: "#64748b" }} tickFormatter={(v) => `${v}%`} domain={[0, 100]} width={40} />
+                  <Tooltip formatter={(v: number) => [`${Number(v).toFixed(1)}%`, "Espectadores"]} labelFormatter={(l) => `${l}% do vídeo`} />
+                  <Area type="monotone" dataKey="watchRatio" stroke="#10b981" fill="url(#ytRetentionGrad)" dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {!retentionLoading && retentionData !== null && retentionData.length === 0 && (
+            <p className="text-sm font-bold text-slate-400">Dados de retenção não disponíveis para este vídeo.</p>
+          )}
         </div>
       )}
 
