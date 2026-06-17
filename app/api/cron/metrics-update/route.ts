@@ -627,6 +627,15 @@ function summarize(results: Record<string, CronChannelResult[]>) {
   return summary;
 }
 
+const PLATFORM_RUNNERS = {
+  youtube: runYouTube,
+  instagram: runInstagram,
+  tiktok: runTikTok,
+  metaads: runMetaAds,
+} as const;
+
+type PlatformKey = keyof typeof PLATFORM_RUNNERS;
+
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
   const isVercelCron = request.headers.get("x-vercel-cron") === "1";
@@ -645,21 +654,17 @@ export async function GET(request: Request) {
   });
   const executedAt = new Date().toISOString();
 
-  const results: Record<string, CronChannelResult[]> = {
-    youtube: [],
-    instagram: [],
-    tiktok: [],
-    metaAds: []
-  };
+  // ?platform=instagram  →  roda só aquela plataforma
+  const { searchParams } = new URL(request.url);
+  const platformParam = searchParams.get("platform")?.toLowerCase() as PlatformKey | null;
+  const platforms: PlatformKey[] = platformParam && PLATFORM_RUNNERS[platformParam]
+    ? [platformParam]
+    : (Object.keys(PLATFORM_RUNNERS) as PlatformKey[]);
 
-  for (const [key, runner] of [
-    ["youtube", runYouTube],
-    ["instagram", runInstagram],
-    ["tiktok", runTikTok],
-    ["metaAds", runMetaAds]
-  ] as const) {
+  const results: Record<string, CronChannelResult[]> = {};
+  for (const key of platforms) {
     try {
-      results[key] = await runner(adminClient);
+      results[key] = await PLATFORM_RUNNERS[key](adminClient);
     } catch (err) {
       results[key] = [{
         ok: false,
@@ -672,6 +677,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: Object.values(results).flat().every((item) => item.ok),
     executedAt,
+    platform: platformParam ?? "all",
     summary: summarize(results),
     results
   });

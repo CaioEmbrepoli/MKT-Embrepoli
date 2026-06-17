@@ -647,22 +647,57 @@ export async function likeInstagramComment(accessToken: string, commentId: strin
 }
 
 export async function fetchInstagramInsightsForMedia(accessToken: string, media: InstagramMediaItem) {
-  const metrics = ["reach", "impressions", "views", "shares", "saved", "total_interactions"].join(",");
-  try {
-    const data = await graphGet<{ data?: Array<{ name?: string; values?: Array<{ value?: number }> }> }>(`${igApiBase(accessToken)}/${media.id}/insights`, accessToken, { metric: metrics });
-    const values = new Map<string, number>();
+  const type = String(media.mediaType || "").toUpperCase();
+
+  // Reels usam métricas próprias — misturar com métricas de feed gera erro 400
+  const isReel = type === "REEL" || type.includes("REEL");
+  // Stories expiram e não têm insights após 24h
+  const isStory = type === "STORY" || type.includes("STORY");
+
+  let metricsList: string[];
+  if (isReel) {
+    metricsList = ["reach", "plays", "shares", "saved", "comments", "likes", "total_interactions"];
+  } else if (isStory) {
+    metricsList = ["reach", "impressions", "exits", "replies", "taps_forward", "taps_back"];
+  } else {
+    // IMAGE, VIDEO, CAROUSEL_ALBUM
+    metricsList = ["reach", "impressions", "shares", "saved", "total_interactions"];
+  }
+
+  const empty = { reach: 0, impressions: 0, views: 0, shares: 0, saved: 0, totalInteractions: 0 };
+
+  const fetchMetrics = async (metrics: string[]) => {
+    const data = await graphGet<{ data?: Array<{ name?: string; value?: number; values?: Array<{ value?: number }> }> }>(
+      `${igApiBase(accessToken)}/${media.id}/insights`,
+      accessToken,
+      { metric: metrics.join(","), period: "lifetime" }
+    );
+    const map = new Map<string, number>();
     for (const item of data.data ?? []) {
-      values.set(String(item.name || ""), Number(item.values?.[0]?.value || 0));
+      // A API pode retornar valor direto ou dentro de values[]
+      const val = item.value ?? item.values?.[0]?.value ?? 0;
+      map.set(String(item.name || ""), Number(val));
     }
+    return map;
+  };
+
+  try {
+    const values = await fetchMetrics(metricsList);
     return {
       reach: values.get("reach") || 0,
-      impressions: values.get("impressions") || 0,
-      views: values.get("views") || 0,
+      impressions: values.get("impressions") || values.get("plays") || 0,
+      views: values.get("plays") || values.get("video_views") || 0,
       shares: values.get("shares") || 0,
       saved: values.get("saved") || 0,
       totalInteractions: values.get("total_interactions") || 0
     };
   } catch {
-    return { reach: 0, impressions: 0, views: 0, shares: 0, saved: 0, totalInteractions: 0 };
+    // Tenta buscar só reach como fallback mínimo
+    try {
+      const fallback = await fetchMetrics(["reach"]);
+      return { ...empty, reach: fallback.get("reach") || 0 };
+    } catch {
+      return empty;
+    }
   }
 }
