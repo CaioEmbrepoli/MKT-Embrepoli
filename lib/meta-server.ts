@@ -406,8 +406,8 @@ export async function fetchInstagramMedia(
   instagramAccountId: string,
   options: { maxMedia?: number; maxPages?: number; since?: Date } = {}
 ) {
-  const maxMedia = options.maxMedia ?? 1000;
-  const maxPages = options.maxPages ?? 50;
+  const maxMedia = options.maxMedia ?? 10000;
+  const maxPages = options.maxPages ?? 200;
   const media: InstagramMediaItem[] = [];
   let nextUrl = `${igApiBase(accessToken)}/${instagramAccountId}/media?fields=${encodeURIComponent("id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,like_count,comments_count")}&limit=100`;
   let pages = 0;

@@ -6,6 +6,7 @@ import { importMetaAdsData } from "@/lib/meta-ads-server";
 import { fetchTikTokUserInfo, getTikTokAccessToken, tiktokEnvironment, type TikTokRequestContext } from "@/lib/tiktok-server";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 type MetricRow = Record<string, any>;
 
@@ -467,7 +468,7 @@ async function fetchTikTokVideos(accessToken: string) {
   let stoppedByLimit = false;
   const seenCursors = new Set<number>();
 
-  while (hasMore && pagesFetched < 50 && videos.length < 1000) {
+  while (hasMore && pagesFetched < 500 && videos.length < 10000) {
     const response = await fetch(`https://open.tiktokapis.com/v2/video/list/?fields=${encodeURIComponent(TIKTOK_VIDEO_FIELDS)}`, {
       method: "POST",
       headers: {
@@ -498,9 +499,9 @@ async function fetchTikTokVideos(accessToken: string) {
     }
   }
 
-  if (hasMore && (pagesFetched >= 50 || videos.length >= 1000)) stoppedByLimit = true;
+  if (hasMore && (pagesFetched >= 500 || videos.length >= 10000)) stoppedByLimit = true;
   return {
-    videos: videos.slice(0, 1000).map(normalizeTikTokVideo).filter((item) => item.id),
+    videos: videos.map(normalizeTikTokVideo).filter((item) => item.id),
     importSummary: { totalFetched: videos.length, pagesFetched, hasMore, stoppedByLimit }
   };
 }
