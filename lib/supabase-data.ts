@@ -212,9 +212,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }),
     client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
     client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
-    client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false }).limit(500),
-    client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(200),
-    client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(200)
+    client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false }).limit(10000),
+    client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(5000),
+    client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(5000)
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
