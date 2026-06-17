@@ -17,15 +17,23 @@ function extractVisitorRef(text: string): string | null {
 
 export async function POST(request: Request) {
   try {
-    const secret = process.env.TRACKING_WEBHOOK_SECRET;
-    if (secret) {
-      const header = request.headers.get("x-webhook-secret");
-      if (header !== secret) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const body = (await request.json()) as Record<string, unknown>;
+
+    // Meta (Lead Ads / WhatsApp Business API) envia seu próprio formato sem nosso header.
+    // Apenas chamadas genéricas externas precisam do secret.
+    const isMeta = body.object === "page" ||
+      body.object === "whatsapp_business_account" ||
+      body.messaging_product === "whatsapp";
+
+    if (!isMeta) {
+      const secret = process.env.TRACKING_WEBHOOK_SECRET;
+      if (secret) {
+        const header = request.headers.get("x-webhook-secret");
+        if (header !== secret) {
+          return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
       }
     }
-
-    const body = (await request.json()) as Record<string, unknown>;
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
