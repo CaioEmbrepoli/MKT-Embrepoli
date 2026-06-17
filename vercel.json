@@ -25,10 +25,6 @@
       "schedule": "0 7 * * *"
     },
     {
-      "path": "/api/cron/instagram-publications",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/cron/instagram-token-refresh",
       "schedule": "0 9 * * *"
     },
