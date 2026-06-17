@@ -97,6 +97,7 @@ import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getAnalyticsO
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import { disconnectInstagramConnection, disconnectMetaAdsConnection, getInstagramStatus, getMetaAdsStatus, importMetaAdsData, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportSummary } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
+import { derivePostStatusFromPublications, derivedPostStatus, publicationsForPost } from "@/lib/post-publication-status";
 import {
   type AppData,
   deleteCampaign,
@@ -385,6 +386,61 @@ const postStatusConfig: Record<string, { tone: BadgeTone; label: string }> = {
   "Agendado":  { tone: "cyan",    label: "Agendado" },
   "Publicado": { tone: "green",   label: "Publicado" },
 };
+
+const publicationStatusLabel: Record<PostPublication["status"], string> = {
+  pending: "Pendente",
+  processing: "Processando",
+  published: "Publicado",
+  scheduled: "Agendado",
+  error: "Erro",
+  cancelled: "Cancelado"
+};
+
+const publicationPlatformLabel: Record<PostPublication["platform"], string> = {
+  youtube: "YouTube",
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  facebook: "Facebook",
+  linkedin: "LinkedIn",
+  outros: "Outro canal"
+};
+
+function publicationStatusClasses(status: PostPublication["status"]) {
+  if (status === "published") return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  if (status === "error" || status === "cancelled") return "border-rose-200 bg-rose-50 text-rose-700";
+  if (status === "pending" || status === "processing") return "border-amber-200 bg-amber-50 text-amber-700";
+  return "border-cyan-200 bg-cyan-50 text-cyan-700";
+}
+
+function PublicationPlatformIcon({ platform, className = "h-3.5 w-3.5" }: { platform: PostPublication["platform"]; className?: string }) {
+  if (platform === "youtube") {
+    return <svg viewBox="0 0 24 24" className={`${className} fill-current`} aria-hidden="true"><path d="M23.5 6.2a3 3 0 0 0-2.1-2.1C19.5 3.6 12 3.6 12 3.6s-7.5 0-9.4.5A3 3 0 0 0 .5 6.2C0 8.1 0 12 0 12s0 3.9.5 5.8a3 3 0 0 0 2.1 2.1c1.9.5 9.4.5 9.4.5s7.5 0 9.4-.5a3 3 0 0 0 2.1-2.1c.5-1.9.5-5.8.5-5.8s0-3.9-.5-5.8zM9.75 15.5v-7l6.5 3.5-6.5 3.5z" /></svg>;
+  }
+  if (platform === "instagram") {
+    return <svg viewBox="0 0 24 24" className={`${className} fill-current`} aria-hidden="true"><path d="M7.05.07C8.33.01 8.74 0 12 0s3.67.01 4.95.07c4.35.2 6.78 2.63 6.98 6.98.06 1.28.07 1.69.07 4.95s-.01 3.67-.07 4.95c-.2 4.36-2.62 6.78-6.98 6.98-1.28.06-1.69.07-4.95.07s-3.67-.01-4.95-.07c-4.36-.2-6.78-2.62-6.98-6.98C.01 15.67 0 15.26 0 12s.01-3.67.07-4.95C.27 2.69 2.69.27 7.05.07zM12 5.84A6.16 6.16 0 1 0 12 18.16 6.16 6.16 0 0 0 12 5.84zm0 10.17A4 4 0 1 1 12 8a4 4 0 0 1 0 8zm6.41-11.86a1.44 1.44 0 1 0 0 2.88 1.44 1.44 0 0 0 0-2.88z" /></svg>;
+  }
+  if (platform === "tiktok") {
+    return <svg viewBox="0 0 24 24" className={`${className} fill-current`} aria-hidden="true"><path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 1 1-2.09-2.77V9.01a6.34 6.34 0 1 0 5.54 6.29V9.02a8.16 8.16 0 0 0 4.77 1.52V7.1c-.35-.08-.68-.22-1-.41z" /></svg>;
+  }
+  return <svg viewBox="0 0 24 24" className={`${className} fill-current`} aria-hidden="true"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 3.5a6.5 6.5 0 0 1 6.28 4.83h-3.12A9.96 9.96 0 0 0 13.7 5.7c-.54-.13-1.1-.2-1.7-.2zm-1.7.2a9.96 9.96 0 0 0-1.46 4.63H5.72A6.5 6.5 0 0 1 10.3 5.7zM5.5 12c0-.23.01-.45.03-.67h3.26a11.9 11.9 0 0 0 0 1.34H5.53A6.7 6.7 0 0 1 5.5 12zm.22 1.67h3.12a9.96 9.96 0 0 0 1.46 4.63 6.5 6.5 0 0 1-4.58-4.63zM12 18.5c-.79 0-1.72-1.77-2.05-4.83h4.1C13.72 16.73 12.79 18.5 12 18.5zm2.2-5.83H9.8a10.88 10.88 0 0 1 0-1.34h4.4a10.88 10.88 0 0 1 0 1.34zm-.15-2.34h-4.1C10.28 7.27 11.21 5.5 12 5.5s1.72 1.77 2.05 4.83zm-.35 7.97a9.96 9.96 0 0 0 1.46-4.63h3.12a6.5 6.5 0 0 1-4.58 4.63zM15.21 12c0-.23-.01-.45-.02-.67h3.28a6.79 6.79 0 0 1 0 1.34h-3.28c.01-.22.02-.44.02-.67z" /></svg>;
+}
+
+function PublicationStatusIcons({ publications, className = "" }: { publications: PostPublication[]; className?: string }) {
+  if (!publications.length) return null;
+  return (
+    <div className={`flex flex-wrap gap-1 ${className}`}>
+      {publications.map((publication) => (
+        <span
+          key={publication.id}
+          title={`${publicationPlatformLabel[publication.platform] ?? publication.platform}: ${publicationStatusLabel[publication.status] ?? publication.status}`}
+          className={`inline-flex h-6 w-6 items-center justify-center rounded-full border ${publicationStatusClasses(publication.status)}`}
+        >
+          <PublicationPlatformIcon platform={publication.platform} />
+        </span>
+      ))}
+    </div>
+  );
+}
 const roles: Role[] = ["admin", "gestor", "colaborador"];
 const ideaTypes: Idea["type"][] = ["Postagem", "Melhoria", "Sistema", "Outros"];
 const calendarTaskBoardId = "__calendar_posts__";
@@ -2574,6 +2630,7 @@ export default function Home() {
               contentTypes={contentTypes}
               funnelStages={funnelStages}
               profiles={profiles}
+              postPublications={postPublications}
               calendarDates={calendarDates}
               channelById={channelById}
               funnelById={funnelById}
@@ -2596,6 +2653,7 @@ export default function Home() {
               taskBoards={taskBoards}
               setTaskBoards={syncTaskBoards}
               posts={posts}
+              postPublications={postPublications}
               setPosts={syncPosts}
               ideas={ideas}
               currentUser={currentUser}
@@ -2643,6 +2701,8 @@ export default function Home() {
               visitors={visitors}
               persons={persons}
               conversions={conversions}
+              salesClients={salesClients}
+              profiles={profiles}
               productLines={productLines}
               vehicleTypes={vehicleTypes}
               contentTypes={contentTypes}
@@ -2767,6 +2827,7 @@ export default function Home() {
               taskBoards={taskBoards}
               setTaskBoards={syncTaskBoards}
               posts={posts}
+              postPublications={postPublications}
               setPosts={syncPosts}
               ideas={ideas}
               currentUser={currentUser}
@@ -7940,6 +8001,7 @@ function Dashboard({
 
 function EditorialCalendar(props: {
   posts: EditorialPost[];
+  postPublications: PostPublication[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   channels: Channel[];
   campaigns: Campaign[];
@@ -8030,7 +8092,7 @@ function EditorialCalendar(props: {
         ) : (
           <DndContext collisionDetection={pointerWithin} onDragEnd={handleDragEnd}>
             {props.calendarMode === "Semana" ? (
-              <WeekCalendar days={days} today={today} posts={props.posts} calendarDates={props.calendarDates} channelById={props.channelById} funnelById={props.funnelById} setModal={props.setModal} />
+              <WeekCalendar days={days} today={today} posts={props.posts} postPublications={props.postPublications} calendarDates={props.calendarDates} channelById={props.channelById} funnelById={props.funnelById} setModal={props.setModal} />
             ) : (
               <>
                 <div className="mb-3 grid grid-cols-7 gap-2 text-center text-xs font-black uppercase text-slate-500">
@@ -8046,6 +8108,7 @@ function EditorialCalendar(props: {
                       onOtherMonthClick={() => props.setVisibleMonth(new Date(day.getFullYear(), day.getMonth(), 1))}
                       calendarDates={props.calendarDates.filter((item) => sameDay(new Date(`${item.date}T12:00:00`), day))}
                       posts={props.posts.filter((post) => sameDay(new Date(post.publishAt), day))}
+                      postPublications={props.postPublications}
                       channelById={props.channelById}
                       funnelById={props.funnelById}
                       setModal={props.setModal}
@@ -8068,6 +8131,7 @@ function CalendarDay({
   onOtherMonthClick,
   calendarDates,
   posts,
+  postPublications,
   channelById,
   funnelById,
   setModal
@@ -8078,6 +8142,7 @@ function CalendarDay({
   onOtherMonthClick: () => void;
   calendarDates: CalendarDate[];
   posts: EditorialPost[];
+  postPublications: PostPublication[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
@@ -8106,7 +8171,7 @@ function CalendarDay({
       )}
       <div className="mt-2 space-y-2">
         {posts.map((post) => (
-          <DraggablePost key={post.id} post={post} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
+          <DraggablePost key={post.id} post={post} publications={publicationsForPost(post.id, postPublications)} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
         ))}
       </div>
     </div>
@@ -8117,6 +8182,7 @@ function WeekCalendar({
   days,
   today,
   posts,
+  postPublications,
   calendarDates,
   channelById,
   funnelById,
@@ -8125,6 +8191,7 @@ function WeekCalendar({
   days: Date[];
   today: Date;
   posts: EditorialPost[];
+  postPublications: PostPublication[];
   calendarDates: CalendarDate[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
@@ -8174,6 +8241,7 @@ function WeekCalendar({
             days={days}
             today={today}
             posts={posts}
+            postPublications={postPublications}
             channelById={channelById}
             funnelById={funnelById}
             setModal={setModal}
@@ -8189,6 +8257,7 @@ function HourRow({
   days,
   today,
   posts,
+  postPublications,
   channelById,
   funnelById,
   setModal
@@ -8197,6 +8266,7 @@ function HourRow({
   days: Date[];
   today: Date;
   posts: EditorialPost[];
+  postPublications: PostPublication[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
@@ -8214,6 +8284,7 @@ function HourRow({
             const date = new Date(post.publishAt);
             return sameDay(date, day) && date.getHours() === hour;
           })}
+          postPublications={postPublications}
           channelById={channelById}
           funnelById={funnelById}
           setModal={setModal}
@@ -8228,6 +8299,7 @@ function HourCell({
   isToday,
   hour,
   posts,
+  postPublications,
   channelById,
   funnelById,
   setModal
@@ -8236,6 +8308,7 @@ function HourCell({
   isToday: boolean;
   hour: number;
   posts: EditorialPost[];
+  postPublications: PostPublication[];
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
@@ -8250,15 +8323,16 @@ function HourCell({
     <div ref={setNodeRef} onClick={createPostOnHour} className={`min-h-24 cursor-pointer rounded-2xl border p-2 text-left motion-smooth ${isToday ? "border-blue-200 bg-blue-50" : isOver ? "border-blue-400 bg-blue-50" : "border-slate-100 bg-slate-50 hover:border-blue-200 hover:bg-blue-50/50"}`} title={`Criar post às ${String(hour).padStart(2, "0")}:00`}>
       <div className="space-y-2">
         {posts.map((post) => (
-          <DraggablePost key={post.id} post={post} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
+          <DraggablePost key={post.id} post={post} publications={publicationsForPost(post.id, postPublications)} channel={channelById.get(post.channelId)} stage={funnelById.get(post.funnelStageId)} setModal={setModal} />
         ))}
       </div>
     </div>
   );
 }
 
-function DraggablePost({ post, channel, stage, setModal }: { post: EditorialPost; channel?: Channel; stage?: FunnelStage; setModal: Dispatch<SetStateAction<ModalState>> }) {
+function DraggablePost({ post, publications, channel, stage, setModal }: { post: EditorialPost; publications: PostPublication[]; channel?: Channel; stage?: FunnelStage; setModal: Dispatch<SetStateAction<ModalState>> }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: `post:${post.id}` });
+  const visualStatus = derivePostStatusFromPublications(post.status, publications);
   return (
     <div
       ref={setNodeRef}
@@ -8278,8 +8352,9 @@ function DraggablePost({ post, channel, stage, setModal }: { post: EditorialPost
           <p className="mt-1 line-clamp-2 font-black">{post.title}</p>
           <div className="mt-1 flex flex-wrap gap-1">
             {stage && <span className="inline-flex rounded-xl px-2 py-0.5 text-[10px] font-black text-white" style={{ background: stage.color }}>{stage.name.split(" - ")[0]}</span>}
-            {post.status && postStatusConfig[post.status] && <Badge tone={postStatusConfig[post.status].tone} className="text-[10px]">{postStatusConfig[post.status].label}</Badge>}
+            {visualStatus && postStatusConfig[visualStatus] && <Badge tone={postStatusConfig[visualStatus].tone} className="text-[10px]">{postStatusConfig[visualStatus].label}</Badge>}
           </div>
+          <PublicationStatusIcons publications={publications} className="mt-1" />
         </button>
       </div>
     </div>
@@ -8293,6 +8368,7 @@ function Tasks(props: {
   taskBoards: TaskBoard[];
   setTaskBoards: Dispatch<SetStateAction<TaskBoard[]>>;
   posts: EditorialPost[];
+  postPublications: PostPublication[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   ideas: Idea[];
   currentUser: Profile;
@@ -8467,7 +8543,7 @@ function Tasks(props: {
         )}
       </div>
       {calendarActive ? (
-        <CalendarPostsKanban posts={props.posts} setPosts={props.setPosts} ideas={props.ideas} currentUser={props.currentUser} campaigns={props.campaigns} channels={props.channels} channelById={props.channelById} setModal={props.setModal} createNotifications={props.createNotifications} />
+        <CalendarPostsKanban posts={props.posts} postPublications={props.postPublications} setPosts={props.setPosts} ideas={props.ideas} currentUser={props.currentUser} campaigns={props.campaigns} channels={props.channels} channelById={props.channelById} setModal={props.setModal} createNotifications={props.createNotifications} />
       ) : (
       <DndContext sensors={sensors} collisionDetection={stableCollisionDetection} onDragEnd={handleDragEnd}>
         <div className="overflow-x-auto pb-3">
@@ -8781,15 +8857,16 @@ function TaskQuickMenu({ task, columns, x, y, close, setModal, setTasks }: { tas
   );
 }
 
-function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, channels, channelById, setModal, createNotifications }: { posts: EditorialPost[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; ideas: Idea[]; currentUser: Profile; campaigns: Campaign[]; channels: Channel[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>>; createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void }) {
+function CalendarPostsKanban({ posts, postPublications, setPosts, ideas, currentUser, campaigns, channels, channelById, setModal, createNotifications }: { posts: EditorialPost[]; postPublications: PostPublication[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; ideas: Idea[]; currentUser: Profile; campaigns: Campaign[]; channels: Channel[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>>; createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void }) {
   const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { distance: 7 } }));
-  const statuses = [...postStatuses, ...(posts.some((post) => !postStatuses.includes(post.status)) ? ["Outros"] : [])];
+  const statuses = [...postStatuses, ...(posts.some((post) => !postStatuses.includes(derivedPostStatus(post, postPublications))) ? ["Outros"] : [])];
   const neutralCampaign = campaigns.find((campaign) => normalizeText(campaign.name) === "campanha neutra");
   const unlinkedIdeas = ideas.filter((idea) => !posts.some((post) => post.ideaId === idea.id)).sort((a, b) => a.order - b.order);
 
   function statusFor(post: EditorialPost) {
     if (post.status === "Ideia") return "Produção";
-    return postStatuses.includes(post.status) ? post.status : "Outros";
+    const visualStatus = derivedPostStatus(post, postPublications);
+    return postStatuses.includes(visualStatus) ? visualStatus : "Outros";
   }
 
   function handleDragEnd(event: DragEndEvent) {
@@ -8872,7 +8949,7 @@ function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, c
       <div className="overflow-x-auto pb-3">
         <div className="flex min-w-full gap-4">
           {statuses.map((status) => (
-            <CalendarStatusColumn key={status} status={status} posts={posts.filter((post) => statusFor(post) === status).sort((a, b) => (a.order ?? 1) - (b.order ?? 1))} ideas={status === "Ideia" ? unlinkedIdeas : []} channelById={channelById} setModal={setModal} />
+            <CalendarStatusColumn key={status} status={status} posts={posts.filter((post) => statusFor(post) === status).sort((a, b) => (a.order ?? 1) - (b.order ?? 1))} postPublications={postPublications} ideas={status === "Ideia" ? unlinkedIdeas : []} channelById={channelById} setModal={setModal} />
           ))}
         </div>
       </div>
@@ -8880,7 +8957,7 @@ function CalendarPostsKanban({ posts, setPosts, ideas, currentUser, campaigns, c
   );
 }
 
-function CalendarStatusColumn({ status, posts, ideas, channelById, setModal }: { status: string; posts: EditorialPost[]; ideas: Idea[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+function CalendarStatusColumn({ status, posts, postPublications, ideas, channelById, setModal }: { status: string; posts: EditorialPost[]; postPublications: PostPublication[]; ideas: Idea[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
   const { setNodeRef, isOver } = useDroppable({ id: `calendar-status:${status}` });
   return (
     <section ref={setNodeRef} className={`min-h-[540px] w-80 shrink-0 rounded-[30px] border p-3 transition ${isOver ? "border-blue-400 bg-blue-50" : "border-slate-200 bg-white"}`}>
@@ -8891,7 +8968,7 @@ function CalendarStatusColumn({ status, posts, ideas, channelById, setModal }: {
       <SortableContext items={posts.map((post) => `calendar-post:${post.id}`)} strategy={verticalListSortingStrategy}>
         <div className={`min-h-80 space-y-3 rounded-[24px] border border-dashed p-2 transition ${isOver ? "border-blue-300 bg-blue-100/50" : "border-transparent"}`}>
           {ideas.map((idea) => <DraggableCalendarIdeaCard key={idea.id} idea={idea} channel={channelById.get(idea.channelId)} setModal={setModal} />)}
-          {posts.map((post) => <SortableCalendarPostCard key={post.id} post={post} channel={channelById.get(post.channelId)} channelById={channelById} setModal={setModal} />)}
+          {posts.map((post) => <SortableCalendarPostCard key={post.id} post={post} publications={publicationsForPost(post.id, postPublications)} channel={channelById.get(post.channelId)} channelById={channelById} setModal={setModal} />)}
           {!posts.length && !ideas.length && <div className="grid min-h-40 place-items-center rounded-3xl bg-slate-50 text-center text-sm font-bold text-slate-400">Solte um post aqui</div>}
         </div>
       </SortableContext>
@@ -8921,10 +8998,11 @@ function DraggableCalendarIdeaCard({ idea, channel, setModal }: { idea: Idea; ch
   );
 }
 
-function SortableCalendarPostCard({ post, channel, channelById, setModal }: { post: EditorialPost; channel?: Channel; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
+function SortableCalendarPostCard({ post, publications, channel, channelById, setModal }: { post: EditorialPost; publications: PostPublication[]; channel?: Channel; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>> }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `calendar-post:${post.id}` });
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const movedPointer = useRef(false);
+  const visualStatus = derivePostStatusFromPublications(post.status, publications);
   const allChannels = [
     ...(channel ? [channel] : []),
     ...(post.extraChannels ?? []).map((e) => channelById.get(e.channelId)).filter((c): c is Channel => !!c),
@@ -8961,9 +9039,10 @@ function SortableCalendarPostCard({ post, channel, channelById, setModal }: { po
         <span>{new Date(post.publishAt).toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}</span>
       </div>
       <h4 className="mt-2 line-clamp-2 font-black">{post.title}</h4>
-      {post.status && postStatusConfig[post.status] && (
-        <div className="mt-2">
-          <Badge tone={postStatusConfig[post.status].tone}>{postStatusConfig[post.status].label}</Badge>
+      {visualStatus && postStatusConfig[visualStatus] && (
+        <div className="mt-2 flex flex-wrap items-center gap-1">
+          <Badge tone={postStatusConfig[visualStatus].tone}>{postStatusConfig[visualStatus].label}</Badge>
+          <PublicationStatusIcons publications={publications} />
         </div>
       )}
       <p className="mt-2 line-clamp-2 text-sm font-bold text-slate-500">{post.description || "Clique para editar o post."}</p>
@@ -9190,6 +9269,8 @@ function Metrics({
   visitors,
   persons,
   conversions,
+  salesClients,
+  profiles,
   productLines,
   vehicleTypes,
   contentTypes,
@@ -9222,6 +9303,8 @@ function Metrics({
   visitors: Visitor[];
   persons: Person[];
   conversions: Conversion[];
+  salesClients: SalesClient[];
+  profiles: Profile[];
   productLines: ProductLine[];
   vehicleTypes: VehicleType[];
   contentTypes: ContentType[];
@@ -9484,12 +9567,13 @@ function Metrics({
   }), [adInsightsDaily, periodCutoff]);
 
   const overviewVisitorsBySource = useMemo(() => {
-    const map: Record<string, number> = {};
+    const map: Record<string, { source: string | null; medium: string | null; count: number }> = {};
     for (const v of overviewVisitors) {
-      const k = v.firstTouchSource ?? "(direto)";
-      map[k] = (map[k] ?? 0) + 1;
+      const key = `${v.firstTouchSource ?? ""}|${v.firstTouchMedium ?? ""}`;
+      if (!map[key]) map[key] = { source: v.firstTouchSource, medium: v.firstTouchMedium, count: 0 };
+      map[key].count++;
     }
-    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 5);
+    return Object.values(map).sort((a, b) => b.count - a.count).slice(0, 5);
   }, [overviewVisitors]);
 
   const overviewLeadsByChannel = useMemo(() => {
@@ -9692,14 +9776,16 @@ function Metrics({
                   <p className="text-sm text-slate-400">Nenhum dado ainda</p>
                 ) : (
                   <div className="space-y-3">
-                    {overviewVisitorsBySource.map(([source, count]) => {
+                    {overviewVisitorsBySource.map(({ source, medium, count }) => {
+                      const { label, description } = labelVisitorSource(source, medium);
                       const pct = overviewVisitors.length > 0 ? Math.round(count / overviewVisitors.length * 100) : 0;
                       return (
-                        <div key={source}>
-                          <div className="mb-1 flex items-center justify-between">
-                            <span className="text-sm font-bold capitalize text-slate-700">{source}</span>
+                        <div key={`${source ?? ""}|${medium ?? ""}`}>
+                          <div className="mb-0.5 flex items-center justify-between">
+                            <span className="text-sm font-bold text-slate-700">{label}</span>
                             <span className="text-xs font-black text-slate-500">{count} · {pct}%</span>
                           </div>
+                          <p className="mb-1.5 text-xs font-bold text-slate-400 leading-snug">{description}</p>
                           <div className="h-2 w-full rounded-full bg-slate-100">
                             <div className="h-2 rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
                           </div>
@@ -9826,6 +9912,8 @@ function Metrics({
           setTrackableLinks={setTrackableLinks}
           visitors={visitors}
           persons={persons}
+          salesClients={salesClients}
+          profiles={profiles}
           subTab={origemSubTab}
           setSubTab={setOrigemSubTab}
         />
@@ -11184,6 +11272,61 @@ function buildTrackableLinkUrl(slugValue: string) {
   return `${site}/l/${slugValue}`;
 }
 
+function labelVisitorSource(source: string | null, medium: string | null): { label: string; description: string } {
+  const s = (source ?? "").toLowerCase().trim();
+  const m = (medium ?? "").toLowerCase().trim();
+
+  if (!s || s === "(direto)" || s === "(direct)") {
+    return {
+      label: "Acesso direto",
+      description: "Visitou o site sem clicar em link rastreável — pode ter digitado o endereço, aberto um favorito, ou clicado em link do WhatsApp/Instagram (que geralmente não transmitem essa informação)."
+    };
+  }
+
+  const friendlyName: Record<string, string> = {
+    ig: "Instagram", instagram: "Instagram",
+    fb: "Facebook", facebook: "Facebook",
+    an: "Audience Network (Meta)",
+    google: "Google", gg: "Google",
+    youtube: "YouTube", yt: "YouTube",
+    tiktok: "TikTok", tt: "TikTok",
+    whatsapp: "WhatsApp",
+  };
+  const name = friendlyName[s] ?? (source ?? s);
+
+  if (m === "paid" || m === "cpc") {
+    return { label: `${name} (Anúncio)`, description: `Clicou em um anúncio pago no ${name} antes de visitar o site.` };
+  }
+  if (m === "organic") {
+    return { label: `${name} (Orgânico)`, description: `Encontrou o site por busca orgânica ou post não patrocinado em ${name}.` };
+  }
+  if (m === "email") {
+    return { label: "E-mail", description: "Clicou em um link recebido por e-mail." };
+  }
+  if (m === "social" || m === "referral") {
+    return { label: name, description: `Veio de um link publicado em ${name}.` };
+  }
+  if (m && m !== "(none)" && m !== "(not set)") {
+    return { label: `${name} · ${medium}`, description: `Link rastreável com origem "${source}" e mídia "${medium}".` };
+  }
+
+  const bySourceOnly: Record<string, { label: string; description: string }> = {
+    instagram: { label: "Instagram", description: "Veio de um link no Instagram (bio, story, post ou DM)." },
+    ig: { label: "Instagram", description: "Veio de um link no Instagram (bio, story, post ou DM)." },
+    facebook: { label: "Facebook", description: "Veio de um link publicado no Facebook." },
+    fb: { label: "Facebook", description: "Veio de um link publicado no Facebook." },
+    google: { label: "Google", description: "Encontrou o site pelo Google (busca ou link orgânico)." },
+    youtube: { label: "YouTube", description: "Clicou em um link publicado no YouTube (descrição ou comentário)." },
+    yt: { label: "YouTube", description: "Clicou em um link publicado no YouTube (descrição ou comentário)." },
+    tiktok: { label: "TikTok", description: "Veio de um link no TikTok (bio ou descrição do vídeo)." },
+    tt: { label: "TikTok", description: "Veio de um link no TikTok (bio ou descrição do vídeo)." },
+    whatsapp: { label: "WhatsApp", description: "Clicou em um link enviado pelo WhatsApp." },
+  };
+  if (s in bySourceOnly) return bySourceOnly[s];
+
+  return { label: source ?? "(desconhecido)", description: `Origem identificada como "${source}" sem mídia especificada.` };
+}
+
 function describeAnalyticsSource(source: string, medium: string): { label: string; description: string } {
   const s = source.toLowerCase().trim();
   const m = medium.toLowerCase().trim();
@@ -11394,6 +11537,8 @@ function OrigemSection({
   setTrackableLinks,
   visitors,
   persons,
+  salesClients,
+  profiles,
   subTab,
   setSubTab
 }: {
@@ -11401,6 +11546,8 @@ function OrigemSection({
   setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
   visitors: Visitor[];
   persons: Person[];
+  salesClients: SalesClient[];
+  profiles: Profile[];
   subTab: "links" | "script" | "visitantes" | "leads";
   setSubTab: Dispatch<SetStateAction<"links" | "script" | "visitantes" | "leads">>;
 }) {
@@ -11414,12 +11561,15 @@ function OrigemSection({
   fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitorId:vid,organizationId:ORG,utmSource:p.get('utm_source'),utmMedium:p.get('utm_medium'),utmCampaign:p.get('utm_campaign'),fbclid:p.get('fbclid'),gclid:p.get('gclid'),referrer:document.referrer,page:location.pathname})}).catch(function(){});
 })();`;
 
-  const visitorsBySource = visitors.reduce<Record<string, number>>((acc, v) => {
-    const key = v.firstTouchSource ?? "(direto)";
-    acc[key] = (acc[key] ?? 0) + 1;
-    return acc;
-  }, {});
-  const sourceEntries = Object.entries(visitorsBySource).sort((a, b) => b[1] - a[1]);
+  const sourceEntries = useMemo(() => {
+    const map: Record<string, { source: string | null; medium: string | null; count: number }> = {};
+    for (const v of visitors) {
+      const key = `${v.firstTouchSource ?? ""}|${v.firstTouchMedium ?? ""}`;
+      if (!map[key]) map[key] = { source: v.firstTouchSource, medium: v.firstTouchMedium, count: 0 };
+      map[key].count++;
+    }
+    return Object.values(map).sort((a, b) => b.count - a.count);
+  }, [visitors]);
 
   const channelColors: Record<string, string> = {
     whatsapp: "green",
@@ -11438,6 +11588,26 @@ function OrigemSection({
       setTimeout(() => setScriptCopied(false), 2000);
     });
   };
+
+  const [leadFilter, setLeadFilter] = useState<"todos" | "atribuidos" | "nao-atribuidos">("todos");
+  const [leadChannel, setLeadChannel] = useState<string>("todos");
+
+  const visitorById = useMemo(() => new Map(visitors.map((v) => [v.id, v])), [visitors]);
+  const salesClientByPersonId = useMemo(() => {
+    const map = new Map<string, SalesClient>();
+    for (const c of salesClients) { if (c.personId) map.set(c.personId, c); }
+    return map;
+  }, [salesClients]);
+  const profileByIdMap = useMemo(() => new Map(profiles.map((p) => [p.id, p])), [profiles]);
+  const leadChannels = useMemo(() => {
+    const seen = new Set<string>();
+    for (const p of persons) seen.add(p.channel);
+    return [...seen];
+  }, [persons]);
+  const filteredPersons = useMemo(() => persons
+    .filter((p) => leadFilter === "atribuidos" ? !!p.visitorId : leadFilter === "nao-atribuidos" ? !p.visitorId : true)
+    .filter((p) => leadChannel === "todos" || p.channel === leadChannel),
+  [persons, leadFilter, leadChannel]);
 
   return (
     <div>
@@ -11502,20 +11672,19 @@ function OrigemSection({
           </div>
           {sourceEntries.length > 0 ? (
             <div className="space-y-2">
-              {sourceEntries.map(([source, count]) => {
+              {sourceEntries.map(({ source, medium, count }) => {
+                const { label, description } = labelVisitorSource(source, medium);
                 const pct = visitors.length > 0 ? Math.round((count / visitors.length) * 100) : 0;
                 return (
-                  <div key={source} className="flex items-center gap-3 rounded-2xl bg-slate-50 px-4 py-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-black text-slate-700 capitalize">{source}</span>
-                        <span className="text-sm font-black text-blue-700">{count} visitante{count !== 1 ? "s" : ""}</span>
-                      </div>
-                      <div className="h-1.5 w-full rounded-full bg-slate-200">
-                        <div className="h-1.5 rounded-full bg-blue-500 transition-all" style={{ width: `${pct}%` }} />
-                      </div>
+                  <div key={`${source ?? ""}|${medium ?? ""}`} className="rounded-2xl bg-slate-50 px-4 py-3">
+                    <div className="flex items-center justify-between mb-0.5">
+                      <span className="text-sm font-black text-slate-700">{label}</span>
+                      <span className="text-sm font-black text-blue-700">{count} visitante{count !== 1 ? "s" : ""} · {pct}%</span>
                     </div>
-                    <span className="text-xs font-black text-slate-400 w-8 text-right">{pct}%</span>
+                    <p className="mb-2 text-xs font-bold text-slate-400 leading-snug">{description}</p>
+                    <div className="h-1.5 w-full rounded-full bg-slate-200">
+                      <div className="h-1.5 rounded-full bg-blue-500 transition-all" style={{ width: `${pct}%` }} />
+                    </div>
                   </div>
                 );
               })}
@@ -11531,34 +11700,88 @@ function OrigemSection({
 
       {subTab === "leads" && (
         <div>
-          <div className="mb-3 flex items-center gap-3">
-            <p className="text-sm font-black text-slate-700">Leads capturados automaticamente</p>
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <p className="text-sm font-black text-slate-700">Leads capturados</p>
             <Badge tone="blue">{persons.length}</Badge>
+            <div className="ml-auto flex flex-wrap gap-2">
+              {(["todos", "atribuidos", "nao-atribuidos"] as const).map((f) => (
+                <button key={f} type="button" onClick={() => setLeadFilter(f)}
+                  className={`rounded-xl px-3 py-1 text-xs font-black transition ${leadFilter === f ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+                  {f === "todos" ? "Todos" : f === "atribuidos" ? "Com origem" : "Sem origem"}
+                </button>
+              ))}
+              {leadChannels.map((ch) => (
+                <button key={ch} type="button" onClick={() => setLeadChannel(leadChannel === ch ? "todos" : ch)}
+                  className={`rounded-xl px-3 py-1 text-xs font-black capitalize transition ${leadChannel === ch ? "bg-slate-800 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}>
+                  {ch}
+                </button>
+              ))}
+            </div>
           </div>
-          {persons.length > 0 ? (
+          {filteredPersons.length > 0 ? (
             <div className="space-y-2">
-              {persons.map((person) => {
+              {filteredPersons.map((person) => {
                 const phone = person.identifiers.find((i) => i.type === "phone")?.value ?? null;
-                const maskedPhone = phone ? `${phone.slice(0, 4)}****${phone.slice(-4)}` : null;
+                const email = person.identifiers.find((i) => i.type === "email")?.value ?? null;
+                const visitor = person.visitorId ? visitorById.get(person.visitorId) : null;
+                const client = salesClientByPersonId.get(person.id);
+                const responsible = client?.assignedTo ? profileByIdMap.get(client.assignedTo) : null;
                 const tone = (channelColors[person.channel] ?? "slate") as "green" | "purple" | "blue" | "cyan" | "slate" | "amber";
+                const waLink = phone ? `https://wa.me/${phone}` : null;
                 return (
-                  <div key={person.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-slate-50 p-3">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-black text-slate-700">{person.name ?? maskedPhone ?? "Sem identificação"}</p>
-                      {maskedPhone && person.name && <p className="text-xs font-bold text-slate-400">{maskedPhone}</p>}
-                      {person.channelDetail && <p className="text-xs font-bold text-slate-400">{person.channelDetail}</p>}
+                  <div key={person.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-black text-slate-800">{person.name ?? phone ?? "Sem identificação"}</p>
+                        {phone && person.name && <p className="text-xs font-bold text-slate-400">{phone}</p>}
+                        {email && <p className="text-xs font-bold text-slate-400">{email}</p>}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <Badge tone={tone}>{person.channel}</Badge>
+                        {client && (
+                          <Badge tone={client.status === "cliente" ? "green" : client.status === "inativo" ? "slate" : "amber"}>
+                            {client.status}
+                          </Badge>
+                        )}
+                        {!visitor && <Badge tone="slate">Sem origem</Badge>}
+                      </div>
                     </div>
-                    <Badge tone={tone}>{person.channel}</Badge>
-                    {person.visitorId && <Badge tone="green">Atribuído</Badge>}
-                    <span className="text-xs font-bold text-slate-400">{new Date(person.createdAt).toLocaleDateString("pt-BR")}</span>
+                    {visitor && (
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 rounded-xl bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+                        {(visitor.firstTouchSource || visitor.firstTouchMedium) && (
+                          <span>🌐 {labelVisitorSource(visitor.firstTouchSource, visitor.firstTouchMedium).label}</span>
+                        )}
+                        {visitor.firstTouchCampaign && <span>📣 {visitor.firstTouchCampaign}</span>}
+                        {visitor.sessionCount > 1 && <span>🔁 {visitor.sessionCount} sessões</span>}
+                      </div>
+                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      {person.channelDetail && (
+                        <span className="max-w-[200px] truncate text-xs font-bold text-slate-400">{person.channelDetail}</span>
+                      )}
+                      {responsible && <span className="text-xs font-bold text-slate-500">👤 {responsible.name}</span>}
+                      <span className="ml-auto text-xs font-bold text-slate-400">
+                        {new Date(person.createdAt).toLocaleDateString("pt-BR")}
+                      </span>
+                      {waLink && (
+                        <a href={waLink} target="_blank" rel="noopener noreferrer"
+                          className="rounded-xl bg-green-50 px-3 py-1 text-xs font-black text-green-700 transition hover:bg-green-100">
+                          WhatsApp ↗
+                        </a>
+                      )}
+                    </div>
                   </div>
                 );
               })}
             </div>
           ) : (
             <div className="rounded-2xl bg-slate-50 p-8 text-center">
-              <p className="text-sm font-black text-slate-400">Nenhum lead capturado ainda.</p>
-              <p className="mt-1 text-xs font-bold text-slate-400">Leads são criados automaticamente via webhook quando alguém entra em contato.</p>
+              <p className="text-sm font-black text-slate-400">
+                {persons.length === 0 ? "Nenhum lead capturado ainda." : "Nenhum lead com esses filtros."}
+              </p>
+              {persons.length === 0 && (
+                <p className="mt-1 text-xs font-bold text-slate-400">Leads são criados automaticamente via webhook.</p>
+              )}
             </div>
           )}
         </div>
@@ -14901,6 +15124,8 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
   const pendingCount = assets.filter((asset) => asset.status === "Aguardando revisão" && !asset.isCover).length;
   const approvedCount = assets.filter((asset) => asset.status === "Aprovado").length;
   const reviewSummary = !assets.length ? "Nenhuma arte enviada" : `${assets.length} arquivo(s) · ${approvedCount} aprovado(s) · ${pendingCount} pendente(s)`;
+  const editingPublications = editing ? publicationsForPost(editing.id, postPublications ?? []) : [];
+  const editingVisualStatus = editing ? derivePostStatusFromPublications(editing.status, editingPublications) : undefined;
 
   function changeCreationMode(mode: "zero" | "idea" | "template") {
     setCreationMode(mode);
@@ -15055,9 +15280,10 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
           )}
           {!editing && creationMode === "idea" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Ideia de origem<select name="ideaId" value={selectedIdeaId} onChange={(event) => applyIdea(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem ideia vinculada</option>{postIdeas.map((idea) => <option key={idea.id} value={idea.id}>{idea.title}</option>)}</select></label> : <input type="hidden" name="ideaId" value={selectedIdeaId} />}
           {!editing && creationMode === "template" ? <label className="block text-sm font-bold text-slate-600 md:col-span-2">Usar modelo<select name="templateId" value={selectedTemplateId} onChange={(event) => applyTemplate(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500"><option value="">Sem modelo</option>{postTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}</select></label> : <input type="hidden" name="templateId" value={selectedTemplateId} />}
-          {editing?.status && postStatusConfig[editing.status] && (
-            <div className="md:col-span-2 -mb-1">
-              <Badge tone={postStatusConfig[editing.status].tone}>{postStatusConfig[editing.status].label}</Badge>
+          {editingVisualStatus && postStatusConfig[editingVisualStatus] && (
+            <div className="md:col-span-2 -mb-1 flex flex-wrap items-center gap-2">
+              <Badge tone={postStatusConfig[editingVisualStatus].tone}>{postStatusConfig[editingVisualStatus].label}</Badge>
+              <PublicationStatusIcons publications={editingPublications} />
             </div>
           )}
           <TextInput name="title" label="Título" required defaultValue={editing?.title ?? ideaPrefill?.title} />
@@ -15131,7 +15357,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
             <button type="button" onClick={() => setProductionChecklist((current) => [...current, { id: crypto.randomUUID(), label: "", done: false }])} title="Adicionar item" className="rounded-2xl bg-blue-100 p-2 text-blue-700"><Plus size={16} /></button>
           </section>
           {editing && (() => {
-            const pubs = (postPublications ?? []).filter((p) => p.postId === editing.id && p.status !== "cancelled");
+            const pubs = editingPublications;
             if (!pubs.length) return null;
             const platformLabel: Record<string, string> = { youtube: "YouTube", tiktok: "TikTok", instagram: "Instagram", facebook: "Facebook", linkedin: "LinkedIn" };
             const platformColor: Record<string, string> = { youtube: "bg-red-50 border-red-100 text-red-700", tiktok: "bg-slate-50 border-slate-200 text-slate-700", instagram: "bg-purple-50 border-purple-100 text-purple-700", facebook: "bg-blue-50 border-blue-100 text-blue-700", linkedin: "bg-sky-50 border-sky-100 text-sky-700" };
@@ -15150,6 +15376,9 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
                   const isDuplicate = pub.status === "scheduled" && (scheduledByPlatform[pub.platform] ?? 0) > 1;
                   return (
                     <div key={pub.id} onClick={() => setPublicationDetailModal(pub)} className={`cursor-pointer flex flex-wrap items-center gap-2 rounded-2xl border px-3 py-2.5 transition hover:opacity-75 ${isDuplicate ? "border-amber-300 bg-amber-50" : platformColor[pub.platform] ?? "bg-slate-50 border-slate-200 text-slate-700"}`}>
+                      <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full border ${publicationStatusClasses(pub.status)}`}>
+                        <PublicationPlatformIcon platform={pub.platform} />
+                      </span>
                       <span className="font-black text-sm">{platformLabel[pub.platform] ?? pub.platform}</span>
                       <span className={`text-xs font-bold ${statusColor[pub.status] ?? "text-slate-500"}`}>{statusLabel[pub.status] ?? pub.status}</span>
                       {pub.status === "scheduled" && pub.scheduledAt && (

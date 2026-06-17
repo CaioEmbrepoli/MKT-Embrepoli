@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
+import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 
 export const dynamic = "force-dynamic";
 
@@ -154,6 +155,11 @@ export async function POST(request: Request) {
       updated_at: now
     });
     if (queueError) throw queueError;
+
+    await syncPostStatusFromPublications(context.service, {
+      organizationId: context.organizationId,
+      postId: body.postId ?? null
+    });
 
     return NextResponse.json({
       queued: true,

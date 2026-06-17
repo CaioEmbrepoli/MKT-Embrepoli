@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getTikTokAccessToken, tiktokRequestContext } from "@/lib/tiktok-server";
 import { getGoogleAccessToken } from "@/lib/google-server";
+import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 
 /** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
@@ -182,6 +183,10 @@ export async function POST(request: Request) {
           asset_url: body.assetUrl,
           external_id: publish_id,
           created_by: context.userId,
+        });
+        await syncPostStatusFromPublications(context.service, {
+          organizationId: context.organizationId,
+          postId: body.postId
         });
       } catch {
         // Falha no registro não impede o retorno de sucesso

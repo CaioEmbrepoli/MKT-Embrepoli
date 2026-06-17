@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { getGoogleAccessToken } from "@/lib/google-server";
 import type { GoogleRequestContext } from "@/lib/google-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
+import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -72,7 +73,23 @@ export async function GET(request: Request) {
         items?: { status: { privacyStatus: string; uploadStatus: string } }[]
       };
       const item = verifyData.items?.[0];
-      if (!item) throw new Error("Vídeo não encontrado no YouTube.");
+      if (!item) {
+        const now = new Date().toISOString();
+        const message = "Video nao encontrado no YouTube.";
+        await service.from("post_publications").update({
+          status: "error",
+          error: message,
+          attempts,
+          last_attempt_at: now,
+          updated_at: now,
+        }).eq("id", pub.id);
+        await syncPostStatusFromPublications(service, {
+          organizationId: pub.organization_id,
+          postId: pub.post_id
+        });
+        results.push({ id: pub.id, status: "error", error: message });
+        continue;
+      }
 
       const { privacyStatus, uploadStatus } = item.status;
 
@@ -87,12 +104,11 @@ export async function GET(request: Request) {
           updated_at: now,
         }).eq("id", pub.id);
 
-        if (pub.post_id) {
-          await service.from("posts")
-            .update({ status: "Publicado", published_at: now })
-            .eq("organization_id", pub.organization_id)
-            .eq("id", pub.post_id);
-        }
+        await syncPostStatusFromPublications(service, {
+          organizationId: pub.organization_id,
+          postId: pub.post_id,
+          publishedAt: now
+        });
 
         try {
           await createMetricAfterPublish(service, {
@@ -110,6 +126,21 @@ export async function GET(request: Request) {
         }
 
         results.push({ id: pub.id, status: "published" });
+      } else if (uploadStatus === "failed" || uploadStatus === "rejected" || privacyStatus === "rejected") {
+        const now = new Date().toISOString();
+        const message = `YouTube recusou a publicacao (${privacyStatus}/${uploadStatus}).`;
+        await service.from("post_publications").update({
+          status: "error",
+          error: message,
+          attempts,
+          last_attempt_at: now,
+          updated_at: now,
+        }).eq("id", pub.id);
+        await syncPostStatusFromPublications(service, {
+          organizationId: pub.organization_id,
+          postId: pub.post_id
+        });
+        results.push({ id: pub.id, status: "error", error: message });
       } else {
         // Ainda agendado/processando — atualiza apenas o attempt
         await service.from("post_publications").update({
@@ -122,11 +153,16 @@ export async function GET(request: Request) {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Erro ao verificar vídeo no YouTube.";
       await service.from("post_publications").update({
+        status: "error",
         error: message,
         attempts,
         last_attempt_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }).eq("id", pub.id);
+      await syncPostStatusFromPublications(service, {
+        organizationId: pub.organization_id,
+        postId: pub.post_id
+      });
       results.push({ id: pub.id, status: "error", error: message });
     }
   }

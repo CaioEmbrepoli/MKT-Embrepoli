@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
+import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 
 /** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
@@ -273,6 +274,11 @@ export async function POST(request: Request) {
             format: body.format,
           });
         }
+        await syncPostStatusFromPublications(context.service, {
+          organizationId: context.organizationId,
+          postId: body.postId,
+          publishedAt: isScheduled ? null : new Date().toISOString()
+        });
       } catch {
         // Falha no registro não impede o retorno de sucesso
       }

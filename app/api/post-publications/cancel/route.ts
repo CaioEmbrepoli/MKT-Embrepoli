@@ -81,11 +81,11 @@ async function restorePostStatusIfNeeded(context: GoogleRequestContext, postId: 
   if (publicationsError) throw new Error(publicationsError.message);
 
   const remaining = publications ?? [];
-  if (remaining.some((publication) => activeStatuses.includes(publication.status))) return null;
-
   const nextStatus = remaining.some((publication) => publication.status === "published")
     ? "Publicado"
-    : await resolveReviewBasedPostStatus(context, postId);
+    : remaining.some((publication) => activeStatuses.includes(publication.status))
+      ? "Agendado"
+      : await resolveReviewBasedPostStatus(context, postId);
 
   const { error: updateError } = await context.service
     .from("posts")

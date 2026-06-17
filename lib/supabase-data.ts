@@ -1801,6 +1801,7 @@ function mapSalesClient(row: any): SalesClient {
     sourceCustom: row.source_custom ?? "",
     proposals: Array.isArray(row.proposals) ? (row.proposals as SalesProposal[]) : [],
     salesFunnelStage: row.sales_funnel_stage ?? "lead",
+    personId: row.person_id ?? null,
     createdAt: row.created_at ?? new Date().toISOString()
   };
 }
@@ -1829,7 +1830,8 @@ export async function saveSalesClient(client: SupabaseClient, item: SalesClient)
     assigned_to: item.assignedTo || null,
     notes: item.notes,
     proposals: item.proposals,
-    sales_funnel_stage: item.salesFunnelStage
+    sales_funnel_stage: item.salesFunnelStage,
+    person_id: item.personId ?? null
   });
   if (error) throw new Error(`sales_clients upsert: ${error.message}`);
 }

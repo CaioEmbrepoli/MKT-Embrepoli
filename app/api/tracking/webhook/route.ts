@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +13,65 @@ function normalizePhone(raw: string): string {
 function extractVisitorRef(text: string): string | null {
   const match = /\[ref:([a-zA-Z0-9-]+)\]/.exec(text);
   return match ? match[1] : null;
+}
+
+function channelToSource(channel: string): "instagram" | "youtube" | "indicacao" | "site" | "manual" | "outros" {
+  const map: Record<string, "instagram" | "youtube" | "indicacao" | "site" | "manual" | "outros"> = {
+    instagram: "instagram",
+    facebook: "instagram",
+    youtube: "youtube",
+    google: "site",
+  };
+  return map[channel.toLowerCase()] ?? "manual";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function autoLinkSalesClient(
+  service: SupabaseClient<any>,
+  org: string,
+  phone: string,
+  name: string | null,
+  channel: string,
+  personId: string
+) {
+  const { data: clients } = await service
+    .from("sales_clients")
+    .select("id, phone, person_id")
+    .eq("organization_id", org) as { data: { id: string; phone: string; person_id: string | null }[] | null };
+
+  const normalizedPhone = phone.replace(/\D/g, "");
+  const existing = (clients ?? []).find((c) => {
+    const cp = String(c.phone ?? "").replace(/\D/g, "");
+    return cp === normalizedPhone && cp.length >= 10;
+  });
+
+  if (existing) {
+    if (!existing.person_id) {
+      await service
+        .from("sales_clients")
+        .update({ person_id: personId })
+        .eq("id", existing.id);
+    }
+  } else {
+    await service.from("sales_clients").insert({
+      id: crypto.randomUUID(),
+      organization_id: org,
+      name: name || "Lead",
+      client_type: "PF",
+      email: "",
+      phone,
+      company: "",
+      segment: "",
+      state_uf: "",
+      city: "",
+      status: "lead",
+      source: channelToSource(channel),
+      notes: "",
+      proposals: [],
+      sales_funnel_stage: "lead",
+      person_id: personId,
+    });
+  }
 }
 
 export async function POST(request: Request) {
@@ -61,7 +120,7 @@ export async function POST(request: Request) {
             const org = String(body.organizationId ?? process.env.DEFAULT_ORG_ID ?? "embrepoli");
 
             if (phone.length >= 10) {
-              await service.rpc("upsert_person_by_phone", {
+              const { data: personId } = await service.rpc("upsert_person_by_phone", {
                 p_org: org,
                 p_phone: phone,
                 p_name: null,
@@ -69,6 +128,9 @@ export async function POST(request: Request) {
                 p_channel_detail: null,
                 p_visitor_id: visitorRef
               });
+              if (personId) {
+                await autoLinkSalesClient(service, org, phone, null, "whatsapp", personId as string);
+              }
             }
           }
         }
@@ -91,7 +153,7 @@ export async function POST(request: Request) {
           const campaign = String(value.ad_name ?? value.campaign_name ?? "");
 
           if (phone && phone.length >= 10) {
-            await service.rpc("upsert_person_by_phone", {
+            const { data: personId } = await service.rpc("upsert_person_by_phone", {
               p_org: org,
               p_phone: phone,
               p_name: name || null,
@@ -99,6 +161,9 @@ export async function POST(request: Request) {
               p_channel_detail: campaign || null,
               p_visitor_id: null
             });
+            if (personId) {
+              await autoLinkSalesClient(service, org, phone, name || null, "facebook", personId as string);
+            }
           }
         }
       }
@@ -114,7 +179,7 @@ export async function POST(request: Request) {
     const visitorRef = body.visitorRef ? String(body.visitorRef) : null;
 
     if (phone && phone.length >= 10) {
-      await service.rpc("upsert_person_by_phone", {
+      const { data: personId } = await service.rpc("upsert_person_by_phone", {
         p_org: org,
         p_phone: phone,
         p_name: name,
@@ -122,6 +187,9 @@ export async function POST(request: Request) {
         p_channel_detail: channelDetail,
         p_visitor_id: visitorRef
       });
+      if (personId) {
+        await autoLinkSalesClient(service, org, phone, name, channel, personId as string);
+      }
     }
 
     return NextResponse.json({ ok: true });

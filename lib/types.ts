@@ -704,6 +704,7 @@ export type SalesProposal = {
 
 export type SalesClient = {
   id: string;
+  personId?: string | null;
   externalCode: string;
   name: string;
   clientType: string;

@@ -5,6 +5,7 @@ import { getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
 import { publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
+import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -125,11 +126,10 @@ export async function POST(request: Request) {
         notBefore: Math.floor(scheduledAt.getTime() / 1000)
       });
 
-      await context.service
-        .from("posts")
-        .update({ status: "Agendado" })
-        .eq("organization_id", context.organizationId)
-        .eq("id", body.postId);
+      await syncPostStatusFromPublications(context.service, {
+        organizationId: context.organizationId,
+        postId: body.postId
+      });
 
       return NextResponse.json({
         status: "scheduled",
@@ -190,11 +190,11 @@ export async function POST(request: Request) {
       });
       if (insertError) throw new Error(insertError.message);
 
-      await context.service
-        .from("posts")
-        .update({ status: "Publicado", published_at: result.publishedAt })
-        .eq("organization_id", context.organizationId)
-        .eq("id", body.postId);
+      await syncPostStatusFromPublications(context.service, {
+        organizationId: context.organizationId,
+        postId: body.postId,
+        publishedAt: result.publishedAt
+      });
 
       try {
         await createMetricAfterPublish(context.service, {

@@ -11,6 +11,7 @@ import {
   type InstagramPublishConnection
 } from "@/lib/instagram-publish-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
+import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -218,6 +219,10 @@ async function processPublication(publicationId: string) {
         updated_at: new Date().toISOString()
       })
       .eq("id", publicationId);
+    await syncPostStatusFromPublications(service, {
+      organizationId: publication.organization_id,
+      postId: publication.post_id
+    });
     return NextResponse.json({ error: errorMessage, attempts }, { status: 500 });
   }
 
@@ -306,6 +311,10 @@ async function processPublication(publicationId: string) {
               updated_at: now
             })
             .eq("id", publicationId);
+          await syncPostStatusFromPublications(service, {
+            organizationId: publication.organization_id,
+            postId: publication.post_id
+          });
           return NextResponse.json({ error: message, attempts: currentAttempts }, { status: 500 });
         }
 
@@ -369,13 +378,11 @@ async function processPublication(publicationId: string) {
         })
         .eq("id", publicationId);
 
-      if (publication.post_id) {
-        await service
-          .from("posts")
-          .update({ status: "Publicado", published_at: published.publishedAt })
-          .eq("organization_id", publication.organization_id)
-          .eq("id", publication.post_id);
-      }
+      await syncPostStatusFromPublications(service, {
+        organizationId: publication.organization_id,
+        postId: publication.post_id,
+        publishedAt: published.publishedAt
+      });
 
       try {
         await createMetricAfterPublish(service, {
@@ -423,13 +430,11 @@ async function processPublication(publicationId: string) {
       })
       .eq("id", publicationId);
 
-    if (publication.post_id) {
-      await service
-        .from("posts")
-        .update({ status: "Publicado", published_at: published.publishedAt })
-        .eq("organization_id", publication.organization_id)
-        .eq("id", publication.post_id);
-    }
+    await syncPostStatusFromPublications(service, {
+      organizationId: publication.organization_id,
+      postId: publication.post_id,
+      publishedAt: published.publishedAt
+    });
 
     try {
       await createMetricAfterPublish(service, {
@@ -481,6 +486,12 @@ async function processPublication(publicationId: string) {
       .from("post_publications")
       .update({ status: "error", error: message, attempts, last_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("id", publicationId);
+    if (publication) {
+      await syncPostStatusFromPublications(service, {
+        organizationId: publication.organization_id,
+        postId: publication.post_id
+      });
+    }
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
