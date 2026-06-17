@@ -7565,6 +7565,13 @@ function Header({
   const title = menu.find((item) => item.sectionId === activeSection)?.label ?? "Painel";
   const areaLabel = appAreas.find((area) => area.id === activeArea)?.label ?? "Marketing";
   const unreadCount = notifications.filter((item) => !item.read).length;
+  const [isPwa, setIsPwa] = useState(false);
+  useEffect(() => {
+    setIsPwa(
+      window.matchMedia("(display-mode: standalone)").matches ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true
+    );
+  }, []);
   // Notificações visíveis no painel: não lidas (sempre) + lidas há menos de 1 hora
   const ONE_HOUR = 60 * 60 * 1000;
   const panelNotifications = notifications.filter(
@@ -7654,14 +7661,16 @@ function Header({
             Sincronizando…
           </div>
         )}
-        <button
-          type="button"
-          onClick={() => window.open(window.location.origin, "_blank", "noopener")}
-          className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm"
-          title="Abrir nova janela do sistema"
-        >
-          <ExternalLink size={20} className="text-slate-600" />
-        </button>
+        {isPwa && (
+          <button
+            type="button"
+            onClick={() => window.open(window.location.origin, "_blank", "noopener")}
+            className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm"
+            title="Abrir nova janela do sistema"
+          >
+            <ExternalLink size={20} className="text-slate-600" />
+          </button>
+        )}
         <button onClick={() => setFeedbackOpen(true)} className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm" title="Dúvida, problema ou ideia">
           <HelpCircle size={20} className="text-slate-600" />
         </button>
