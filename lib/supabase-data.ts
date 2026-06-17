@@ -193,7 +193,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("task_checklist_items").select("*").eq("organization_id", organizationId),
     client.from("task_comments").select("*").eq("organization_id", organizationId),
     client.from("task_attachments").select("*").eq("organization_id", organizationId),
-    client.from("post_metrics").select("*").eq("organization_id", organizationId),
+    client.from("post_metrics").select("*").eq("organization_id", organizationId).limit(10000),
     client.from("notifications").select("*").eq("organization_id", organizationId),
     client.from("calendar_dates").select("*").eq("organization_id", organizationId),
     client.from("idea_attachments").select("*").eq("organization_id", organizationId),
