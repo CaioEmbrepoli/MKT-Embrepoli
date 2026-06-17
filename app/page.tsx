@@ -9720,7 +9720,7 @@ function Metrics({
         <div className="space-y-6">
           {/* período */}
           <div className="flex items-center gap-3">
-            <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
+            <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["1", "Hoje"], ["7", "Esta semana"], ["30", "Este mês"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
           </div>
 
           {/* Bloco 1 — KPIs cross-channel */}
