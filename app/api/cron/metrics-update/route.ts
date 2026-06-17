@@ -398,10 +398,27 @@ async function runInstagram(client: SupabaseClient): Promise<CronChannelResult[]
         throw new Error("Token do Instagram expirado. Reconecte ou aguarde o cron de refresh.");
       }
       const media = await fetchInstagramMedia(conn.access_token, conn.instagram_account_id);
-      const metrics: InstagramMetricItem[] = await Promise.all(media.map(async (item) => ({
+
+      // Busca insights só para posts dos últimos 90 dias — evita timeout no cron
+      // Posts antigos têm métricas estáveis; o reach já foi capturado na primeira importação
+      const insightsCutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+      const insightsMap = new Map<string, Awaited<ReturnType<typeof fetchInstagramInsightsForMedia>>>();
+      const recentMedia = media.filter((item) => {
+        const d = item.timestamp ? new Date(String(item.timestamp)) : null;
+        return !d || d >= insightsCutoff;
+      });
+      // Processa em lotes de 10 para não sobrecarregar a API da Meta
+      for (let i = 0; i < recentMedia.length; i += 10) {
+        const batch = recentMedia.slice(i, i + 10);
+        await Promise.all(batch.map(async (item) => {
+          insightsMap.set(item.id, await fetchInstagramInsightsForMedia(conn.access_token, item));
+        }));
+      }
+
+      const metrics: InstagramMetricItem[] = media.map((item) => ({
         ...item,
-        ...await fetchInstagramInsightsForMedia(conn.access_token, item)
-      })));
+        ...(insightsMap.get(item.id) ?? { reach: 0, impressions: 0, views: 0, shares: 0, saved: 0, totalInteractions: 0 })
+      }));
       const channelId = await resolveChannelId(client, conn.organization_id, "instagram");
       const rows = metrics.map((item) => {
         const caption = truncateText(item.caption || "Post Instagram");
