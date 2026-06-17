@@ -207,6 +207,37 @@ export type PostPublication = {
   updatedAt: string;
 };
 
+export type YouTubeUploadQueueStatus = "pending" | "processing" | "uploaded" | "failed" | "canceled";
+
+export type YouTubeUploadQueueItem = {
+  id: string;
+  organizationId: string;
+  postId?: string;
+  postPublicationId?: string;
+  createdBy?: string;
+  assetUrl: string;
+  title: string;
+  description: string;
+  format: string;
+  scheduledAt?: string;
+  thumbnailUrl?: string;
+  allowDuplicate: boolean;
+  status: YouTubeUploadQueueStatus;
+  uploadUrl?: string;
+  bytesUploaded: number;
+  fileSize: number;
+  contentType: string;
+  videoId?: string;
+  errorMessage?: string;
+  attempts: number;
+  lockedAt?: string;
+  lastHeartbeatAt?: string;
+  nextAttemptAt?: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type FileAttachment = {
   id: string;
   name: string;

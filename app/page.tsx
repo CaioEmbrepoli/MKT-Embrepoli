@@ -228,6 +228,7 @@ import type {
   FeedbackKind,
   AppFeedback,
   PostPublication,
+  YouTubeUploadQueueItem,
   Visitor,
   Person
 } from "@/lib/types";
@@ -1149,6 +1150,7 @@ export default function Home() {
   const [salesFunnelStages, setSalesFunnelStages] = useState<SalesFunnelStage[]>([]);
   const [callSchedules, setCallSchedules] = useState<CallSchedule[]>([]);
   const [postPublications, setPostPublications] = useState<PostPublication[]>([]);
+  const [youtubeUploadQueue, setYoutubeUploadQueue] = useState<YouTubeUploadQueueItem[]>([]);
   const [salesClientFilter, setSalesClientFilter] = useState<"todos" | SalesClientStatus>("todos");
   const [salesClientSearch, setSalesClientSearch] = useState("");
   const [salesCallFilter, setSalesCallFilter] = useState<"all" | "today" | "overdue">("all");
@@ -1495,6 +1497,7 @@ export default function Home() {
     setSalesFunnelStages(data.salesFunnelStages);
     setCallSchedules(data.callSchedules);
     setPostPublications(data.postPublications);
+    setYoutubeUploadQueue(data.youtubeUploadQueue);
     setVisitors(data.visitors);
     setPersons(data.persons);
     setNotifications(data.notifications);
@@ -1548,6 +1551,7 @@ export default function Home() {
       "task_comments",
       "task_attachments",
       "post_metrics",
+      "youtube_upload_queue",
       "ad_accounts",
       "ad_campaigns",
       "ad_sets",
@@ -2870,6 +2874,7 @@ export default function Home() {
         addSubtask={addSubtask}
         postPublications={postPublications}
         setPostPublications={setPostPublications}
+        youtubeUploadQueue={youtubeUploadQueue}
       />
       {mediaPreview && <MediaPreviewModal item={mediaPreview} close={() => setMediaPreview(null)} />}
     </main>
@@ -12381,6 +12386,7 @@ function EntityModal(props: {
   addSubtask: (task: Task, title?: string) => void;
   postPublications?: PostPublication[];
   setPostPublications?: Dispatch<SetStateAction<PostPublication[]>>;
+  youtubeUploadQueue?: YouTubeUploadQueueItem[];
 }) {
   if (!props.modal) return null;
   const modal = props.modal;
@@ -12415,7 +12421,7 @@ function EntityModal(props: {
         {modal.kind === "publish" && (() => {
           const publishPost = props.posts.find((p) => p.id === modal.postId);
           if (!publishPost) return null;
-          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} postPublications={props.postPublications} setPostPublications={props.setPostPublications} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
+          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} postPublications={props.postPublications} setPostPublications={props.setPostPublications} youtubeUploadQueue={props.youtubeUploadQueue} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
         })()}
     </CenteredModal>
   );
@@ -15338,8 +15344,9 @@ type ChannelPublishConfig = {
   format: string;
   title: string;
   description: string;
-  status: "idle" | "publishing" | "success" | "error" | "unsupported";
+  status: "idle" | "publishing" | "queued" | "success" | "error" | "unsupported";
   errorMessage?: string;
+  queuedJobId?: string;
   privacyLevel?: "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "SELF_ONLY";
 };
 
@@ -15412,6 +15419,21 @@ function isDuplicateBlockingPublication(status: PostPublication["status"]) {
   return duplicateBlockingPublicationStatuses.includes(status);
 }
 
+function youtubeQueueProgress(item?: YouTubeUploadQueueItem) {
+  if (!item?.fileSize) return 0;
+  return Math.max(0, Math.min(100, Math.round((item.bytesUploaded / item.fileSize) * 100)));
+}
+
+function youtubeQueueStatusLabel(item?: YouTubeUploadQueueItem) {
+  if (!item) return "";
+  if (item.status === "pending") return "Na fila";
+  if (item.status === "processing") return `Enviando ${youtubeQueueProgress(item)}%`;
+  if (item.status === "uploaded") return "Publicado";
+  if (item.status === "failed") return "Falhou";
+  if (item.status === "canceled") return "Cancelado";
+  return "";
+}
+
 const publishPlatformLabels: Record<string, string> = {
   youtube: "YouTube",
   instagram: "Instagram",
@@ -15431,6 +15453,7 @@ function PublishModal({
   channels,
   postPublications,
   setPostPublications,
+  youtubeUploadQueue,
   setPosts,
   addPostReviewAssets,
   close,
@@ -15440,6 +15463,7 @@ function PublishModal({
   channels: Channel[];
   postPublications?: PostPublication[];
   setPostPublications?: Dispatch<SetStateAction<PostPublication[]>>;
+  youtubeUploadQueue?: YouTubeUploadQueueItem[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean, options?: PostReviewUploadOptions) => void;
   close: () => void;
@@ -15465,6 +15489,7 @@ function PublishModal({
   const [scheduledDate, setScheduledDate] = useState(post.publishAt?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
   const [scheduledTime, setScheduledTime] = useState(post.publishAt?.slice(11, 16) ?? "09:00");
   const [selectedAssetId, setSelectedAssetId] = useState(approvedAssets[0]?.id ?? "");
+  const [useYouTubeQueueBeta, setUseYouTubeQueueBeta] = useState(false);
 
   // Detecta se o horário de agendamento é inválido (passado ou < 2 min no futuro)
   const scheduledAtPreview = publishMode === "scheduled" ? buildSaoPauloDateTime(scheduledDate, scheduledTime) : null;
@@ -15515,6 +15540,12 @@ function PublishModal({
 
   const hasBlockedDuplicatePlatform = blockedEnabledPlatforms.length > 0;
 
+  const latestYouTubeQueueItem = useMemo(() => {
+    return (youtubeUploadQueue ?? [])
+      .filter((item) => item.postId === post.id)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+  }, [youtubeUploadQueue, post.id]);
+
   function confirmDuplicatePlatform(platform: string) {
     setConfirmedDuplicatePlatforms((current) => current.includes(platform) ? current : [...current, platform]);
   }
@@ -15554,7 +15585,7 @@ function PublishModal({
   });
   const enabledCount = enabledPublishableConfigs.length;
   const isPublishing  = channelConfigs.some((c) => c.status === "publishing");
-  const isDone = channelConfigs.filter((c) => c.enabled).every((c) => c.status === "success" || c.status === "unsupported" || c.status === "error");
+  const isDone = channelConfigs.filter((c) => c.enabled).every((c) => c.status === "success" || c.status === "queued" || c.status === "unsupported" || c.status === "error");
 
   async function handlePublish() {
     if (!selectedAsset || !supabase) return;
@@ -15579,12 +15610,36 @@ function PublishModal({
         const allowDuplicateForPlatform = confirmedDuplicatePlatforms.includes(platform);
         if (platform === "youtube") {
           try {
-            const res = await fetch("/api/google/youtube/publish", {
+            const endpoint = useYouTubeQueueBeta ? "/api/google/youtube/publish-queued" : "/api/google/youtube/publish";
+            const res = await fetch(endpoint, {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
               body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt: effectiveScheduledAt, thumbnailUrl: effectiveThumbnailUrl, postId: post.id, allowDuplicate: allowDuplicateForPlatform }),
             });
             if (res.ok) {
+              if (useYouTubeQueueBeta) {
+                const data = await res.json() as { queued: true; jobId: string; publicationId?: string; fileSize?: number; contentType?: string };
+                updateConfig(config.channelId, { status: "queued", queuedJobId: data.jobId });
+                if (data.publicationId) {
+                  const newPub: PostPublication = {
+                    id: data.publicationId,
+                    postId: post.id,
+                    platform: "youtube",
+                    status: "pending",
+                    format: config.format,
+                    assetUrl: selectedAsset.url,
+                    thumbnailUrl: effectiveThumbnailUrl ?? undefined,
+                    scheduledAt: effectiveScheduledAt ?? undefined,
+                    title: config.title ?? "",
+                    caption: config.description ?? "",
+                    attempts: 0,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString()
+                  };
+                  setPostPublications?.((current) => [newPub, ...current]);
+                }
+                return;
+              }
               const { videoId, privacyStatus } = await res.json() as { videoId: string; privacyStatus?: string };
               const newStatus = (privacyStatus === "private" && effectiveScheduledAt) ? "Agendado" : "Publicado";
               updateConfig(config.channelId, { status: "success" });
@@ -15786,6 +15841,9 @@ function PublishModal({
           const isYoutube = platform === "youtube";
           const isInstagram = platform === "instagram";
           const isTikTok = platform === "tiktok";
+          const youtubeQueueItem = isYoutube
+            ? (config.queuedJobId ? youtubeUploadQueue?.find((item) => item.id === config.queuedJobId) : latestYouTubeQueueItem)
+            : undefined;
           const supported = isPublishablePlatform(platform);
           const instagramEffectiveFormat = isInstagram ? effectiveInstagramFormat(config.format, selectedAssetKind) : config.format;
           const instagramFormatError = isInstagram
@@ -15799,6 +15857,7 @@ function PublishModal({
                 <p className="font-black">{name}</p>
                 <div className="flex items-center gap-2">
                   {config.status === "success"    && <span className="text-xs font-black text-emerald-700">✓ Publicado</span>}
+                  {config.status === "queued"     && <span className="text-xs font-black text-blue-700">✓ Na fila</span>}
                   {config.status === "error"      && <span className="text-xs font-black text-rose-700">✕ Erro</span>}
                   {config.status === "publishing" && <span className="text-xs font-black text-blue-700">Publicando…</span>}
                   {isTikTok ? (
@@ -15810,6 +15869,36 @@ function PublishModal({
                   )}
                 </div>
               </div>
+              {isYoutube && (
+                <div className="mb-3 rounded-2xl border border-blue-100 bg-blue-50 px-3 py-2">
+                  <label className="flex cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={useYouTubeQueueBeta}
+                      onChange={(event) => setUseYouTubeQueueBeta(event.target.checked)}
+                      className="accent-blue-700"
+                    />
+                    <span className="text-sm font-black text-blue-900">Usar upload em fila (beta)</span>
+                  </label>
+                  <p className="mt-1 text-xs font-bold text-blue-700">
+                    Beta paralelo: cria um job com progresso e mantém o publicador atual disponível quando desligado.
+                  </p>
+                  {youtubeQueueItem && (
+                    <div className="mt-2 rounded-2xl bg-white px-3 py-2">
+                      <div className="flex items-center justify-between gap-3 text-xs font-black">
+                        <span className={youtubeQueueItem.status === "failed" ? "text-rose-700" : "text-blue-800"}>
+                          {youtubeQueueStatusLabel(youtubeQueueItem)}
+                        </span>
+                        <span className="text-slate-500">{youtubeQueueProgress(youtubeQueueItem)}%</span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
+                        <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${youtubeQueueProgress(youtubeQueueItem)}%` }} />
+                      </div>
+                      {youtubeQueueItem.errorMessage && <p className="mt-2 text-xs font-bold text-rose-700">{youtubeQueueItem.errorMessage}</p>}
+                    </div>
+                  )}
+                </div>
+              )}
               {isTikTok ? (
                 <div className="flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-amber-200 bg-amber-50 px-6 py-10 text-center">
                   <div>

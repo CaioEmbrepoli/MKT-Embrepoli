@@ -43,6 +43,7 @@ import type {
   CallFrequency,
   SalesFunnelStage,
   PostPublication,
+  YouTubeUploadQueueItem,
   Visitor,
   Person,
   PersonIdentifier
@@ -82,6 +83,7 @@ export type AppData = {
   salesFunnelStages: SalesFunnelStage[];
   callSchedules: CallSchedule[];
   postPublications: PostPublication[];
+  youtubeUploadQueue: YouTubeUploadQueueItem[];
   trackableLinks: TrackableLink[];
   visitors: Visitor[];
   persons: Person[];
@@ -153,6 +155,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     salesFunnelStagesData,
     callSchedulesData,
     postPublicationsData,
+    youtubeUploadQueueData,
     adAccountsData,
     adCampaignsData,
     adSetsData,
@@ -198,6 +201,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }),
     client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("post_publications").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
+    client.from("youtube_upload_queue").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100),
     client.from("ad_accounts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("ad_campaigns").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
     client.from("ad_sets").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
@@ -252,6 +256,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     salesFunnelStages: (salesFunnelStagesData.data ?? []).map(mapSalesFunnelStage),
     callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule),
     postPublications: (postPublicationsData.data ?? []).map(mapPostPublication),
+    youtubeUploadQueue: (youtubeUploadQueueData.data ?? []).map(mapYouTubeUploadQueueItem),
     trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink),
     visitors: (visitorsData.data ?? []).map(mapVisitor),
     persons: (personsData.data ?? []).map(mapPerson)
@@ -1979,6 +1984,37 @@ function mapPostPublication(row: any): PostPublication {
     createdBy: row.created_by ?? undefined,
     createdAt: String(row.created_at ?? ""),
     updatedAt: String(row.updated_at ?? ""),
+  };
+}
+
+function mapYouTubeUploadQueueItem(row: any): YouTubeUploadQueueItem {
+  return {
+    id: String(row.id ?? ""),
+    organizationId: String(row.organization_id ?? ""),
+    postId: row.post_id ?? undefined,
+    postPublicationId: row.post_publication_id ?? undefined,
+    createdBy: row.created_by ?? undefined,
+    assetUrl: String(row.asset_url ?? ""),
+    title: String(row.title ?? ""),
+    description: String(row.description ?? ""),
+    format: String(row.format ?? "video"),
+    scheduledAt: row.scheduled_at ?? undefined,
+    thumbnailUrl: row.thumbnail_url ?? undefined,
+    allowDuplicate: Boolean(row.allow_duplicate ?? false),
+    status: row.status ?? "pending",
+    uploadUrl: row.upload_url ?? undefined,
+    bytesUploaded: Number(row.bytes_uploaded ?? 0),
+    fileSize: Number(row.file_size ?? 0),
+    contentType: String(row.content_type ?? "video/mp4"),
+    videoId: row.video_id ?? undefined,
+    errorMessage: row.error_message ?? undefined,
+    attempts: Number(row.attempts ?? 0),
+    lockedAt: row.locked_at ?? undefined,
+    lastHeartbeatAt: row.last_heartbeat_at ?? undefined,
+    nextAttemptAt: row.next_attempt_at ?? undefined,
+    completedAt: row.completed_at ?? undefined,
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? "")
   };
 }
 
