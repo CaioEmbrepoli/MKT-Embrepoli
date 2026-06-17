@@ -7654,6 +7654,14 @@ function Header({
             Sincronizando…
           </div>
         )}
+        <button
+          type="button"
+          onClick={() => window.open(window.location.origin, "_blank", "noopener")}
+          className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm"
+          title="Abrir nova janela do sistema"
+        >
+          <ExternalLink size={20} className="text-slate-600" />
+        </button>
         <button onClick={() => setFeedbackOpen(true)} className="rounded-3xl border border-slate-200 bg-white p-3 shadow-sm" title="Dúvida, problema ou ideia">
           <HelpCircle size={20} className="text-slate-600" />
         </button>
