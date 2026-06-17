@@ -824,4 +824,22 @@ export type Person = {
   identifiers: PersonIdentifier[];
 };
 
+export type Conversion = {
+  id: string;
+  organizationId: string;
+  personId: string | null;
+  salesClientId: string | null;
+  visitorId: string | null;
+  saleValue: number;
+  productName: string;
+  saleDate: string;
+  source: "tray" | "nfe" | "manual";
+  externalOrderId?: string;
+  invoiceNumber?: string;
+  invoiceKey?: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 

@@ -46,7 +46,8 @@ import type {
   YouTubeUploadQueueItem,
   Visitor,
   Person,
-  PersonIdentifier
+  PersonIdentifier,
+  Conversion
 } from "./types";
 
 export type AppData = {
@@ -87,6 +88,7 @@ export type AppData = {
   trackableLinks: TrackableLink[];
   visitors: Visitor[];
   persons: Person[];
+  conversions: Conversion[];
 };
 
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -164,7 +166,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adAlertsData,
     trackableLinksData,
     visitorsData,
-    personsData
+    personsData,
+    conversionsData
   ] = await Promise.all([
     client.from("profiles").select("*").eq("organization_id", organizationId),
     client.from("profile_areas").select("*").eq("organization_id", organizationId),
@@ -210,7 +213,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
     client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
     client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false }).limit(500),
-    client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(200)
+    client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(200),
+    client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(200)
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -259,7 +263,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     youtubeUploadQueue: (youtubeUploadQueueData.data ?? []).map(mapYouTubeUploadQueueItem),
     trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink),
     visitors: (visitorsData.data ?? []).map(mapVisitor),
-    persons: (personsData.data ?? []).map(mapPerson)
+    persons: (personsData.data ?? []).map(mapPerson),
+    conversions: (conversionsData.data ?? []).map(mapConversion)
   };
 }
 
@@ -2057,6 +2062,26 @@ function mapPerson(row: Record<string, unknown>): Person {
     visitorId: (row.visitor_id as string) ?? null,
     createdAt: String(row.created_at ?? ""),
     identifiers
+  };
+}
+
+function mapConversion(row: Record<string, unknown>): Conversion {
+  return {
+    id: String(row.id ?? ""),
+    organizationId: String(row.organization_id ?? ""),
+    personId: (row.person_id as string) ?? null,
+    salesClientId: (row.sales_client_id as string) ?? null,
+    visitorId: (row.visitor_id as string) ?? null,
+    saleValue: Number(row.sale_value ?? 0),
+    productName: String(row.product_name ?? ""),
+    saleDate: String(row.sale_date ?? ""),
+    source: (row.source as Conversion["source"]) ?? "manual",
+    externalOrderId: (row.external_order_id as string) ?? undefined,
+    invoiceNumber: (row.invoice_number as string) ?? undefined,
+    invoiceKey: (row.invoice_key as string) ?? undefined,
+    notes: String(row.notes ?? ""),
+    createdAt: String(row.created_at ?? ""),
+    updatedAt: String(row.updated_at ?? "")
   };
 }
 

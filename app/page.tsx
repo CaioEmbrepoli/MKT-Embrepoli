@@ -230,7 +230,8 @@ import type {
   PostPublication,
   YouTubeUploadQueueItem,
   Visitor,
-  Person
+  Person,
+  Conversion
 } from "@/lib/types";
 import {
   Area,
@@ -1121,6 +1122,7 @@ export default function Home() {
   const [trackableLinks, setTrackableLinks] = useState<TrackableLink[]>([]);
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [persons, setPersons] = useState<Person[]>([]);
+  const [conversions, setConversions] = useState<Conversion[]>([]);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<VehicleType[]>([]);
   const [contentTypes, setContentTypes] = useState<ContentType[]>([]);
@@ -1500,6 +1502,7 @@ export default function Home() {
     setYoutubeUploadQueue(data.youtubeUploadQueue);
     setVisitors(data.visitors);
     setPersons(data.persons);
+    setConversions(data.conversions);
     setNotifications(data.notifications);
     const { data: authData } = await supabase.auth.getUser();
     const authUserId = authData.user?.id ?? sessionUserId;
@@ -1560,7 +1563,8 @@ export default function Home() {
       "ad_alerts",
       "notifications",
       "comments",
-      "auto_filters"
+      "auto_filters",
+      "conversions"
     ];
     const channel = supabase.channel("embrepoli-marketing-realtime");
     tables.forEach((table) => {
@@ -2638,6 +2642,7 @@ export default function Home() {
               setTrackableLinks={syncTrackableLinks}
               visitors={visitors}
               persons={persons}
+              conversions={conversions}
               productLines={productLines}
               vehicleTypes={vehicleTypes}
               contentTypes={contentTypes}
@@ -9184,6 +9189,7 @@ function Metrics({
   setTrackableLinks,
   visitors,
   persons,
+  conversions,
   productLines,
   vehicleTypes,
   contentTypes,
@@ -9215,6 +9221,7 @@ function Metrics({
   setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
   visitors: Visitor[];
   persons: Person[];
+  conversions: Conversion[];
   productLines: ProductLine[];
   vehicleTypes: VehicleType[];
   contentTypes: ContentType[];
@@ -9462,6 +9469,15 @@ function Metrics({
     return new Date(p.createdAt) >= periodCutoff;
   }), [persons, periodCutoff]);
 
+  const overviewConversions = useMemo(() => conversions.filter((c) => {
+    if (!periodCutoff) return true;
+    return new Date(`${c.saleDate}T12:00:00`) >= periodCutoff;
+  }), [conversions, periodCutoff]);
+
+  const overviewConversionValue = useMemo(() =>
+    overviewConversions.reduce((sum, conversion) => sum + conversion.saleValue, 0),
+  [overviewConversions]);
+
   const overviewInsights = useMemo(() => adInsightsDaily.filter((ins) => {
     if (!periodCutoff) return true;
     return new Date(`${ins.date}T12:00:00`) >= periodCutoff;
@@ -9624,14 +9640,15 @@ function Metrics({
           </div>
 
           {/* Bloco 1 — KPIs cross-channel */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {[
               { label: "Visitantes únicos", value: overviewVisitors.length, fmt: "num" },
               { label: "Leads capturados", value: overviewPersons.length, fmt: "num" },
+              { label: "Conversões", value: overviewConversions.length, fmt: "num", helper: `R$ ${overviewConversionValue.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
               { label: "Taxa de atribuição", value: overviewPersons.length > 0 ? Math.round(overviewPersons.filter((p) => p.visitorId).length / overviewPersons.length * 100) : 0, fmt: "pct" },
               { label: "Alcance orgânico", value: overviewMetrics.reduce((s, m) => s + m.reach, 0), fmt: "num" },
               { label: "Gasto em anúncios", value: overviewAdsTotals.spend, fmt: "brl" }
-            ].map(({ label, value, fmt }) => (
+            ].map(({ label, value, fmt, helper }) => (
               <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4">
                 <p className="text-xs font-bold text-slate-500">{label}</p>
                 <p className="mt-1 text-2xl font-black text-slate-900">
@@ -9641,62 +9658,84 @@ function Metrics({
                     ? `${value}%`
                     : value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)}
                 </p>
+                {helper && <p className="mt-1 text-xs font-bold text-slate-400">{helper}</p>}
               </div>
             ))}
           </div>
 
           {/* Bloco 2 — Atribuição */}
-          <div className="grid gap-4 lg:grid-cols-2">
-            {/* Origem dos visitantes */}
+          <div className="space-y-4">
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
-              <h3 className="mb-4 text-sm font-black text-slate-800">Origem dos visitantes</h3>
-              {overviewVisitorsBySource.length === 0 ? (
-                <p className="text-sm text-slate-400">Nenhum dado ainda</p>
-              ) : (
-                <div className="space-y-3">
-                  {overviewVisitorsBySource.map(([source, count]) => {
-                    const pct = overviewVisitors.length > 0 ? Math.round(count / overviewVisitors.length * 100) : 0;
-                    return (
-                      <div key={source}>
-                        <div className="mb-1 flex items-center justify-between">
-                          <span className="text-sm font-bold capitalize text-slate-700">{source}</span>
-                          <span className="text-xs font-black text-slate-500">{count} · {pct}%</span>
-                        </div>
-                        <div className="h-2 w-full rounded-full bg-slate-100">
-                          <div className="h-2 rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <h3 className="mb-4 text-sm font-black text-slate-800">Funil de atribuição</h3>
+              <div className="grid gap-3 sm:grid-cols-3">
+                {[
+                  { label: "Visitantes", value: overviewVisitors.length },
+                  { label: "Leads", value: overviewPersons.length },
+                  { label: "Conversões", value: overviewConversions.length }
+                ].map((item, index) => (
+                  <div key={item.label} className="flex items-center gap-3">
+                    <div className="flex-1 rounded-2xl bg-slate-50 px-4 py-3">
+                      <p className="text-xs font-bold text-slate-500">{item.label}</p>
+                      <p className="text-2xl font-black text-slate-900">{item.value.toLocaleString("pt-BR")}</p>
+                    </div>
+                    {index < 2 && <ChevronRight className="hidden text-slate-300 sm:block" size={18} />}
+                  </div>
+                ))}
+              </div>
             </div>
 
-            {/* Leads por canal */}
-            <div className="rounded-2xl border border-slate-200 bg-white p-5">
-              <h3 className="mb-4 text-sm font-black text-slate-800">Leads por canal</h3>
-              {overviewLeadsByChannel.length === 0 ? (
-                <p className="text-sm text-slate-400">Nenhum lead ainda</p>
-              ) : (
-                <div className="space-y-3">
-                  {overviewLeadsByChannel.map(([channel, count]) => {
-                    const pct = overviewPersons.length > 0 ? Math.round(count / overviewPersons.length * 100) : 0;
-                    const colorMap: Record<string, string> = { whatsapp: "bg-green-500", instagram: "bg-purple-500", facebook: "bg-blue-500", google: "bg-cyan-500", tiktok: "bg-pink-500", "meta ads": "bg-blue-600" };
-                    const barColor = colorMap[channel.toLowerCase()] ?? "bg-slate-400";
-                    return (
-                      <div key={channel}>
-                        <div className="mb-1 flex items-center justify-between">
-                          <span className="text-sm font-bold capitalize text-slate-700">{channel}</span>
-                          <span className="text-xs font-black text-slate-500">{count} · {pct}%</span>
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* Origem dos visitantes */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h3 className="mb-4 text-sm font-black text-slate-800">Origem dos visitantes</h3>
+                {overviewVisitorsBySource.length === 0 ? (
+                  <p className="text-sm text-slate-400">Nenhum dado ainda</p>
+                ) : (
+                  <div className="space-y-3">
+                    {overviewVisitorsBySource.map(([source, count]) => {
+                      const pct = overviewVisitors.length > 0 ? Math.round(count / overviewVisitors.length * 100) : 0;
+                      return (
+                        <div key={source}>
+                          <div className="mb-1 flex items-center justify-between">
+                            <span className="text-sm font-bold capitalize text-slate-700">{source}</span>
+                            <span className="text-xs font-black text-slate-500">{count} · {pct}%</span>
+                          </div>
+                          <div className="h-2 w-full rounded-full bg-slate-100">
+                            <div className="h-2 rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+                          </div>
                         </div>
-                        <div className="h-2 w-full rounded-full bg-slate-100">
-                          <div className={`h-2 rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Leads por canal */}
+              <div className="rounded-2xl border border-slate-200 bg-white p-5">
+                <h3 className="mb-4 text-sm font-black text-slate-800">Leads por canal</h3>
+                {overviewLeadsByChannel.length === 0 ? (
+                  <p className="text-sm text-slate-400">Nenhum lead ainda</p>
+                ) : (
+                  <div className="space-y-3">
+                    {overviewLeadsByChannel.map(([channel, count]) => {
+                      const pct = overviewPersons.length > 0 ? Math.round(count / overviewPersons.length * 100) : 0;
+                      const colorMap: Record<string, string> = { whatsapp: "bg-green-500", instagram: "bg-purple-500", facebook: "bg-blue-500", google: "bg-cyan-500", tiktok: "bg-pink-500", "meta ads": "bg-blue-600" };
+                      const barColor = colorMap[channel.toLowerCase()] ?? "bg-slate-400";
+                      return (
+                        <div key={channel}>
+                          <div className="mb-1 flex items-center justify-between">
+                            <span className="text-sm font-bold capitalize text-slate-700">{channel}</span>
+                            <span className="text-xs font-black text-slate-500">{count} · {pct}%</span>
+                          </div>
+                          <div className="h-2 w-full rounded-full bg-slate-100">
+                            <div className={`h-2 rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
