@@ -11131,7 +11131,7 @@ function OrigemSection({
 }) {
   const appUrl = typeof window !== "undefined" ? window.location.origin : "https://seu-app.vercel.app";
   const trackingScript = `(function(){
-  var ORG='embrepoli';
+  var ORG='00000000-0000-0000-0000-000000000001';
   var API='${appUrl}/api/tracking/visit';
   var vid=localStorage.getItem('_emb_vid');
   if(!vid){vid='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});localStorage.setItem('_emb_vid',vid);}
