@@ -9238,7 +9238,7 @@ function Metrics({
   reloadData?: () => Promise<void>;
 }) {
   const [period, setPeriod] = useState("all");
-  const [metricsMode, setMetricsMode] = useState<"organic" | "ads" | "links">("organic");
+  const [metricsMode, setMetricsMode] = useState<"overview" | "organic" | "ads" | "links">("overview");
   const [origemSubTab, setOrigemSubTab] = useState<"links" | "script" | "visitantes" | "leads">("links");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
   const [metaAdsImportOpen, setMetaAdsImportOpen] = useState(false);
@@ -9442,6 +9442,78 @@ function Metrics({
   }, [resolvedMetrics]);
   const activeChannelName = activeChannel === "all" ? "Geral" : (channelById.get(activeChannel)?.name ?? activeChannel);
 
+  const periodCutoff = useMemo(() => {
+    if (period === "all") return null;
+    return new Date(todayMs - Number(period) * 86400000);
+  }, [period, todayMs]);
+
+  const overviewMetrics = useMemo(() => resolvedMetrics.filter((m) => {
+    if (!periodCutoff) return true;
+    return new Date(`${m.date || todayIso()}T12:00:00`) >= periodCutoff;
+  }), [resolvedMetrics, periodCutoff]);
+
+  const overviewVisitors = useMemo(() => visitors.filter((v) => {
+    if (!periodCutoff) return true;
+    return new Date(v.firstTouchAt) >= periodCutoff;
+  }), [visitors, periodCutoff]);
+
+  const overviewPersons = useMemo(() => persons.filter((p) => {
+    if (!periodCutoff) return true;
+    return new Date(p.createdAt) >= periodCutoff;
+  }), [persons, periodCutoff]);
+
+  const overviewInsights = useMemo(() => adInsightsDaily.filter((ins) => {
+    if (!periodCutoff) return true;
+    return new Date(`${ins.date}T12:00:00`) >= periodCutoff;
+  }), [adInsightsDaily, periodCutoff]);
+
+  const overviewVisitorsBySource = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const v of overviewVisitors) {
+      const k = v.firstTouchSource ?? "(direto)";
+      map[k] = (map[k] ?? 0) + 1;
+    }
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [overviewVisitors]);
+
+  const overviewLeadsByChannel = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const p of overviewPersons) {
+      const k = p.channel || "outro";
+      map[k] = (map[k] ?? 0) + 1;
+    }
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [overviewPersons]);
+
+  const overviewChannelCards = useMemo(() => {
+    const targets = channels.filter((c) =>
+      c.name.toLowerCase() !== "facebook" &&
+      c.name.toLowerCase() !== "todos" &&
+      c.id !== "facebook"
+    ).slice(0, 4);
+    return targets.map((ch) => {
+      const chMetrics = overviewMetrics.filter((m) => m.channelId === ch.id);
+      return {
+        channel: ch,
+        reach: chMetrics.reduce((s, m) => s + m.reach, 0),
+        leads: chMetrics.reduce((s, m) => s + m.leads, 0),
+        posts: chMetrics.length
+      };
+    });
+  }, [channels, overviewMetrics]);
+
+  const overviewAdsTotals = useMemo(() => {
+    const spend = overviewInsights.reduce((s, ins) => s + ins.spend, 0);
+    const leads = overviewInsights.reduce((s, ins) => s + ins.leads, 0);
+    const spendByCampaign: Record<string, number> = {};
+    for (const ins of overviewInsights) {
+      if (ins.campaignId) spendByCampaign[ins.campaignId] = (spendByCampaign[ins.campaignId] ?? 0) + ins.spend;
+    }
+    const topCampaignId = Object.entries(spendByCampaign).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+    const topCampaign = topCampaignId ? adCampaigns.find((c) => c.id === topCampaignId) : null;
+    return { spend, leads, cpl: leads > 0 ? spend / leads : 0, topCampaignName: topCampaign?.name ?? null };
+  }, [overviewInsights, adCampaigns]);
+
   function createImprovementTask(metric: PostMetric) {
     const column = taskColumns.slice().sort((a, b) => a.order - b.order)[0];
     if (!column) return;
@@ -9525,15 +9597,18 @@ function Metrics({
       ) : null
     }>
       <div className="mb-5 flex w-fit rounded-2xl bg-slate-100 p-1">
-        {[
-          ["organic", "Orgânico"],
-          ["ads", "Anúncios"],
-          ["links", "Origem"]
-        ].map(([id, label]) => (
+        {(
+          [
+            ["overview", "Visão Geral"],
+            ["organic", "Canais"],
+            ["ads", "Anúncios"],
+            ["links", "Origem"]
+          ] as const
+        ).map(([id, label]) => (
           <button
             key={id}
             type="button"
-            onClick={() => setMetricsMode(id as "organic" | "ads" | "links")}
+            onClick={() => setMetricsMode(id)}
             className={`rounded-xl px-4 py-2 text-sm font-black transition ${metricsMode === id ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`}
           >
             {label}
@@ -9541,7 +9616,163 @@ function Metrics({
         ))}
       </div>
 
-      {metricsMode === "ads" ? (
+      {metricsMode === "overview" ? (
+        <div className="space-y-6">
+          {/* período */}
+          <div className="flex items-center gap-3">
+            <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
+          </div>
+
+          {/* Bloco 1 — KPIs cross-channel */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+            {[
+              { label: "Visitantes únicos", value: overviewVisitors.length, fmt: "num" },
+              { label: "Leads capturados", value: overviewPersons.length, fmt: "num" },
+              { label: "Taxa de atribuição", value: overviewPersons.length > 0 ? Math.round(overviewPersons.filter((p) => p.visitorId).length / overviewPersons.length * 100) : 0, fmt: "pct" },
+              { label: "Alcance orgânico", value: overviewMetrics.reduce((s, m) => s + m.reach, 0), fmt: "num" },
+              { label: "Gasto em anúncios", value: overviewAdsTotals.spend, fmt: "brl" }
+            ].map(({ label, value, fmt }) => (
+              <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4">
+                <p className="text-xs font-bold text-slate-500">{label}</p>
+                <p className="mt-1 text-2xl font-black text-slate-900">
+                  {fmt === "brl"
+                    ? `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                    : fmt === "pct"
+                    ? `${value}%`
+                    : value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {/* Bloco 2 — Atribuição */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {/* Origem dos visitantes */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <h3 className="mb-4 text-sm font-black text-slate-800">Origem dos visitantes</h3>
+              {overviewVisitorsBySource.length === 0 ? (
+                <p className="text-sm text-slate-400">Nenhum dado ainda</p>
+              ) : (
+                <div className="space-y-3">
+                  {overviewVisitorsBySource.map(([source, count]) => {
+                    const pct = overviewVisitors.length > 0 ? Math.round(count / overviewVisitors.length * 100) : 0;
+                    return (
+                      <div key={source}>
+                        <div className="mb-1 flex items-center justify-between">
+                          <span className="text-sm font-bold capitalize text-slate-700">{source}</span>
+                          <span className="text-xs font-black text-slate-500">{count} · {pct}%</span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-slate-100">
+                          <div className="h-2 rounded-full bg-blue-500" style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Leads por canal */}
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <h3 className="mb-4 text-sm font-black text-slate-800">Leads por canal</h3>
+              {overviewLeadsByChannel.length === 0 ? (
+                <p className="text-sm text-slate-400">Nenhum lead ainda</p>
+              ) : (
+                <div className="space-y-3">
+                  {overviewLeadsByChannel.map(([channel, count]) => {
+                    const pct = overviewPersons.length > 0 ? Math.round(count / overviewPersons.length * 100) : 0;
+                    const colorMap: Record<string, string> = { whatsapp: "bg-green-500", instagram: "bg-purple-500", facebook: "bg-blue-500", google: "bg-cyan-500", tiktok: "bg-pink-500", "meta ads": "bg-blue-600" };
+                    const barColor = colorMap[channel.toLowerCase()] ?? "bg-slate-400";
+                    return (
+                      <div key={channel}>
+                        <div className="mb-1 flex items-center justify-between">
+                          <span className="text-sm font-bold capitalize text-slate-700">{channel}</span>
+                          <span className="text-xs font-black text-slate-500">{count} · {pct}%</span>
+                        </div>
+                        <div className="h-2 w-full rounded-full bg-slate-100">
+                          <div className={`h-2 rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Bloco 3 — Canais orgânicos */}
+          {overviewChannelCards.length > 0 && (
+            <div>
+              <h3 className="mb-3 text-sm font-black text-slate-800">Canais orgânicos</h3>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {overviewChannelCards.map(({ channel, reach, leads, posts: postCount }) => (
+                  <div key={channel.id} className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="mb-3 flex items-center gap-2">
+                      <div className="h-3 w-3 rounded-full" style={{ backgroundColor: channel.color }} />
+                      <span className="text-sm font-black text-slate-800">{channel.name}</span>
+                    </div>
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-500">Alcance</span>
+                        <span className="font-black text-slate-800">{reach >= 1000 ? `${(reach / 1000).toFixed(1)}k` : reach}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-500">Leads</span>
+                        <span className="font-black text-slate-800">{leads}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-slate-500">Posts</span>
+                        <span className="font-black text-slate-800">{postCount}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => { setMetricsMode("organic"); setActiveChannel(channel.id); }}
+                      className="mt-3 w-full rounded-xl bg-slate-100 px-3 py-1.5 text-xs font-black text-slate-600 transition hover:bg-blue-50 hover:text-blue-700"
+                    >
+                      Ver detalhes →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Bloco 4 — Resumo de anúncios */}
+          <div className="rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-black text-slate-800">Anúncios</h3>
+              <button
+                type="button"
+                onClick={() => setMetricsMode("ads")}
+                className="text-xs font-black text-blue-600 hover:text-blue-800"
+              >
+                Ver completo →
+              </button>
+            </div>
+            <div className="mt-4 flex flex-wrap gap-6">
+              <div>
+                <p className="text-xs font-bold text-slate-500">Gasto total</p>
+                <p className="text-xl font-black text-slate-900">R$ {overviewAdsTotals.spend.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-500">Leads (ads)</p>
+                <p className="text-xl font-black text-slate-900">{overviewAdsTotals.leads}</p>
+              </div>
+              <div>
+                <p className="text-xs font-bold text-slate-500">CPL médio</p>
+                <p className="text-xl font-black text-slate-900">{overviewAdsTotals.cpl > 0 ? `R$ ${overviewAdsTotals.cpl.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` : "—"}</p>
+              </div>
+              {overviewAdsTotals.topCampaignName && (
+                <div>
+                  <p className="text-xs font-bold text-slate-500">Campanha principal</p>
+                  <p className="text-sm font-black text-slate-900 max-w-xs truncate">{overviewAdsTotals.topCampaignName}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : metricsMode === "ads" ? (
         <AdsMetricsDashboard
           adAccounts={adAccounts}
           adCampaigns={adCampaigns}

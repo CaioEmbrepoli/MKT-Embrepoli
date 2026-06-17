@@ -56,6 +56,19 @@ type InstagramPublishPlan = {
   params: Record<string, string>;
 };
 
+export type InstagramAsyncContainer = {
+  creationId: string;
+  preparedAssetUrl: string;
+  preparedContentType: string;
+  effectiveFormat: InstagramPublishFormat;
+  kind: PublishKind;
+};
+
+export type InstagramContainerStatus = {
+  statusCode: string;
+  status: string;
+};
+
 function graphBase(accessToken: string) {
   const isInstagramToken = accessToken.startsWith("IGAA") || accessToken.startsWith("IGQV") || accessToken.startsWith("IGQ");
   return isInstagramToken
@@ -492,6 +505,24 @@ async function graphGet<T>(connection: InstagramPublishConnection, path: string,
   return data as T;
 }
 
+export async function getInstagramContainerStatus(connection: InstagramPublishConnection, creationId: string): Promise<InstagramContainerStatus> {
+  const status = await graphGet<{ status_code?: string; status?: string }>(connection, `/${creationId}`, {
+    fields: "status_code,status"
+  });
+  return {
+    statusCode: String(status.status_code || ""),
+    status: String(status.status || "")
+  };
+}
+
+export function instagramContainerErrorMessage(status: InstagramContainerStatus) {
+  const raw = status.status || "";
+  const isGeneric = !raw || raw.toLowerCase().includes("unknown error");
+  return isGeneric
+    ? "A Meta nao conseguiu processar o video. Verifique: formato MP4, duracao minima de 3s, audio AAC e proporcao vertical 9:16 para Reels."
+    : raw;
+}
+
 async function waitForContainer(connection: InstagramPublishConnection, creationId: string) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const status = await graphGet<{ status_code?: string; status?: string }>(connection, `/${creationId}`, {
@@ -717,6 +748,83 @@ export async function scheduleInstagramMedia(
     scheduledPublishTime: scheduledAt.toISOString(),
     effectiveFormat: plan.effectiveFormat,
     contentType: asset.contentType
+  };
+}
+
+export async function createInstagramAsyncContainer(
+  context: MetaRequestContext,
+  connection: InstagramPublishConnection,
+  payload: InstagramPublishPayload
+): Promise<InstagramAsyncContainer> {
+  assertInstagramPublishPermission(connection);
+  if (payload.carouselAssets?.length) {
+    throw new Error("Carrossel do Instagram nao usa fila assincrona nesta etapa.");
+  }
+
+  const asset = await preparePublicAsset(context, payload);
+  await assertMetaCanReadUrl(asset.publicUrl);
+  const plan = buildInstagramPublishPlan(payload, asset);
+
+  if (plan.kind !== "video") {
+    throw new Error("Fila assincrona do Instagram e usada apenas para video/Reels.");
+  }
+
+  if (plan.effectiveFormat === "Reels" && payload.thumbnailUrl) {
+    try {
+      const coverPublicUrl = await prepareCoverUrl(context, payload.thumbnailUrl);
+      await assertMetaCanReadUrl(coverPublicUrl);
+      plan.params.cover_url = coverPublicUrl;
+    } catch {
+      // A capa e opcional; se falhar, continua sem cover_url.
+    }
+  }
+
+  const creation = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, plan.params).catch(async (err) => {
+    if (plan.params.cover_url) {
+      const withoutCover: Record<string, string> = { ...plan.params };
+      delete withoutCover.cover_url;
+      return graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media`, withoutCover);
+    }
+    throw err;
+  });
+
+  if (!creation.id) throw new Error("A Meta nao retornou o container de publicacao.");
+
+  return {
+    creationId: creation.id,
+    preparedAssetUrl: asset.publicUrl,
+    preparedContentType: asset.contentType,
+    effectiveFormat: plan.effectiveFormat,
+    kind: plan.kind
+  };
+}
+
+export async function publishInstagramCreation(
+  connection: InstagramPublishConnection,
+  creationId: string,
+  effectiveFormat: InstagramPublishFormat = "Reels",
+  contentType = "video/mp4"
+): Promise<InstagramPublishResult> {
+  const published = await graphPost<{ id?: string }>(connection, `/${connection.instagram_account_id}/media_publish`, {
+    creation_id: creationId
+  });
+  if (!published.id) throw new Error("A Meta nao retornou o ID da publicacao.");
+
+  let validatedPermalink = "";
+  try {
+    const media = await graphGet<{ permalink?: string }>(connection, `/${published.id}`, { fields: "permalink" });
+    validatedPermalink = media.permalink || "";
+  } catch {
+    validatedPermalink = "";
+  }
+
+  return {
+    instagramMediaId: published.id,
+    permalink: validatedPermalink,
+    status: "published",
+    publishedAt: new Date().toISOString(),
+    effectiveFormat,
+    contentType
   };
 }
 

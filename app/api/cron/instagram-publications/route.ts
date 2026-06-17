@@ -2,7 +2,14 @@ import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { Receiver } from "@upstash/qstash";
 import { getMetaConnection, type MetaRequestContext } from "@/lib/meta-server";
-import { publishInstagramMedia, type InstagramPublishConnection } from "@/lib/instagram-publish-server";
+import {
+  createInstagramAsyncContainer,
+  getInstagramContainerStatus,
+  instagramContainerErrorMessage,
+  publishInstagramCreation,
+  publishInstagramMedia,
+  type InstagramPublishConnection
+} from "@/lib/instagram-publish-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 
 export const dynamic = "force-dynamic";
@@ -12,12 +19,60 @@ type QStashBody = {
   publicationId: string;
 };
 
+const MAX_ATTEMPTS = 3;
+const PROCESSING_STALE_MS = 15 * 60 * 1000;
+const CONTAINER_POLL_DELAY_MS = 60 * 1000;
+const BATCH_LIMIT = 5;
+
 function shouldUseInstagramCaption(format?: string | null) {
   return format === "Feed" || format === "Reels";
 }
 
 function shouldUseInstagramThumbnail(format?: string | null) {
   return format === "Reels";
+}
+
+function toTime(value?: string | null) {
+  const time = value ? new Date(value).getTime() : NaN;
+  return Number.isFinite(time) ? time : 0;
+}
+
+function isStaleProcessing(publication: any) {
+  if (publication.status !== "processing") return false;
+  const lastAttempt = toTime(publication.last_attempt_at) || toTime(publication.updated_at) || toTime(publication.created_at);
+  return !lastAttempt || Date.now() - lastAttempt > PROCESSING_STALE_MS;
+}
+
+function isDueTime(value?: string | null) {
+  const time = toTime(value);
+  return !time || time <= Date.now();
+}
+
+function nextPollAt() {
+  return new Date(Date.now() + CONTAINER_POLL_DELAY_MS).toISOString();
+}
+
+function shouldUseAsyncInstagramFlow(publication: any) {
+  if (publication.instagram_creation_id || publication.processing_stage) return true;
+  return String(publication.format || "").toLowerCase().includes("reel");
+}
+
+function isDueAsyncProcessing(publication: any) {
+  return publication.status === "processing" &&
+    Boolean(publication.instagram_creation_id) &&
+    isDueTime(publication.next_attempt_at);
+}
+
+function instagramQueueFieldsReset() {
+  return {
+    processing_stage: null,
+    instagram_creation_id: null,
+    prepared_asset_url: null,
+    prepared_content_type: null,
+    meta_status: null,
+    next_attempt_at: null,
+    last_heartbeat_at: new Date().toISOString()
+  };
 }
 
 export async function POST(request: Request) {
@@ -51,20 +106,69 @@ export async function POST(request: Request) {
   return await processPublication(body.publicationId);
 }
 
-export async function GET() {
-  return NextResponse.json({ ok: true, message: "Agendamento de Stories via QStash ativo." });
+export async function GET(request: Request) {
+  const cronSecret = process.env.CRON_SECRET;
+  const isVercelCron = request.headers.get("x-vercel-cron") === "1";
+  if (cronSecret && request.headers.get("authorization") !== `Bearer ${cronSecret}` && !isVercelCron) {
+    return NextResponse.json({ error: "Nao autorizado." }, { status: 401 });
+  }
+  return await processDuePublications();
 }
 
-async function processPublication(publicationId: string) {
+function createServiceClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!supabaseUrl || !serviceRoleKey) {
-    return NextResponse.json({ error: "Supabase nao configurado." }, { status: 500 });
+    throw new Error("Supabase nao configurado.");
   }
 
-  const service = createClient(supabaseUrl, serviceRoleKey, {
+  return createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
+}
+
+async function processDuePublications() {
+  let service: any;
+  try {
+    service = createServiceClient();
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Supabase nao configurado." }, { status: 500 });
+  }
+
+  const { data, error } = await service
+    .from("post_publications")
+    .select("id,status,scheduled_at,next_attempt_at,last_attempt_at,updated_at,created_at,instagram_creation_id,processing_stage")
+    .eq("platform", "instagram")
+    .in("status", ["scheduled", "processing"])
+    .order("scheduled_at", { ascending: true, nullsFirst: false })
+    .limit(25);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const due = (data ?? [])
+    .filter((publication: any) => {
+      if (publication.status === "scheduled") return isDueTime(publication.scheduled_at);
+      return isDueAsyncProcessing(publication) || isStaleProcessing(publication);
+    })
+    .slice(0, BATCH_LIMIT);
+
+  const results = [];
+  for (const publication of due) {
+    const response = await processPublication(publication.id);
+    const body = await response.json().catch(() => ({}));
+    results.push({ publicationId: publication.id, status: response.status, ...body });
+  }
+
+  return NextResponse.json({ ok: true, processed: results.length, results });
+}
+
+async function processPublication(publicationId: string) {
+  let service: any;
+  try {
+    service = createServiceClient();
+  } catch {
+    return NextResponse.json({ error: "Supabase nao configurado." }, { status: 500 });
+  }
 
   const { data: publication, error: fetchError } = await service
     .from("post_publications")
@@ -85,18 +189,39 @@ async function processPublication(publicationId: string) {
     return NextResponse.json({ ok: true, message: "Publicacao cancelada." });
   }
 
-  if (publication.status !== "scheduled") {
+  const canProcess =
+    publication.status === "scheduled" ||
+    isDueAsyncProcessing(publication) ||
+    isStaleProcessing(publication);
+
+  if (!canProcess) {
+    if (publication.status === "processing") {
+      return NextResponse.json({ ok: true, message: "Publicacao ainda em processamento.", status: "processing" });
+    }
     return NextResponse.json({ ok: true, message: "Publicacao sem agendamento ativo." });
   }
 
-  const attempts = (publication.attempts ?? 0) + 1;
+  const currentAttempts = Number(publication.attempts ?? 0);
+  const isAsyncFlow = shouldUseAsyncInstagramFlow(publication);
+  const hasAsyncContainer = Boolean(publication.instagram_creation_id);
+  const attempts = hasAsyncContainer ? currentAttempts : currentAttempts + 1;
 
-  try {
+  if (!hasAsyncContainer && attempts > MAX_ATTEMPTS) {
+    const errorMessage = "Publicacao do Instagram excedeu o limite de tentativas apos timeout/processamento.";
     await service
       .from("post_publications")
-      .update({ status: "processing", attempts, last_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .update({
+        status: "error",
+        error: errorMessage,
+        attempts,
+        last_attempt_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
       .eq("id", publicationId);
+    return NextResponse.json({ error: errorMessage, attempts }, { status: 500 });
+  }
 
+  try {
     const connection = await getMetaConnection(service, publication.organization_id, "instagram");
     if (!connection?.access_token || !connection.instagram_account_id) {
       throw new Error("Instagram/Meta nao conectado para esta organizacao.");
@@ -114,6 +239,166 @@ async function processPublication(publicationId: string) {
       role: "admin",
       active: true
     };
+
+    if (isAsyncFlow) {
+      if (!publication.instagram_creation_id) {
+        await service
+          .from("post_publications")
+          .update({
+            status: "processing",
+            processing_stage: "creating_container",
+            attempts,
+            last_attempt_at: new Date().toISOString(),
+            last_heartbeat_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", publicationId);
+
+        const container = await createInstagramAsyncContainer(context, publishConnection, {
+          assetUrl: publication.asset_url,
+          carouselAssets: Array.isArray(publication.carousel_assets) ? publication.carousel_assets : [],
+          title: publication.title ?? "",
+          caption: shouldUseInstagramCaption(publication.format) ? (publication.caption ?? "") : "",
+          format: publication.format ?? "Story",
+          thumbnailUrl: shouldUseInstagramThumbnail(publication.format) ? publication.thumbnail_url : null
+        });
+
+        await service
+          .from("post_publications")
+          .update({
+            status: "processing",
+            processing_stage: "container_created",
+            instagram_creation_id: container.creationId,
+            prepared_asset_url: container.preparedAssetUrl,
+            prepared_content_type: container.preparedContentType,
+            format: container.effectiveFormat,
+            meta_status: "CREATED",
+            next_attempt_at: nextPollAt(),
+            last_heartbeat_at: new Date().toISOString(),
+            error: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", publicationId);
+
+        return NextResponse.json({
+          ok: true,
+          status: "processing",
+          processingStage: "container_created",
+          creationId: container.creationId,
+          nextAttemptAt: nextPollAt()
+        });
+      }
+
+      const containerStatus = await getInstagramContainerStatus(publishConnection, publication.instagram_creation_id);
+      const now = new Date().toISOString();
+
+      if (containerStatus.statusCode === "ERROR" || containerStatus.statusCode === "EXPIRED") {
+        const message = instagramContainerErrorMessage(containerStatus);
+        if (currentAttempts >= MAX_ATTEMPTS) {
+          await service
+            .from("post_publications")
+            .update({
+              status: "error",
+              processing_stage: "container_error",
+              meta_status: containerStatus.statusCode,
+              error: message,
+              last_heartbeat_at: now,
+              updated_at: now
+            })
+            .eq("id", publicationId);
+          return NextResponse.json({ error: message, attempts: currentAttempts }, { status: 500 });
+        }
+
+        await service
+          .from("post_publications")
+          .update({
+            status: "scheduled",
+            processing_stage: "retry_scheduled",
+            instagram_creation_id: null,
+            meta_status: containerStatus.statusCode,
+            error: message,
+            next_attempt_at: nextPollAt(),
+            last_heartbeat_at: now,
+            updated_at: now
+          })
+          .eq("id", publicationId);
+        return NextResponse.json({ ok: true, status: "retry_scheduled", error: message, nextAttemptAt: nextPollAt() });
+      }
+
+      if (containerStatus.statusCode !== "FINISHED") {
+        await service
+          .from("post_publications")
+          .update({
+            processing_stage: "container_processing",
+            meta_status: containerStatus.statusCode || "IN_PROGRESS",
+            next_attempt_at: nextPollAt(),
+            last_heartbeat_at: now,
+            updated_at: now
+          })
+          .eq("id", publicationId);
+        return NextResponse.json({
+          ok: true,
+          status: "processing",
+          processingStage: "container_processing",
+          metaStatus: containerStatus.statusCode || "IN_PROGRESS",
+          nextAttemptAt: nextPollAt()
+        });
+      }
+
+      const published = await publishInstagramCreation(
+        publishConnection,
+        publication.instagram_creation_id,
+        publication.format ?? "Reels",
+        publication.prepared_content_type ?? "video/mp4"
+      );
+
+      await service
+        .from("post_publications")
+        .update({
+          status: "published",
+          processing_stage: "published",
+          meta_status: "FINISHED",
+          format: published.effectiveFormat,
+          external_id: published.instagramMediaId,
+          permalink: published.permalink,
+          published_at: published.publishedAt,
+          error: null,
+          next_attempt_at: null,
+          last_heartbeat_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", publicationId);
+
+      if (publication.post_id) {
+        await service
+          .from("posts")
+          .update({ status: "Publicado", published_at: published.publishedAt })
+          .eq("organization_id", publication.organization_id)
+          .eq("id", publication.post_id);
+      }
+
+      try {
+        await createMetricAfterPublish(service, {
+          organizationId: publication.organization_id,
+          platform: "instagram",
+          externalId: `instagram:${published.instagramMediaId}`,
+          postId: publication.post_id,
+          postTitle: publication.title,
+          permalink: published.permalink,
+          publishedAt: published.publishedAt ?? new Date().toISOString(),
+          format: published.effectiveFormat,
+        });
+      } catch {
+        // Falha na metrica nao reverte a publicacao
+      }
+
+      return NextResponse.json({ ok: true, status: "published", permalink: published.permalink });
+    }
+
+    await service
+      .from("post_publications")
+      .update({ status: "processing", attempts, last_attempt_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq("id", publicationId);
 
     const published = await publishInstagramMedia(context, publishConnection, {
       assetUrl: publication.asset_url,
@@ -133,6 +418,7 @@ async function processPublication(publicationId: string) {
         permalink: published.permalink,
         published_at: published.publishedAt,
         error: null,
+        ...instagramQueueFieldsReset(),
         updated_at: new Date().toISOString()
       })
       .eq("id", publicationId);
