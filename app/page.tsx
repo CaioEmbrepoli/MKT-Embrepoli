@@ -9405,6 +9405,10 @@ function Metrics({
     activeChannel !== "all" && (activeChannel === "tiktok" || channelById.get(activeChannel)?.name.toLowerCase().includes("tiktok")),
   [activeChannel, channelById]);
 
+  useEffect(() => {
+    if (!isYoutubeChannel) setVideoTypeFilter("all");
+  }, [isYoutubeChannel]);
+
   const resolvedMetrics = useMemo(() => metrics.map((metric) => {
     const post = metric.postId ? postById.get(metric.postId) : undefined;
     return {

@@ -694,8 +694,11 @@ export async function fetchInstagramInsightsForMedia(accessToken: string, media:
     metricsList = ["reach", "plays", "shares", "saved", "comments", "likes", "total_interactions"];
   } else if (isStory) {
     metricsList = ["reach", "impressions", "exits", "replies", "taps_forward", "taps_back"];
+  } else if (type === "VIDEO") {
+    // Vídeos de feed usam video_views (plays é exclusivo de Reels)
+    metricsList = ["reach", "video_views", "impressions", "shares", "saved", "total_interactions"];
   } else {
-    // IMAGE, VIDEO, CAROUSEL_ALBUM
+    // IMAGE, CAROUSEL_ALBUM
     metricsList = ["reach", "impressions", "shares", "saved", "total_interactions"];
   }
 
