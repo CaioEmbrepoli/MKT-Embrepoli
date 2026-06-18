@@ -273,7 +273,7 @@ type PostReviewUploadOptions = { carousel?: boolean };
 type AuthMode = "login" | "signup" | "forgot" | "reset" | "checkEmail" | "pending";
 type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
 
-type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Conta e Permissões" | "Diagnóstico";
+type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Métricas" | "Conta e Permissões" | "Diagnóstico";
 type MenuItem = { sectionId: string; moduleId: string; area: AppArea; label: string; icon: LucideIcon };
 
 const moduleIcons: Record<string, LucideIcon> = {
@@ -298,8 +298,8 @@ const marketingMenu: MenuItem[] = marketingModules.map((item) => ({ ...item, ico
 const salesMenu: MenuItem[] = salesModules.map((item) => ({ ...item, icon: moduleIcons[item.moduleId] ?? Settings }));
 
 const menu = [...marketingMenu, ...salesMenu];
-const marketingConfigTabs: ConfigTab[] = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões"];
-const marketingConfigTabsAdmin: ConfigTab[] = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões", "Diagnóstico"];
+const marketingConfigTabs: ConfigTab[] = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Métricas", "Conta e Permissões"];
+const marketingConfigTabsAdmin: ConfigTab[] = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Métricas", "Conta e Permissões", "Diagnóstico"];
 const salesConfigTabs: ConfigTab[] = ["Equipe", "Conta e Permissões"];
 const salesConfigTabsAdmin: ConfigTab[] = ["Equipe", "Conta e Permissões", "Diagnóstico"];
 
@@ -2903,6 +2903,8 @@ export default function Home() {
               calendarDates={calendarDates}
               integrationHealth={integrationHealth}
               errorLogs={errorLogs}
+              trackableLinks={trackableLinks}
+              setTrackableLinks={syncTrackableLinks}
               setCalendarDates={syncCalendarDates}
               setFunnelStages={syncFunnelStages}
               uploadProfilePhoto={uploadProfilePhoto}
@@ -8897,6 +8899,75 @@ function TaskQuickMenu({ task, columns, x, y, close, setModal, setTasks }: { tas
   );
 }
 
+function TopHorizontalScroll({ children }: { children: ReactNode }) {
+  const topScrollerRef = useRef<HTMLDivElement | null>(null);
+  const contentScrollerRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const syncingRef = useRef(false);
+  const [scrollWidth, setScrollWidth] = useState(0);
+
+  useEffect(() => {
+    const updateWidth = () => {
+      setScrollWidth(contentRef.current?.scrollWidth ?? contentScrollerRef.current?.scrollWidth ?? 0);
+    };
+
+    updateWidth();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateWidth);
+      return () => window.removeEventListener("resize", updateWidth);
+    }
+
+    const observer = new ResizeObserver(updateWidth);
+    if (contentRef.current) observer.observe(contentRef.current);
+    if (contentScrollerRef.current) observer.observe(contentScrollerRef.current);
+    window.addEventListener("resize", updateWidth);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateWidth);
+    };
+  }, [children]);
+
+  function syncScroll(source: "top" | "content") {
+    if (syncingRef.current) return;
+    const topScroller = topScrollerRef.current;
+    const contentScroller = contentScrollerRef.current;
+    if (!topScroller || !contentScroller) return;
+
+    syncingRef.current = true;
+    if (source === "top") {
+      contentScroller.scrollLeft = topScroller.scrollLeft;
+    } else {
+      topScroller.scrollLeft = contentScroller.scrollLeft;
+    }
+    requestAnimationFrame(() => {
+      syncingRef.current = false;
+    });
+  }
+
+  return (
+    <div className="space-y-3">
+      <div
+        ref={topScrollerRef}
+        onScroll={() => syncScroll("top")}
+        className="scrollbar-thin overflow-x-auto overflow-y-hidden pb-1"
+        aria-label="Rolagem horizontal do calendário"
+      >
+        <div style={{ width: scrollWidth, height: 1 }} />
+      </div>
+      <div
+        ref={contentScrollerRef}
+        onScroll={() => syncScroll("content")}
+        className="calendar-kanban-scroll overflow-x-auto pb-1"
+      >
+        <div ref={contentRef} className="inline-flex min-w-full gap-4 align-top">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CalendarPostsKanban({ posts, postPublications, setPosts, ideas, currentUser, campaigns, channels, channelById, setModal, createNotifications }: { posts: EditorialPost[]; postPublications: PostPublication[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; ideas: Idea[]; currentUser: Profile; campaigns: Campaign[]; channels: Channel[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>>; createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void }) {
   const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { distance: 7 } }));
   const statuses = [...postStatuses, ...(posts.some((post) => !postStatuses.includes(derivedPostStatus(post, postPublications))) ? ["Outros"] : [])];
@@ -8986,13 +9057,11 @@ function CalendarPostsKanban({ posts, postPublications, setPosts, ideas, current
 
   return (
     <DndContext sensors={sensors} collisionDetection={stableCollisionDetection} onDragEnd={handleDragEnd}>
-      <div className="overflow-x-auto pb-3">
-        <div className="flex min-w-full gap-4">
-          {statuses.map((status) => (
-            <CalendarStatusColumn key={status} status={status} posts={posts.filter((post) => statusFor(post) === status).sort((a, b) => (a.order ?? 1) - (b.order ?? 1))} postPublications={postPublications} ideas={status === "Ideia" ? unlinkedIdeas : []} channelById={channelById} setModal={setModal} />
-          ))}
-        </div>
-      </div>
+      <TopHorizontalScroll>
+        {statuses.map((status) => (
+          <CalendarStatusColumn key={status} status={status} posts={posts.filter((post) => statusFor(post) === status).sort((a, b) => (a.order ?? 1) - (b.order ?? 1))} postPublications={postPublications} ideas={status === "Ideia" ? unlinkedIdeas : []} channelById={channelById} setModal={setModal} />
+        ))}
+      </TopHorizontalScroll>
     </DndContext>
   );
 }
@@ -9369,7 +9438,7 @@ function Metrics({
 }) {
   const [period, setPeriod] = useState("all");
   const [metricsMode, setMetricsMode] = useState<"overview" | "organic" | "ads" | "links">("overview");
-  const [origemSubTab, setOrigemSubTab] = useState<"links" | "script" | "visitantes" | "leads">("links");
+  const [origemSubTab, setOrigemSubTab] = useState<"links" | "visitantes" | "leads">("links");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
   const [metaAdsImportOpen, setMetaAdsImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
@@ -11039,6 +11108,7 @@ function SettingsPanel(props: {
   calendarDates: CalendarDate[];
   integrationHealth: IntegrationHealth[];
   errorLogs: ErrorLog[];
+  trackableLinks: TrackableLink[];
   configTab: ConfigTab;
   setConfigTab: Dispatch<SetStateAction<ConfigTab>>;
   setProfiles: Dispatch<SetStateAction<Profile[]>>;
@@ -11052,6 +11122,7 @@ function SettingsPanel(props: {
   setContentTypes: Dispatch<SetStateAction<ContentType[]>>;
   setFunnelStages: Dispatch<SetStateAction<FunnelStage[]>>;
   setCalendarDates: Dispatch<SetStateAction<CalendarDate[]>>;
+  setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
   uploadProfilePhoto: (profileId: string, file: File) => void;
   sendPasswordResetForProfile: (profile: Profile) => Promise<void>;
   setModal: Dispatch<SetStateAction<ModalState>>;
@@ -11079,8 +11150,22 @@ function SettingsPanel(props: {
       {props.activeArea === "marketing" && props.configTab === "Filtros" && <ChannelsLinesSettings channels={props.channels} campaignAudiences={props.campaignAudiences} productLines={props.productLines} vehicleTypes={props.vehicleTypes} contentTypes={props.contentTypes} setChannels={props.setChannels} setCampaignAudiences={props.setCampaignAudiences} setProductLines={props.setProductLines} setVehicleTypes={props.setVehicleTypes} setContentTypes={props.setContentTypes} />}
       {props.activeArea === "marketing" && props.configTab === "Modelos" && <PostTemplateSettings templates={props.postTemplates} setTemplates={props.setPostTemplates} channels={props.channels} contentTypes={props.contentTypes} funnelStages={props.funnelStages} />}
       {props.activeArea === "marketing" && props.configTab === "Datas" && <CalendarDateSettings calendarDates={props.calendarDates} setCalendarDates={props.setCalendarDates} />}
+      {props.activeArea === "marketing" && props.configTab === "Métricas" && <MetricsSettingsPanel trackableLinks={props.trackableLinks} setTrackableLinks={props.setTrackableLinks} />}
       {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} canManageIntegrations={canManageSharedSettings} integrationHealth={props.integrationHealth} />}
       {props.configTab === "Diagnóstico" && props.currentUser.role === "admin" && <DiagnosticSettings errorLogs={props.errorLogs} profiles={props.profiles} />}
+    </div>
+  );
+}
+
+function MetricsSettingsPanel({ trackableLinks, setTrackableLinks }: { trackableLinks: TrackableLink[]; setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>> }) {
+  return (
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
+      <Panel title="Script de Tracking">
+        <TrackingScriptSettings />
+      </Panel>
+      <Panel title="Novo link rastreável">
+        <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} showExistingLinks={false} />
+      </Panel>
     </div>
   );
 }
@@ -11380,6 +11465,56 @@ function labelVisitorSource(source: string | null, medium: string | null): { lab
   return { label: source ?? "(desconhecido)", description: `Origem identificada como "${source}" sem mídia especificada.` };
 }
 
+function TrackingScriptSettings() {
+  const appUrl = typeof window !== "undefined" ? window.location.origin : "https://seu-app.vercel.app";
+  const trackingScript = `(function(){
+  var ORG='00000000-0000-0000-0000-000000000001';
+  var API='${appUrl}/api/tracking/visit';
+  var vid=localStorage.getItem('_emb_vid');
+  if(!vid){vid='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});localStorage.setItem('_emb_vid',vid);}
+  var p=new URLSearchParams(location.search);
+  fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitorId:vid,organizationId:ORG,utmSource:p.get('utm_source'),utmMedium:p.get('utm_medium'),utmCampaign:p.get('utm_campaign'),fbclid:p.get('fbclid'),gclid:p.get('gclid'),referrer:document.referrer,page:location.pathname})}).catch(function(){});
+})();`;
+  const [scriptCopied, setScriptCopied] = useState(false);
+
+  const copyScript = () => {
+    void navigator.clipboard.writeText(trackingScript).then(() => {
+      setScriptCopied(true);
+      setTimeout(() => setScriptCopied(false), 2000);
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <p className="mb-2 text-sm font-black text-slate-700">Como instalar</p>
+        <ol className="space-y-1 text-sm font-bold text-slate-500 list-decimal list-inside">
+          <li>Acesse o painel da Tray → Configurações → Scripts personalizados (ou Google Tag Manager)</li>
+          <li>Adicione um novo tag/script do tipo "HTML personalizado"</li>
+          <li>Cole o código abaixo e configure para disparar em todas as páginas</li>
+        </ol>
+      </div>
+      <div className="relative">
+        <pre className="overflow-x-auto rounded-2xl bg-slate-900 p-4 text-xs text-emerald-300 leading-relaxed whitespace-pre-wrap break-all">
+          {trackingScript}
+        </pre>
+        <button
+          type="button"
+          onClick={copyScript}
+          className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-slate-700 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-600 transition"
+        >
+          {scriptCopied ? <><Check size={13} className="text-emerald-400" /> Copiado</> : <><Copy size={13} /> Copiar</>}
+        </button>
+      </div>
+      <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3">
+        <p className="text-xs font-black text-amber-700">Endpoint do webhook para WhatsApp Business API e Meta Lead Ads:</p>
+        <code className="mt-1 block text-xs font-bold text-amber-900 break-all">{appUrl}/api/tracking/webhook</code>
+        <p className="mt-1 text-xs font-bold text-amber-600">Configure a variável TRACKING_WEBHOOK_SECRET no Vercel para proteger o endpoint.</p>
+      </div>
+    </div>
+  );
+}
+
 function describeAnalyticsSource(source: string, medium: string): { label: string; description: string } {
   const s = source.toLowerCase().trim();
   const m = medium.toLowerCase().trim();
@@ -11601,19 +11736,9 @@ function OrigemSection({
   persons: Person[];
   salesClients: SalesClient[];
   profiles: Profile[];
-  subTab: "links" | "script" | "visitantes" | "leads";
-  setSubTab: Dispatch<SetStateAction<"links" | "script" | "visitantes" | "leads">>;
+  subTab: "links" | "visitantes" | "leads";
+  setSubTab: Dispatch<SetStateAction<"links" | "visitantes" | "leads">>;
 }) {
-  const appUrl = typeof window !== "undefined" ? window.location.origin : "https://seu-app.vercel.app";
-  const trackingScript = `(function(){
-  var ORG='00000000-0000-0000-0000-000000000001';
-  var API='${appUrl}/api/tracking/visit';
-  var vid=localStorage.getItem('_emb_vid');
-  if(!vid){vid='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16);});localStorage.setItem('_emb_vid',vid);}
-  var p=new URLSearchParams(location.search);
-  fetch(API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({visitorId:vid,organizationId:ORG,utmSource:p.get('utm_source'),utmMedium:p.get('utm_medium'),utmCampaign:p.get('utm_campaign'),fbclid:p.get('fbclid'),gclid:p.get('gclid'),referrer:document.referrer,page:location.pathname})}).catch(function(){});
-})();`;
-
   const sourceEntries = useMemo(() => {
     const map: Record<string, { source: string | null; medium: string | null; count: number }> = {};
     for (const v of visitors) {
@@ -11632,14 +11757,6 @@ function OrigemSection({
     tiktok: "slate",
     indicacao: "amber",
     outro: "slate"
-  };
-
-  const [scriptCopied, setScriptCopied] = useState(false);
-  const copyScript = () => {
-    void navigator.clipboard.writeText(trackingScript).then(() => {
-      setScriptCopied(true);
-      setTimeout(() => setScriptCopied(false), 2000);
-    });
   };
 
   const [leadFilter, setLeadFilter] = useState<"todos" | "atribuidos" | "nao-atribuidos">("todos");
@@ -11668,7 +11785,6 @@ function OrigemSection({
         {(
           [
             ["links", "Links"],
-            ["script", "Script de Tracking"],
             ["visitantes", "Visitantes"],
             ["leads", "Leads"]
           ] as const
@@ -11686,35 +11802,6 @@ function OrigemSection({
 
       {subTab === "links" && (
         <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} />
-      )}
-
-      {subTab === "script" && (
-        <div className="space-y-4">
-          <div>
-            <p className="mb-2 text-sm font-black text-slate-700">Como instalar</p>
-            <ol className="space-y-1 text-sm font-bold text-slate-500 list-decimal list-inside">
-              <li>Acesse o painel da Tray → Configurações → Scripts personalizados (ou Google Tag Manager)</li>
-              <li>Adicione um novo tag/script do tipo "HTML personalizado"</li>
-              <li>Cole o código abaixo e configure para disparar em todas as páginas</li>
-            </ol>
-          </div>
-          <div className="relative">
-            <pre className="overflow-x-auto rounded-2xl bg-slate-900 p-4 text-xs text-emerald-300 leading-relaxed whitespace-pre-wrap break-all">
-              {trackingScript}
-            </pre>
-            <button
-              onClick={copyScript}
-              className="absolute right-3 top-3 flex items-center gap-1.5 rounded-xl bg-slate-700 px-3 py-1.5 text-xs font-black text-white hover:bg-slate-600 transition"
-            >
-              {scriptCopied ? <><Check size={13} className="text-emerald-400" /> Copiado</> : <><Copy size={13} /> Copiar</>}
-            </button>
-          </div>
-          <div className="rounded-2xl bg-amber-50 border border-amber-200 p-3">
-            <p className="text-xs font-black text-amber-700">Endpoint do webhook para WhatsApp Business API e Meta Lead Ads:</p>
-            <code className="mt-1 block text-xs font-bold text-amber-900 break-all">{appUrl}/api/tracking/webhook</code>
-            <p className="mt-1 text-xs font-bold text-amber-600">Configure a variável TRACKING_WEBHOOK_SECRET no Vercel para proteger o endpoint.</p>
-          </div>
-        </div>
       )}
 
       {subTab === "visitantes" && (
@@ -11745,7 +11832,7 @@ function OrigemSection({
           ) : (
             <div className="rounded-2xl bg-slate-50 p-8 text-center">
               <p className="text-sm font-black text-slate-400">Nenhum visitante registrado ainda.</p>
-              <p className="mt-1 text-xs font-bold text-slate-400">Instale o script de tracking na aba "Script de Tracking".</p>
+              <p className="mt-1 text-xs font-bold text-slate-400">Instale o script de tracking em Configurações → Métricas.</p>
             </div>
           )}
         </div>
@@ -11843,13 +11930,25 @@ function OrigemSection({
   );
 }
 
-function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackableLinks: TrackableLink[]; setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>> }) {
+function TrackableLinksSettings({
+  trackableLinks,
+  setTrackableLinks,
+  showExistingLinks = true
+}: {
+  trackableLinks: TrackableLink[];
+  setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
+  showExistingLinks?: boolean;
+}) {
   const [destinationUrl, setDestinationUrl] = useState("");
   const [label, setLabel] = useState("");
   const [utmSource, setUtmSource] = useState("");
   const [utmMedium, setUtmMedium] = useState("");
   const [utmCampaign, setUtmCampaign] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [createdLinkId, setCreatedLinkId] = useState<string | null>(null);
+  const linksToShow = showExistingLinks
+    ? trackableLinks
+    : trackableLinks.filter((link) => link.id === createdLinkId);
 
   const copyLink = (id: string, url: string) => {
     void navigator.clipboard.writeText(url).then(() => {
@@ -11874,6 +11973,7 @@ function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackab
       utmCampaign: utmCampaign.trim() || undefined
     };
     setTrackableLinks((current) => [newLink, ...current]);
+    setCreatedLinkId(newLink.id);
     setDestinationUrl("");
     setLabel("");
     setUtmSource("");
@@ -11943,7 +12043,7 @@ function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackab
       </button>
 
       <div className="mt-5 space-y-2">
-        {trackableLinks.map((link) => {
+        {linksToShow.map((link) => {
           const shortUrl = buildTrackableLinkUrl(link.slug);
           return (
             <div key={link.id} className="flex flex-wrap items-center gap-3 rounded-2xl bg-slate-50 p-3">
@@ -11958,17 +12058,20 @@ function TrackableLinksSettings({ trackableLinks, setTrackableLinks }: { trackab
                 )}
               </div>
               <span className="rounded-xl bg-white px-3 py-1 text-xs font-black text-blue-700">{shortUrl}</span>
-              <span className="rounded-xl bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">{link.clickCount} clicks</span>
+              {showExistingLinks && <span className="rounded-xl bg-blue-100 px-3 py-1 text-xs font-black text-blue-700">{link.clickCount} clicks</span>}
               <button onClick={() => copyLink(link.id, shortUrl)} title="Copiar URL" className="rounded-xl bg-white p-2 text-slate-600">
                 {copiedId === link.id ? <Check size={16} className="text-emerald-600" /> : <Copy size={16} />}
               </button>
-              <button onClick={() => window.confirm("Excluir link rastreável?") && setTrackableLinks((current) => current.filter((item) => item.id !== link.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700">
-                <Trash2 size={16} />
-              </button>
+              {showExistingLinks && (
+                <button onClick={() => window.confirm("Excluir link rastreável?") && setTrackableLinks((current) => current.filter((item) => item.id !== link.id))} className="rounded-xl bg-rose-100 p-2 text-rose-700">
+                  <Trash2 size={16} />
+                </button>
+              )}
             </div>
           );
         })}
-        {!trackableLinks.length && <p className="text-sm font-bold text-slate-400">Nenhum link cadastrado ainda.</p>}
+        {showExistingLinks && !trackableLinks.length && <p className="text-sm font-bold text-slate-400">Nenhum link cadastrado ainda.</p>}
+        {!showExistingLinks && !createdLinkId && <p className="text-sm font-bold text-slate-400">Depois de gerar, o novo link aparecerá aqui para copiar.</p>}
       </div>
     </div>
   );

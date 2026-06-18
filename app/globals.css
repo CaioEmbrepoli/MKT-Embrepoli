@@ -39,6 +39,15 @@ button {
   scrollbar-color: #b9c1d6 transparent;
 }
 
+.calendar-kanban-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.calendar-kanban-scroll::-webkit-scrollbar {
+  display: none;
+}
+
 ::selection {
   background: #bfdbfe;
   color: #0f172a;
