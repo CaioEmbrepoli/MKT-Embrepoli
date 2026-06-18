@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("[meta/ads/import]", error);
     const payload = toApiErrorPayload(error, { provider: "meta_ads", service: "meta_ads" });
-    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId);
     return NextResponse.json(payload, { status: 400 });
   }
 }

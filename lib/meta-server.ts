@@ -256,7 +256,7 @@ export async function getInstagramConnection(context: MetaRequestContext): Promi
       action: "reconnect_oauth",
       reconnectTarget: "instagram"
     });
-    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId);
     throw new Error(payload.userMessage);
   }
   if (connection.expires_at && new Date(connection.expires_at).getTime() < Date.now()) {
@@ -267,7 +267,7 @@ export async function getInstagramConnection(context: MetaRequestContext): Promi
       action: "reconnect_oauth",
       reconnectTarget: "instagram"
     });
-    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId);
     throw new Error(payload.userMessage);
   }
   await resolveIntegrationHealth(context.service, context.organizationId, "instagram", "instagram");
@@ -284,7 +284,7 @@ export async function getMetaAdsConnection(context: MetaRequestContext) {
       action: "reconnect_oauth",
       reconnectTarget: "meta_ads"
     });
-    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId);
     throw new Error(payload.userMessage);
   }
   if (connection.expires_at && new Date(connection.expires_at).getTime() < Date.now()) {
@@ -295,7 +295,7 @@ export async function getMetaAdsConnection(context: MetaRequestContext) {
       action: "reconnect_oauth",
       reconnectTarget: "meta_ads"
     });
-    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId);
     throw new Error(payload.userMessage);
   }
   await resolveIntegrationHealth(context.service, context.organizationId, "meta_ads", "meta_ads");

@@ -17,6 +17,7 @@ import type {
   ContentType,
   CustomerQuestion,
   EditorialPost,
+  ErrorLog,
   FunnelStage,
   Idea,
   IntegrationHealth,
@@ -77,6 +78,7 @@ export type AppData = {
   adInsightsDaily: AdInsightDaily[];
   adAlerts: AdAlert[];
   integrationHealth: IntegrationHealth[];
+  errorLogs: ErrorLog[];
   notifications: Notification[];
   calendarDates: CalendarDate[];
   customerQuestions: CustomerQuestion[];
@@ -119,9 +121,27 @@ export async function ensureCurrentProfile(client: SupabaseClient): Promise<Prof
   return created.data ? mapProfile(created.data) : null;
 }
 
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const PAGE = 1000;
+  const all: T[] = [];
+  let page = 0;
+  while (true) {
+    const { data, error } = await buildQuery().range(page * PAGE, page * PAGE + PAGE - 1);
+    if (error || !data?.length) break;
+    all.push(...(data as T[]));
+    if (data.length < PAGE) break;
+    page++;
+  }
+  return all;
+}
+
 export async function loadAppData(client: SupabaseClient): Promise<AppData> {
   const profile = await ensureCurrentProfile(client);
   const organizationId = profile?.id ? await getOrganizationId(client, profile.id) : EMBREPOLI_ORG_ID;
+
+  const visitorsPromise = fetchAllRows<Record<string, unknown>>(
+    () => client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false })
+  );
 
   const [
     profiles,
@@ -167,8 +187,8 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adInsightsDailyData,
     adAlertsData,
     integrationHealthData,
+    errorLogsData,
     trackableLinksData,
-    visitorsData,
     personsData,
     conversionsData
   ] = await Promise.all([
@@ -215,11 +235,13 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }).limit(100000),
     client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
     client.from("integration_health").select("*").eq("organization_id", organizationId).order("updated_at", { ascending: false }).limit(100000),
+    client.from("error_logs").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(200),
     client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
-    client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false }).limit(100000),
     client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
     client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(100000)
   ]);
+
+  const visitorsRaw = await visitorsPromise;
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
   const postAssigneeMap = groupByParent(postAssignees.data ?? [], "post_id");
@@ -256,6 +278,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adInsightsDaily: (adInsightsDailyData.data ?? []).map(mapAdInsightDaily),
     adAlerts: (adAlertsData.data ?? []).map(mapAdAlert),
     integrationHealth: (integrationHealthData.data ?? []).map(mapIntegrationHealth),
+    errorLogs: (errorLogsData.data ?? []).map(mapErrorLog),
     notifications: (notifications.data ?? []).map(mapNotification),
     calendarDates: (calendarDates.data ?? []).map(mapCalendarDate),
     customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion),
@@ -267,7 +290,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     postPublications: (postPublicationsData.data ?? []).map(mapPostPublication),
     youtubeUploadQueue: (youtubeUploadQueueData.data ?? []).map(mapYouTubeUploadQueueItem),
     trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink),
-    visitors: (visitorsData.data ?? []).map(mapVisitor),
+    visitors: visitorsRaw.map(mapVisitor),
     persons: (personsData.data ?? []).map(mapPerson),
     conversions: (conversionsData.data ?? []).map(mapConversion)
   };
@@ -1375,6 +1398,21 @@ function mapAdAlert(row: any): AdAlert {
     date: row.alert_date ?? row.date ?? row.created_at?.slice(0, 10) ?? "",
     createdAt: row.created_at ?? undefined,
     reviewedAt: row.reviewed_at ?? undefined
+  };
+}
+
+function mapErrorLog(row: any): ErrorLog {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    provider: row.provider ?? "",
+    service: row.service ?? "",
+    errorCode: row.error_code ?? null,
+    userMessage: row.user_message ?? null,
+    technicalMessage: row.technical_message ?? null,
+    action: row.action ?? null,
+    profileId: row.profile_id ?? null,
+    createdAt: row.created_at ?? new Date().toISOString()
   };
 }
 

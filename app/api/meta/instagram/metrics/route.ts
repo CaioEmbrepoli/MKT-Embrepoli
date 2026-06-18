@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ metrics });
   } catch (error) {
     const payload = toApiErrorPayload(error, { provider: "instagram", service: "instagram" });
-    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId);
     return NextResponse.json(payload, { status: 400 });
   }
 }

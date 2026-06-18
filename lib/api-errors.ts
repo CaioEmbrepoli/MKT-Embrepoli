@@ -215,9 +215,11 @@ export function sanitizeTechnicalMessage(message: string) {
 export async function recordIntegrationFailure(
   client: SupabaseClient,
   organizationId: string,
-  payload: ApiErrorPayload
+  payload: ApiErrorPayload,
+  profileId?: string
 ) {
   try {
+    const now = new Date().toISOString();
     await client.from("integration_health").upsert({
       organization_id: organizationId,
       provider: payload.provider,
@@ -228,10 +230,21 @@ export async function recordIntegrationFailure(
       last_technical_message: payload.technicalMessage ?? null,
       action: payload.action,
       reconnect_target: payload.reconnectTarget ?? null,
-      last_failed_at: new Date().toISOString(),
+      last_failed_at: now,
       resolved_at: null,
-      updated_at: new Date().toISOString()
+      updated_at: now
     }, { onConflict: "organization_id,provider,service" });
+    await client.from("error_logs").insert({
+      organization_id: organizationId,
+      provider: payload.provider,
+      service: payload.service,
+      error_code: payload.code ?? null,
+      user_message: payload.userMessage ?? null,
+      technical_message: payload.technicalMessage ?? null,
+      action: payload.action ?? null,
+      profile_id: profileId ?? null,
+      created_at: now
+    });
   } catch (error) {
     console.warn("[integration-health] failed to record", error);
   }

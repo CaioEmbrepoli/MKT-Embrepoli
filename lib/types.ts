@@ -572,6 +572,19 @@ export type IntegrationHealth = {
   updatedAt: string;
 };
 
+export type ErrorLog = {
+  id: string;
+  organizationId: string;
+  provider: string;
+  service: string;
+  errorCode: string | null;
+  userMessage: string | null;
+  technicalMessage: string | null;
+  action: string | null;
+  profileId: string | null;
+  createdAt: string;
+};
+
 export type CommentStatus = "novo" | "respondido" | "ignorado";
 export type CommentClassificationStatus = "pendente" | "relevante" | "normal" | "erro";
 

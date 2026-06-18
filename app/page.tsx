@@ -187,6 +187,7 @@ import type {
   CommentStatus,
   ContentType,
   EditorialPost,
+  ErrorLog,
   FileAttachment,
   FunnelStage,
   Idea,
@@ -272,7 +273,7 @@ type PostReviewUploadOptions = { carousel?: boolean };
 type AuthMode = "login" | "signup" | "forgot" | "reset" | "checkEmail" | "pending";
 type BadgeTone = "blue" | "cyan" | "slate" | "red" | "green" | "amber" | "purple";
 
-type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Conta e Permissões";
+type ConfigTab = "Equipe" | "Funil" | "Filtros" | "Modelos" | "Datas" | "Conta e Permissões" | "Diagnóstico";
 type MenuItem = { sectionId: string; moduleId: string; area: AppArea; label: string; icon: LucideIcon };
 
 const moduleIcons: Record<string, LucideIcon> = {
@@ -298,7 +299,9 @@ const salesMenu: MenuItem[] = salesModules.map((item) => ({ ...item, icon: modul
 
 const menu = [...marketingMenu, ...salesMenu];
 const marketingConfigTabs: ConfigTab[] = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões"];
+const marketingConfigTabsAdmin: ConfigTab[] = ["Equipe", "Funil", "Filtros", "Modelos", "Datas", "Conta e Permissões", "Diagnóstico"];
 const salesConfigTabs: ConfigTab[] = ["Equipe", "Conta e Permissões"];
+const salesConfigTabsAdmin: ConfigTab[] = ["Equipe", "Conta e Permissões", "Diagnóstico"];
 
 const postStatuses: PostStatus[] = ["Ideia", "Produção", "Revisão", "Aprovado", "Agendado", "Publicado"];
 const campaignAudienceOptions = seedCampaignAudiences.map((audience) => audience.name);
@@ -1204,6 +1207,7 @@ export default function Home() {
   const [adInsightsDaily, setAdInsightsDaily] = useState<AdInsightDaily[]>([]);
   const [adAlerts, setAdAlerts] = useState<AdAlert[]>([]);
   const [integrationHealth, setIntegrationHealth] = useState<IntegrationHealth[]>([]);
+  const [errorLogs, setErrorLogs] = useState<ErrorLog[]>([]);
   const [customerQuestions, setCustomerQuestions] = useState<CustomerQuestion[]>([]);
   const [ytComments, setYtComments] = useState<Comment[]>([]);
   const [autoFilters, setAutoFilters] = useState<AutoFilter[]>([]);
@@ -1563,6 +1567,7 @@ export default function Home() {
     setAdInsightsDaily(data.adInsightsDaily);
     setAdAlerts(data.adAlerts);
     setIntegrationHealth(data.integrationHealth);
+    setErrorLogs(data.errorLogs);
     setCustomerQuestions(data.customerQuestions);
     setYtComments(data.ytComments);
     setAutoFilters(data.autoFilters);
@@ -2897,6 +2902,7 @@ export default function Home() {
               setContentTypes={syncContentTypes}
               calendarDates={calendarDates}
               integrationHealth={integrationHealth}
+              errorLogs={errorLogs}
               setCalendarDates={syncCalendarDates}
               setFunnelStages={syncFunnelStages}
               uploadProfilePhoto={uploadProfilePhoto}
@@ -11028,6 +11034,7 @@ function SettingsPanel(props: {
   funnelStages: FunnelStage[];
   calendarDates: CalendarDate[];
   integrationHealth: IntegrationHealth[];
+  errorLogs: ErrorLog[];
   configTab: ConfigTab;
   setConfigTab: Dispatch<SetStateAction<ConfigTab>>;
   setProfiles: Dispatch<SetStateAction<Profile[]>>;
@@ -11045,7 +11052,10 @@ function SettingsPanel(props: {
   sendPasswordResetForProfile: (profile: Profile) => Promise<void>;
   setModal: Dispatch<SetStateAction<ModalState>>;
 }) {
-  const tabs = props.activeArea === "marketing" ? marketingConfigTabs : salesConfigTabs;
+  const isAdmin = props.currentUser.role === "admin";
+  const tabs = props.activeArea === "marketing"
+    ? (isAdmin ? marketingConfigTabsAdmin : marketingConfigTabs)
+    : (isAdmin ? salesConfigTabsAdmin : salesConfigTabs);
   const canManageSharedSettings =
     hasModulePermission(props.currentUser, "marketing", "configuracoes", "manage", props.profileAreas, props.profileModulePermissions) ||
     hasModulePermission(props.currentUser, "vendas", "configuracoes", "manage", props.profileAreas, props.profileModulePermissions);
@@ -11066,6 +11076,7 @@ function SettingsPanel(props: {
       {props.activeArea === "marketing" && props.configTab === "Modelos" && <PostTemplateSettings templates={props.postTemplates} setTemplates={props.setPostTemplates} channels={props.channels} contentTypes={props.contentTypes} funnelStages={props.funnelStages} />}
       {props.activeArea === "marketing" && props.configTab === "Datas" && <CalendarDateSettings calendarDates={props.calendarDates} setCalendarDates={props.setCalendarDates} />}
       {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} canManageIntegrations={canManageSharedSettings} integrationHealth={props.integrationHealth} />}
+      {props.configTab === "Diagnóstico" && props.currentUser.role === "admin" && <DiagnosticSettings errorLogs={props.errorLogs} profiles={props.profiles} />}
     </div>
   );
 }
@@ -18977,6 +18988,89 @@ function CommentSourceBadge({ source }: { source: Comment["source"] }) {
       <CommentChannelIcon source={source} className="h-4 w-4" />
       {config.label}
     </span>
+  );
+}
+
+function DiagnosticSettings({ errorLogs, profiles }: { errorLogs: ErrorLog[]; profiles: Profile[] }) {
+  const profileById = new Map(profiles.map((p) => [p.id, p]));
+
+  function errorCodeLabel(code: string | null): string {
+    const labels: Record<string, string> = {
+      oauth_reconnect_required: "Token expirado / reconexão necessária",
+      provider_rate_limit: "Limite de requisições atingido",
+      provider_timeout: "Tempo limite excedido",
+      provider_api_error: "Erro na API do provedor",
+      not_connected: "Integração não conectada",
+      missing_scope: "Permissão ausente",
+      database_error: "Erro no banco de dados",
+      permission_denied: "Permissão negada",
+      env_missing: "Configuração ausente",
+      unknown_error: "Erro desconhecido"
+    };
+    return code ? (labels[code] ?? code) : "Desconhecido";
+  }
+
+  function formatDateTime(iso: string): string {
+    const d = new Date(iso);
+    return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  return (
+    <Panel title="Diagnóstico — Histórico de Erros">
+      {errorLogs.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+          <span className="text-4xl mb-3">✓</span>
+          <p className="font-semibold text-slate-500">Nenhum erro registrado.</p>
+          <p className="text-sm mt-1">Todos os sistemas estão operando normalmente.</p>
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">
+                <th className="py-2 pr-4 whitespace-nowrap">Horário</th>
+                <th className="py-2 pr-4 whitespace-nowrap">Integração</th>
+                <th className="py-2 pr-4 whitespace-nowrap">Tipo do Erro</th>
+                <th className="py-2 pr-4">Mensagem</th>
+                <th className="py-2 pr-4 whitespace-nowrap">Usuário</th>
+                <th className="py-2">Detalhes Técnicos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {errorLogs.map((log) => (
+                <tr key={log.id} className="border-b border-slate-100 bg-red-50/50 hover:bg-red-50 transition-colors">
+                  <td className="py-2 pr-4 whitespace-nowrap text-slate-500 font-mono text-xs">{formatDateTime(log.createdAt)}</td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+                      {serviceLabel(log.service, log.provider as Parameters<typeof serviceLabel>[1])}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">
+                      {errorCodeLabel(log.errorCode)}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-4 text-slate-700 max-w-xs">{log.userMessage ?? "—"}</td>
+                  <td className="py-2 pr-4 whitespace-nowrap text-slate-600">
+                    {log.profileId ? (profileById.get(log.profileId)?.name ?? "ID: " + log.profileId.slice(0, 8)) : "Sistema"}
+                  </td>
+                  <td className="py-2">
+                    {log.technicalMessage ? (
+                      <details className="max-w-sm">
+                        <summary className="cursor-pointer text-xs text-blue-600 hover:underline select-none">Ver detalhes</summary>
+                        <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-slate-100 p-2 text-xs text-slate-700">{log.technicalMessage}</pre>
+                      </details>
+                    ) : (
+                      <span className="text-slate-400">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
   );
 }
 
