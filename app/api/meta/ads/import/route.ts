@@ -11,6 +11,7 @@ export async function POST(request: Request) {
     const summary = await importMetaAdsData(context);
     return NextResponse.json({ summary });
   } catch (error) {
+    console.error("[meta/ads/import]", error);
     const payload = toApiErrorPayload(error, { provider: "meta_ads", service: "meta_ads" });
     if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
     return NextResponse.json(payload, { status: 400 });

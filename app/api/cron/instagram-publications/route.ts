@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Receiver } from "@upstash/qstash";
 import { getMetaConnection, type MetaRequestContext } from "@/lib/meta-server";
 import {
+  cleanupPublicationAssets,
   createInstagramAsyncContainer,
   getInstagramContainerStatus,
   instagramContainerErrorMessage,
@@ -399,6 +400,12 @@ async function processPublication(publicationId: string) {
         // Falha na metrica nao reverte a publicacao
       }
 
+      await cleanupPublicationAssets(service, {
+        assetUrl: publication.asset_url,
+        carouselAssets: Array.isArray(publication.carousel_assets) ? publication.carousel_assets : [],
+        thumbnailUrl: publication.thumbnail_url
+      });
+
       return NextResponse.json({ ok: true, status: "published", permalink: published.permalink });
     }
 
@@ -450,6 +457,12 @@ async function processPublication(publicationId: string) {
     } catch {
       // Falha na métrica não reverte a publicação
     }
+
+    await cleanupPublicationAssets(service, {
+      assetUrl: publication.asset_url,
+      carouselAssets: Array.isArray(publication.carousel_assets) ? publication.carousel_assets : [],
+      thumbnailUrl: publication.thumbnail_url
+    });
 
     return NextResponse.json({ ok: true, status: "published", permalink: published.permalink });
   } catch (err) {

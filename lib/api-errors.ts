@@ -87,7 +87,11 @@ export function toApiErrorPayload(error: unknown, defaults: Partial<ApiErrorPayl
   if (error instanceof IntegrationApiError) return error.payload;
   if (isApiErrorPayload(error)) return error;
 
-  const rawMessage = error instanceof Error ? error.message : String(error || "Erro desconhecido.");
+  const rawMessage = error instanceof Error
+    ? error.message
+    : (typeof error === "object" && error !== null && "message" in error)
+      ? String((error as { message: unknown }).message)
+      : String(error || "Erro desconhecido.");
   const classified = classifyApiError(rawMessage, defaults.provider, defaults.service);
   return {
     error: classified.userMessage,

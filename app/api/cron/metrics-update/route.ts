@@ -89,6 +89,10 @@ function isMetricChanged(existing: MetricRow, next: MetricRow) {
   );
 }
 
+function keepExistingWhenMissing<T>(existingValue: T | null | undefined, nextValue: T | null | undefined) {
+  return nextValue == null ? (existingValue ?? null) : nextValue;
+}
+
 async function resolveChannelId(client: SupabaseClient, organizationId: string, key: "youtube" | "instagram" | "tiktok") {
   const candidates: Record<typeof key, string[]> = {
     youtube: ["youtube", "you tube"],
@@ -146,7 +150,17 @@ async function upsertOrganicMetrics(
       clicks: existing?.clicks ?? row.clicks ?? 0,
       leads: existing?.leads ?? row.leads ?? 0,
       notes: existing?.notes ?? row.notes ?? "",
-      learning: existing?.learning ?? row.learning ?? ""
+      learning: existing?.learning ?? row.learning ?? "",
+      watch_time_minutes: keepExistingWhenMissing(existing?.watch_time_minutes, row.watch_time_minutes),
+      average_view_duration_seconds: keepExistingWhenMissing(existing?.average_view_duration_seconds, row.average_view_duration_seconds),
+      average_view_percentage: keepExistingWhenMissing(existing?.average_view_percentage, row.average_view_percentage),
+      subscribers_gained: keepExistingWhenMissing(existing?.subscribers_gained, row.subscribers_gained),
+      subscribers_lost: keepExistingWhenMissing(existing?.subscribers_lost, row.subscribers_lost),
+      impressions: keepExistingWhenMissing(existing?.impressions, row.impressions),
+      impression_click_through_rate: keepExistingWhenMissing(existing?.impression_click_through_rate, row.impression_click_through_rate),
+      thumbnail_url: keepExistingWhenMissing(existing?.thumbnail_url, row.thumbnail_url),
+      source_url: keepExistingWhenMissing(existing?.source_url, row.source_url),
+      embed_url: keepExistingWhenMissing(existing?.embed_url, row.embed_url)
     };
 
     if (existing && isMetricChanged(existing, next)) {
@@ -415,7 +429,7 @@ async function runInstagram(client: SupabaseClient): Promise<CronChannelResult[]
         }));
       }
 
-      const metrics: InstagramMetricItem[] = media.map((item) => ({
+      const metrics: InstagramMetricItem[] = recentMedia.map((item) => ({
         ...item,
         ...(insightsMap.get(item.id) ?? { reach: 0, impressions: 0, views: 0, shares: 0, saved: 0, totalInteractions: 0 })
       }));
@@ -671,12 +685,19 @@ export async function GET(request: Request) {
   });
   const executedAt = new Date().toISOString();
 
-  // ?platform=instagram  →  roda só aquela plataforma
+  // ?platform=instagram  →  roda só aquela plataforma.
+  // Chamada sem plataforma ficava pesada e podia conflitar com os crons individuais.
   const { searchParams } = new URL(request.url);
   const platformParam = searchParams.get("platform")?.toLowerCase() as PlatformKey | null;
-  const platforms: PlatformKey[] = platformParam && PLATFORM_RUNNERS[platformParam]
-    ? [platformParam]
-    : (Object.keys(PLATFORM_RUNNERS) as PlatformKey[]);
+  if (!platformParam || !PLATFORM_RUNNERS[platformParam]) {
+    return NextResponse.json({
+      ok: false,
+      executedAt,
+      error: "Parametro platform obrigatorio. Use youtube, instagram, tiktok ou metaads."
+    }, { status: 400 });
+  }
+
+  const platforms: PlatformKey[] = [platformParam];
 
   const results: Record<string, CronChannelResult[]> = {};
   for (const key of platforms) {

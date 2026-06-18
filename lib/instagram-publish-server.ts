@@ -828,6 +828,42 @@ export async function publishInstagramCreation(
   };
 }
 
+export async function cleanupPublicationAssets(
+  serviceClient: SupabaseClient,
+  pub: {
+    assetUrl?: string | null;
+    carouselAssets?: Array<{ assetUrl?: string; url?: string }> | null;
+    thumbnailUrl?: string | null;
+  }
+) {
+  function extractPath(url: string | undefined | null): string | null {
+    if (!url) return null;
+    const marker = `/${PUBLICATION_BUCKET}/`;
+    const idx = url.indexOf(marker);
+    if (idx === -1) return null;
+    return decodeURIComponent(url.slice(idx + marker.length).split("?")[0]);
+  }
+
+  const seen = new Set<string>();
+  const paths: string[] = [];
+
+  for (const url of [
+    pub.assetUrl,
+    ...(pub.carouselAssets ?? []).map((a) => a.assetUrl ?? a.url),
+    pub.thumbnailUrl,
+  ]) {
+    const p = extractPath(url);
+    if (p && !seen.has(p)) { seen.add(p); paths.push(p); }
+  }
+
+  if (!paths.length) return;
+  try {
+    await serviceClient.storage.from(PUBLICATION_BUCKET).remove(paths);
+  } catch {
+    // Silently fail — cleanup e best-effort e nao bloqueia o fluxo
+  }
+}
+
 export async function publishInstagramMedia(
   context: MetaRequestContext,
   connection: InstagramPublishConnection,

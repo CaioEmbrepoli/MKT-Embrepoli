@@ -715,7 +715,7 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
     thumbnail_url: item.thumbnailUrl ?? null,
     source_url: item.sourceUrl ?? null,
     embed_url: item.embedUrl ?? null
-  }));
+  }), "organization_id,external_id");
 }
 
 export async function saveMetric(client: SupabaseClient, metric: PostMetric) {
@@ -962,15 +962,16 @@ export async function deleteCalendarDate(client: SupabaseClient, id: string) {
   await deleteById(client, "calendar_dates", id);
 }
 
-async function replaceSimple<T extends { id: string }>(client: SupabaseClient, table: string, rows: T[], previous: T[], mapper: (row: T, organizationId: string) => Record<string, unknown>) {
+async function replaceSimple<T extends { id: string }>(client: SupabaseClient, table: string, rows: T[], previous: T[], mapper: (row: T, organizationId: string) => Record<string, unknown>, onConflict?: string) {
   const organizationId = await currentOrganizationId(client);
-  await replaceSimpleWithOrg(client, table, organizationId, rows, previous, (row) => mapper(row, organizationId));
+  await replaceSimpleWithOrg(client, table, organizationId, rows, previous, (row) => mapper(row, organizationId), onConflict);
 }
 
-async function replaceSimpleWithOrg<T extends { id: string }>(client: SupabaseClient, table: string, organizationId: string, rows: T[], previous: T[], mapper: (row: T) => Record<string, unknown>) {
+async function replaceSimpleWithOrg<T extends { id: string }>(client: SupabaseClient, table: string, organizationId: string, rows: T[], previous: T[], mapper: (row: T) => Record<string, unknown>, onConflict?: string) {
   await deleteRemovedRows(client, table, organizationId, previous, rows);
   if (rows.length) {
-    const { error } = await client.from(table).upsert(rows.map(mapper));
+    const upsertOpts = onConflict ? { onConflict } : undefined;
+    const { error } = await client.from(table).upsert(rows.map(mapper), upsertOpts);
     if (error) throw new Error(`${table} upsert: ${error.message}`);
   }
 }
@@ -1385,13 +1386,13 @@ function mapIntegrationHealth(row: any): IntegrationHealth {
   return {
     id: row.id,
     organizationId: row.organization_id,
-    provider: row.provider ?? "supabase",
+    provider: (row.provider ?? "supabase") as IntegrationHealth["provider"],
     service: row.service ?? "",
-    status: row.status ?? "ok",
+    status: (row.status ?? "ok") as IntegrationHealth["status"],
     lastErrorCode: row.last_error_code ?? undefined,
     lastErrorMessage: row.last_error_message ?? undefined,
     lastTechnicalMessage: row.last_technical_message ?? undefined,
-    action: row.action ?? undefined,
+    action: row.action as IntegrationHealth["action"] | undefined,
     reconnectTarget: row.reconnect_target ?? undefined,
     lastFailedAt: row.last_failed_at ?? undefined,
     resolvedAt: row.resolved_at ?? undefined,

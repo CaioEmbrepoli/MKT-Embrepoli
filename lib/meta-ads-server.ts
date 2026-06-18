@@ -153,7 +153,8 @@ async function mergeRows(
   table: string,
   organizationId: string,
   rows: TableRow[],
-  parentFilter?: { column: string; value: string }
+  parentFilter?: { column: string; value: string },
+  onConflict?: string
 ) {
   if (!rows.length) return new Map<string, string>();
   let query: any = client
@@ -163,7 +164,7 @@ async function mergeRows(
     .in("external_id", rows.map((row) => row.external_id).filter(Boolean));
   if (parentFilter) query = query.eq(parentFilter.column, parentFilter.value);
   const { data, error } = await query;
-  if (error) throw error;
+  if (error) throw new Error(`${table} select: ${error.message}`);
 
   const existing = new Map<string, string>();
   for (const row of (data || []) as Array<{ id: string; external_id: string | null }>) {
@@ -174,8 +175,9 @@ async function mergeRows(
     ...row,
     id: row.external_id && existing.has(row.external_id) ? existing.get(row.external_id) : row.id
   }));
-  const { error: upsertError } = await client.from(table).upsert(payload);
-  if (upsertError) throw upsertError;
+  const upsertOpts = onConflict ? { onConflict } : undefined;
+  const { error: upsertError } = await client.from(table).upsert(payload, upsertOpts);
+  if (upsertError) throw new Error(`${table} upsert: ${upsertError.message}`);
 
   return new Map(payload.map((row) => [String(row.external_id || row.id), String(row.id)]));
 }
@@ -212,7 +214,7 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
     status: accountStatus(account.account_status),
     updated_at: now
   }));
-  const accountMap = await mergeRows(context.service, "ad_accounts", context.organizationId, accountRows);
+  const accountMap = await mergeRows(context.service, "ad_accounts", context.organizationId, accountRows, undefined, "organization_id,platform,external_id");
 
   let campaignCount = 0;
   let adSetCount = 0;
@@ -246,7 +248,7 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
         updated_at: now
       };
     });
-    const campaignMap = await mergeRows(context.service, "ad_campaigns", context.organizationId, campaignRows, { column: "account_id", value: accountId });
+    const campaignMap = await mergeRows(context.service, "ad_campaigns", context.organizationId, campaignRows, { column: "account_id", value: accountId }, "organization_id,account_id,external_id");
     campaignCount += campaignRows.length;
 
     const adSets = await fetchPaged<MetaAdSet>(token, `/${accountPath}/adsets`, {
@@ -277,7 +279,7 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
         updated_at: now
       };
     });
-    const adSetMap = await mergeRows(context.service, "ad_sets", context.organizationId, adSetRows);
+    const adSetMap = await mergeRows(context.service, "ad_sets", context.organizationId, adSetRows, undefined, "organization_id,campaign_id,external_id");
     adSetCount += adSetRows.length;
 
     const ads = await fetchPaged<MetaAd>(token, `/${accountPath}/ads`, {
@@ -298,7 +300,7 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
       source_url: item.creative?.effective_object_story_id || null,
       updated_at: now
     }));
-    const adMap = await mergeRows(context.service, "ads", context.organizationId, adRows);
+    const adMap = await mergeRows(context.service, "ads", context.organizationId, adRows, undefined, "organization_id,campaign_id,external_id");
     adCount += adRows.length;
 
     const since = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -357,8 +359,8 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
       };
     });
     if (insightRows.length) {
-      const { error } = await context.service.from("ad_insights_daily").insert(insightRows);
-      if (error) throw error;
+      const { error } = await context.service.from("ad_insights_daily").upsert(insightRows, { ignoreDuplicates: true });
+      if (error) throw new Error(`ad_insights_daily upsert: ${error.message}`);
     }
     insightCount += insightRows.length;
   }

@@ -9377,6 +9377,7 @@ function Metrics({
   const [privacyFilter, setPrivacyFilter] = useState("all");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const filtersRef = useRef<HTMLDivElement>(null);
+  const canManageIntegrations = currentUser.role === "admin" || currentUser.role === "gestor";
   const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
   const today = new Date();
   const todayMs = today.getTime();
@@ -10437,6 +10438,7 @@ function Metrics({
           funnelStages={funnelStages}
           onClose={() => setMetricImportOpen(false)}
           reloadData={reloadData}
+          canManageIntegrations={canManageIntegrations}
         />
       )}
       {allVideosOpen && (
@@ -10456,6 +10458,7 @@ function Metrics({
         <MetaAdsImportModal
           onClose={() => setMetaAdsImportOpen(false)}
           reloadData={reloadData}
+          canManageIntegrations={canManageIntegrations}
         />
       )}
     </Panel>
@@ -12203,7 +12206,7 @@ function IntegrationBlock({ title, description, children, className = "" }: { ti
   );
 }
 
-function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>>; canManageIntegrations: boolean }) {
+function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations, integrationHealth }: { currentUser: Profile; setProfiles: Dispatch<SetStateAction<Profile[]>>; canManageIntegrations: boolean; integrationHealth: IntegrationHealth[] }) {
   const [googleStatus, setGoogleStatus] = useState<GoogleConnectionStatus | null>(null);
   const [googleLoading, setGoogleLoading] = useState(true);
   const [googleBusy, setGoogleBusy] = useState<GoogleService | null>(null);
@@ -12426,6 +12429,7 @@ function PermissionsSettings({ currentUser, setProfiles, canManageIntegrations }
     <>
     <Panel title="Conta e permissões">
       <div className="space-y-4 rounded-3xl bg-slate-50 p-5">
+        <IntegrationHealthAlerts items={integrationHealth} canManageIntegrations={canManageIntegrations} />
         <div>
           <p className="font-black">{currentUser.name}</p>
           <p className="mt-1 text-sm text-slate-500">{currentUser.email}</p>
@@ -12949,7 +12953,7 @@ function EntityModal(props: {
         {modal.kind === "publish" && (() => {
           const publishPost = props.posts.find((p) => p.id === modal.postId);
           if (!publishPost) return null;
-          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} postPublications={props.postPublications} setPostPublications={props.setPostPublications} youtubeUploadQueue={props.youtubeUploadQueue} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} close={close} />;
+          return <PublishModal post={publishPost} postReviewAssets={props.postReviewAssets} channels={props.channels} postPublications={props.postPublications} setPostPublications={props.setPostPublications} youtubeUploadQueue={props.youtubeUploadQueue} setPosts={props.setPosts} addPostReviewAssets={props.addPostReviewAssets} canManageIntegrations={props.currentUser.role === "admin" || props.currentUser.role === "gestor"} close={close} />;
         })()}
     </CenteredModal>
   );
@@ -13440,7 +13444,7 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
   );
 }
 
-function MetricImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose, reloadData }: {
+function MetricImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose, reloadData, canManageIntegrations }: {
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
   posts: EditorialPost[];
@@ -13449,6 +13453,7 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
   funnelStages: FunnelStage[];
   onClose: () => void;
   reloadData?: () => Promise<void>;
+  canManageIntegrations?: boolean;
 }) {
   const hasYoutube = channels.some((c) => c.id === "youtube" || c.name.toLowerCase().includes("youtube"));
   const hasTiktok = channels.some((c) => c.id === "tiktok" || c.name.toLowerCase().includes("tiktok"));
@@ -13460,7 +13465,7 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
   const [phase, setPhase] = useState<"select" | "importing" | "done">("select");
   const [selected, setSelected] = useState<string[]>([...availableChannels]);
   const [currentChannel, setCurrentChannel] = useState("");
-  const [results, setResults] = useState<{ channel: string; created: number; updated: number; posts?: number; error?: string }[]>([]);
+  const [results, setResults] = useState<{ channel: string; created: number; updated: number; posts?: number; error?: DisplayIntegrationError }[]>([]);
   const [tiktokStatus, setTiktokStatus] = useState<TikTokConnectionStatus | null>(null);
   const [instagramStatus, setInstagramStatus] = useState<InstagramConnectionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -13703,7 +13708,7 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
           collected.push({ channel: ch, ...r });
         }
       } catch (e) {
-        collected.push({ channel: ch, created: 0, updated: 0, error: e instanceof Error ? e.message : "Erro desconhecido." });
+        collected.push({ channel: ch, created: 0, updated: 0, error: apiErrorForDisplay(e, "Erro desconhecido.") });
       }
     }
     setResults(collected);
@@ -13795,7 +13800,7 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
                   <span className="text-sm font-black">{chLabel(r.channel)}</span>
                 </div>
                 {r.error ? (
-                  <p className="text-xs font-bold text-rose-700">{r.error}</p>
+                  <IntegrationErrorNotice error={r.error} canManageIntegrations={canManageIntegrations} compact />
                 ) : (
                   <p className="text-xs font-bold text-green-700">{r.created} novos · {r.updated} atualizados{r.posts !== undefined ? ` · ${r.posts} itens encontrados` : ""}</p>
                 )}
@@ -13811,7 +13816,7 @@ function MetricImportModal({ metrics, setMetrics, posts, channels, productLines,
   );
 }
 
-function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose, reloadData }: {
+function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines, funnelStages, onClose, reloadData, canManageIntegrations }: {
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
   posts: EditorialPost[];
@@ -13820,10 +13825,11 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
   funnelStages: FunnelStage[];
   onClose: () => void;
   reloadData?: () => Promise<void>;
+  canManageIntegrations?: boolean;
 }) {
   const [phase, setPhase] = useState<"auth" | "fetching" | "importing" | "done" | "error">("auth");
   const [progress, setProgress] = useState<YouTubeImportProgress | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<DisplayIntegrationError>("");
   const [summary, setSummary] = useState({ created: 0, updated: 0 });
   const ran = useRef(false);
 
@@ -13935,7 +13941,7 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
       setSummary({ created, updated });
       setPhase("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar.");
+      setError(apiErrorForDisplay(err, "Erro desconhecido ao importar."));
       setPhase("error");
     }
   }
@@ -13997,10 +14003,7 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
 
         {phase === "error" && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-rose-50 p-4">
-              <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
-              <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
-            </div>
+            <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={() => { ran.current = false; run(); ran.current = true; }} />
             <div className="flex gap-2">
               <button type="button" onClick={() => { ran.current = false; run(); ran.current = true; }} className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
                 Tentar novamente
@@ -14015,15 +14018,16 @@ function YouTubeImportModal({ metrics, setMetrics, posts, channels, productLines
   );
 }
 
-function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData }: {
+function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData, canManageIntegrations }: {
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
   channels: Channel[];
   onClose: () => void;
   reloadData?: () => Promise<void>;
+  canManageIntegrations?: boolean;
 }) {
   const [phase, setPhase] = useState<"idle" | "fetching" | "saving" | "done" | "error">("idle");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<DisplayIntegrationError>("");
   const [summary, setSummary] = useState({
     created: 0,
     updated: 0,
@@ -14045,7 +14049,7 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
         if (!cancelled) setStatus(nextStatus);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Erro ao consultar conexao TikTok.");
+        if (!cancelled) setError(apiErrorForDisplay(err, "Erro ao consultar conexao TikTok."));
       })
       .finally(() => {
         if (!cancelled) setStatusLoading(false);
@@ -14139,7 +14143,7 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
       });
       setPhase("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar TikTok.");
+      setError(apiErrorForDisplay(err, "Erro desconhecido ao importar TikTok."));
       setPhase("error");
     }
   }
@@ -14175,7 +14179,7 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
                       : "TikTok Sandbox não conectado"}
                 </p>
               </div>
-              {error && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
+              {error && <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} compact />}
             </div>
             <button type="button" disabled={statusLoading || !status?.connected} onClick={run} className="w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400">
               {status?.connected ? "Importar dados do TikTok" : "Conecte o TikTok em Conta e Permissões"}
@@ -14219,10 +14223,7 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
 
         {phase === "error" && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-rose-50 p-4">
-              <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
-              <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
-            </div>
+            <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={run} />
             <div className="flex gap-2">
               <button type="button" onClick={run} className="flex-1 rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white hover:bg-slate-800">
                 Tentar novamente
@@ -14237,14 +14238,15 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData 
   );
 }
 
-function MetaAdsImportModal({ onClose, reloadData }: {
+function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
   onClose: () => void;
   reloadData?: () => Promise<void>;
+  canManageIntegrations?: boolean;
 }) {
   const [status, setStatus] = useState<MetaAdsConnectionStatus | null>(null);
   const [phase, setPhase] = useState<"loading" | "idle" | "importing" | "done" | "error">("loading");
   const [summary, setSummary] = useState<MetaAdsImportSummary | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<DisplayIntegrationError>("");
 
   useEffect(() => {
     let cancelled = false;
@@ -14257,7 +14259,7 @@ function MetaAdsImportModal({ onClose, reloadData }: {
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Erro ao consultar conexão Meta Ads.");
+        setError(apiErrorForDisplay(err, "Erro ao consultar conexão Meta Ads."));
         setPhase("error");
       });
     return () => {
@@ -14274,7 +14276,7 @@ function MetaAdsImportModal({ onClose, reloadData }: {
       await reloadData?.();
       setPhase("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar Meta Ads.");
+      setError(apiErrorForDisplay(err, "Erro desconhecido ao importar Meta Ads."));
       setPhase("error");
     }
   }
@@ -14329,7 +14331,7 @@ function MetaAdsImportModal({ onClose, reloadData }: {
                 Conecte a conta em Configurações → Conta e Permissões → Meta Ads.
               </p>
             )}
-            {error && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
+            {error && <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} compact />}
           </div>
           <button type="button" disabled={!connected} onClick={runImport} className="w-full rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
             {connected ? "Importar últimos 30 dias" : "Meta Ads não conectado"}
@@ -14376,10 +14378,7 @@ function MetaAdsImportModal({ onClose, reloadData }: {
 
       {phase === "error" && (
         <div className="space-y-4">
-          <div className="rounded-2xl bg-rose-50 p-4">
-            <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
-            <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
-          </div>
+          <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={connected ? runImport : undefined} />
           <div className="flex gap-2">
             {connected && (
               <button type="button" onClick={runImport} className="flex-1 rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
@@ -14396,15 +14395,16 @@ function MetaAdsImportModal({ onClose, reloadData }: {
   );
 }
 
-function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadData }: {
+function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadData, canManageIntegrations }: {
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
   channels: Channel[];
   onClose: () => void;
   reloadData?: () => Promise<void>;
+  canManageIntegrations?: boolean;
 }) {
   const [phase, setPhase] = useState<"idle" | "fetching" | "saving" | "done" | "error">("idle");
-  const [error, setError] = useState("");
+  const [error, setError] = useState<DisplayIntegrationError>("");
   const [summary, setSummary] = useState({ created: 0, updated: 0, posts: 0 });
   const [status, setStatus] = useState<InstagramConnectionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -14417,7 +14417,7 @@ function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadDa
         if (!cancelled) setStatus(nextStatus);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Erro ao consultar conexão Instagram / Meta.");
+        if (!cancelled) setError(apiErrorForDisplay(err, "Erro ao consultar conexão Instagram / Meta."));
       })
       .finally(() => {
         if (!cancelled) setStatusLoading(false);
@@ -14500,7 +14500,7 @@ function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadDa
       setSummary({ created, updated, posts: items.length });
       setPhase("done");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erro desconhecido ao importar Instagram / Meta.");
+      setError(apiErrorForDisplay(err, "Erro desconhecido ao importar Instagram / Meta."));
       setPhase("error");
     }
   }
@@ -14536,7 +14536,7 @@ function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadDa
                       : "Instagram / Meta não conectado"}
                 </p>
               </div>
-              {error && <p className="mt-3 rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{error}</p>}
+              {error && <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} compact />}
             </div>
             <button type="button" disabled={statusLoading || !status?.connected} onClick={run} className="w-full rounded-2xl bg-pink-600 px-4 py-3 text-sm font-black text-white hover:bg-pink-700 disabled:bg-slate-200 disabled:text-slate-400">
               {status?.connected ? "Importar dados do Instagram" : "Cadastre o token em Conta e Permissões"}
@@ -14571,10 +14571,7 @@ function InstagramImportModal({ metrics, setMetrics, channels, onClose, reloadDa
 
         {phase === "error" && (
           <div className="space-y-4">
-            <div className="rounded-2xl bg-rose-50 p-4">
-              <p className="text-sm font-black text-rose-800">Não foi possível importar</p>
-              <p className="mt-1 text-sm font-bold text-rose-700">{error}</p>
-            </div>
+            <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={run} />
             <div className="flex gap-2">
               <button type="button" onClick={run} className="flex-1 rounded-2xl bg-pink-600 px-4 py-3 text-sm font-black text-white hover:bg-pink-700">
                 Tentar novamente
@@ -15880,6 +15877,7 @@ type ChannelPublishConfig = {
   description: string;
   status: "idle" | "publishing" | "queued" | "success" | "error" | "unsupported";
   errorMessage?: string;
+  errorDetail?: ApiErrorPayload;
   queuedJobId?: string;
   privacyLevel?: "PUBLIC_TO_EVERYONE" | "MUTUAL_FOLLOW_FRIENDS" | "SELF_ONLY";
 };
@@ -15990,6 +15988,7 @@ function PublishModal({
   youtubeUploadQueue,
   setPosts,
   addPostReviewAssets,
+  canManageIntegrations,
   close,
 }: {
   post: EditorialPost;
@@ -16000,6 +15999,7 @@ function PublishModal({
   youtubeUploadQueue?: YouTubeUploadQueueItem[];
   setPosts: Dispatch<SetStateAction<EditorialPost[]>>;
   addPostReviewAssets: (post: EditorialPost, files: FileList | File[], isCover?: boolean, options?: PostReviewUploadOptions) => void;
+  canManageIntegrations?: boolean;
   close: () => void;
 }) {
   const channelById = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
@@ -16134,8 +16134,8 @@ function PublishModal({
       if (!c.enabled) return c;
       const platform = publishPlatformKey(channelById.get(c.channelId)?.name ?? "");
       return isPublishablePlatform(platform)
-        ? { ...c, status: "publishing" }
-        : { ...c, status: "unsupported", errorMessage: undefined };
+        ? { ...c, status: "publishing", errorMessage: undefined, errorDetail: undefined }
+        : { ...c, status: "unsupported", errorMessage: undefined, errorDetail: undefined };
     }));
     await Promise.allSettled(
       enabledPublishableConfigs.map(async (config) => {
@@ -16179,21 +16179,23 @@ function PublishModal({
               updateConfig(config.channelId, { status: "success" });
               setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishedVideoId: videoId, status: newStatus, publishedAt: new Date().toISOString() } : p));
             } else {
-              const data = await res.json() as { error?: string };
-              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? "Erro ao publicar." });
+              const data = await res.json().catch(() => ({})) as ({ error?: string } & Partial<ApiErrorPayload>);
+              const errorDetail = apiErrorForDisplay(data, data.error ?? "Erro ao publicar.");
+              updateConfig(config.channelId, { status: "error", errorMessage: errorDetail.userMessage, errorDetail });
             }
-          } catch {
-            updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
+          } catch (error) {
+            const errorDetail = apiErrorForDisplay(error, "Erro de conexão.");
+            updateConfig(config.channelId, { status: "error", errorMessage: errorDetail.userMessage, errorDetail });
           }
         } else if (platform === "instagram") {
           const formatError = instagramFormatUnavailableReason(config.format, selectedAssetKind);
           if (formatError) {
-            updateConfig(config.channelId, { status: "error", errorMessage: formatError });
+            updateConfig(config.channelId, { status: "error", errorMessage: formatError, errorDetail: undefined });
             return;
           }
           const carouselError = selectedIsCarousel ? instagramCarouselUnavailableReason(config.format, selectedCarouselAssets) : "";
           if (carouselError) {
-            updateConfig(config.channelId, { status: "error", errorMessage: carouselError });
+            updateConfig(config.channelId, { status: "error", errorMessage: carouselError, errorDetail: undefined });
             return;
           }
           const instagramEffectiveFormat = effectiveInstagramFormat(config.format, selectedAssetKind);
@@ -16225,7 +16227,7 @@ function PublishModal({
               scheduledAt?: string;
               effectiveFormat?: string;
               contentType?: string;
-            };
+            } & Partial<ApiErrorPayload>;
             if (res.ok) {
               const newStatus = data.status === "scheduled" ? "Agendado" : "Publicado";
               updateConfig(config.channelId, { status: "success" });
@@ -16254,10 +16256,12 @@ function PublishModal({
                 setPostPublications?.((current) => [newPub, ...current]);
               }
             } else {
-              updateConfig(config.channelId, { status: "error", errorMessage: data.error ?? (res.status === 504 ? "Tempo limite excedido. Vídeos do Drive podem demorar — tente enviar o arquivo diretamente na revisão." : `Erro ao publicar no Instagram (HTTP ${res.status}).`) });
+              const errorDetail = apiErrorForDisplay(data, data.error ?? (res.status === 504 ? "Tempo limite excedido. Vídeos do Drive podem demorar; tente enviar o arquivo diretamente na revisão." : `Erro ao publicar no Instagram (HTTP ${res.status}).`));
+              updateConfig(config.channelId, { status: "error", errorMessage: errorDetail.userMessage, errorDetail });
             }
-          } catch {
-            updateConfig(config.channelId, { status: "error", errorMessage: "Erro de conexão." });
+          } catch (error) {
+            const errorDetail = apiErrorForDisplay(error, "Erro de conexão.");
+            updateConfig(config.channelId, { status: "error", errorMessage: errorDetail.userMessage, errorDetail });
           }
         } else {
           updateConfig(config.channelId, { status: "unsupported" });
@@ -16552,7 +16556,9 @@ function PublishModal({
                 </div>
               )}
               {config.status === "error" && config.errorMessage && (
-                <p className="mt-2 text-xs font-black text-rose-700">{config.errorMessage}</p>
+                <div className="mt-3">
+                  <IntegrationErrorNotice error={config.errorDetail ?? config.errorMessage} canManageIntegrations={canManageIntegrations} compact />
+                </div>
               )}
               </>
               )}
@@ -17647,6 +17653,46 @@ function IntegrationErrorNotice({
             )}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function IntegrationHealthAlerts({ items, canManageIntegrations }: { items: IntegrationHealth[]; canManageIntegrations: boolean }) {
+  const openAlerts = items.filter((item) => item.status !== "ok");
+  if (!openAlerts.length) return null;
+  return (
+    <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-black text-amber-900">Alertas de integrações</p>
+          <p className="mt-1 text-xs font-bold text-amber-800/80">
+            Erros recentes em APIs externas ficam aqui até a conexão voltar ao normal.
+          </p>
+        </div>
+        <Badge tone="amber">{openAlerts.length}</Badge>
+      </div>
+      <div className="grid gap-2">
+        {openAlerts.map((item) => (
+          <div key={`${item.provider}-${item.service}`} className="rounded-2xl bg-white px-3 py-3 ring-1 ring-amber-100">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-sm font-black text-slate-900">{serviceLabel(item.service)}</p>
+                <p className="mt-1 text-sm font-bold text-slate-600">{item.lastErrorMessage || "Integração com erro."}</p>
+                {item.lastFailedAt && (
+                  <p className="mt-1 text-xs font-bold text-slate-400">Última falha: {new Date(item.lastFailedAt).toLocaleString("pt-BR")}</p>
+                )}
+              </div>
+              {item.action === "reconnect_oauth" && canManageIntegrations ? (
+                <button type="button" onClick={openIntegrationsSettings} className="rounded-2xl bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700">
+                  Reconectar
+                </button>
+              ) : item.action === "reconnect_oauth" ? (
+                <p className="max-w-[220px] text-xs font-bold text-amber-800">Peça para um gestor/admin reconectar esta integração.</p>
+              ) : null}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -19968,6 +20014,7 @@ function ComentariosSection({
           onInstagramImport={(items) => handleImport(items, [], "instagram")}
           onTikTokImport={(items) => handleImport(items, [], "tiktok")}
           onClose={() => setCommentImportOpen(false)}
+          canManageIntegrations={currentUser.role === "admin" || currentUser.role === "gestor"}
         />
       )}
     </div>
@@ -20228,6 +20275,7 @@ function CommentImportUnifiedModal({
   onInstagramImport,
   onTikTokImport,
   onClose,
+  canManageIntegrations,
 }: {
   existingComments: Comment[];
   autoFilters: AutoFilter[];
@@ -20236,6 +20284,7 @@ function CommentImportUnifiedModal({
   onInstagramImport: (items: InstagramCommentItem[]) => Promise<void>;
   onTikTokImport: (items: TikTokCommentItem[]) => Promise<void>;
   onClose: () => void;
+  canManageIntegrations?: boolean;
 }) {
   type ImportChannel = "youtube" | "instagram" | "tiktok";
   const hasYoutube = channels.some((c) => c.id === "youtube" || c.name.toLowerCase().includes("youtube"));
@@ -20256,9 +20305,9 @@ function CommentImportUnifiedModal({
   const [ytIgnored, setYtIgnored] = useState(0);
   const [tiktokItems, setTiktokItems] = useState<TikTokCommentItem[]>([]);
   const [tiktokIgnored, setTiktokIgnored] = useState(0);
-  const [scanErrorsByChannel, setScanErrorsByChannel] = useState<Partial<Record<ImportChannel, string>>>({});
-  const [results, setResults] = useState<{ channel: ImportChannel; count: number; error?: string }[]>([]);
-  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanErrorsByChannel, setScanErrorsByChannel] = useState<Partial<Record<ImportChannel, DisplayIntegrationError>>>({});
+  const [results, setResults] = useState<{ channel: ImportChannel; count: number; error?: DisplayIntegrationError }[]>([]);
+  const [scanError, setScanError] = useState<DisplayIntegrationError>(null);
 
   function toggleChannel(ch: ImportChannel) {
     setSelected((prev) => prev.includes(ch) ? prev.filter((x) => x !== ch) : [...prev, ch]);
@@ -20283,7 +20332,7 @@ function CommentImportUnifiedModal({
     setScanErrorsByChannel({});
 
     try {
-      const nextScanErrors: Partial<Record<ImportChannel, string>> = {};
+      const nextScanErrors: Partial<Record<ImportChannel, DisplayIntegrationError>> = {};
       if (selected.includes("youtube")) {
         const minDate = new Date();
         minDate.setDate(minDate.getDate() - 30);
@@ -20330,7 +20379,7 @@ function CommentImportUnifiedModal({
           setTiktokItems(tkComments);
           setTiktokIgnored(summary.ignoredByDate ?? 0);
         } catch (e) {
-          nextScanErrors.tiktok = e instanceof Error ? e.message : "Erro ao importar TikTok.";
+          nextScanErrors.tiktok = apiErrorForDisplay(e, "Erro ao importar TikTok.");
           setTiktokItems([]);
           setTiktokIgnored(0);
         }
@@ -20338,7 +20387,7 @@ function CommentImportUnifiedModal({
       setScanErrorsByChannel(nextScanErrors);
       setPhase("confirm");
     } catch (e: unknown) {
-      setScanError(e instanceof Error ? e.message : String(e));
+      setScanError(apiErrorForDisplay(e, "Erro ao buscar comentários."));
       setPhase("select");
     }
   }
@@ -20353,7 +20402,7 @@ function CommentImportUnifiedModal({
         await onYoutubeImport(ytNew, ytUpdated);
         collected.push({ channel: "youtube", count: ytNew.length + ytUpdated.length });
       } catch (e) {
-        collected.push({ channel: "youtube", count: 0, error: e instanceof Error ? e.message : "Erro ao importar YouTube." });
+        collected.push({ channel: "youtube", count: 0, error: apiErrorForDisplay(e, "Erro ao importar YouTube.") });
       }
     } else if (selected.includes("youtube")) {
       collected.push({ channel: "youtube", count: 0 });
@@ -20366,7 +20415,7 @@ function CommentImportUnifiedModal({
         await onInstagramImport(igComments);
         collected.push({ channel: "instagram", count: igComments.length });
       } catch (e) {
-        collected.push({ channel: "instagram", count: 0, error: e instanceof Error ? e.message : "Erro ao importar Instagram." });
+        collected.push({ channel: "instagram", count: 0, error: apiErrorForDisplay(e, "Erro ao importar Instagram.") });
       }
     }
 
@@ -20380,7 +20429,7 @@ function CommentImportUnifiedModal({
           await onTikTokImport(tiktokItems);
           collected.push({ channel: "tiktok", count: tiktokItems.length });
         } catch (e) {
-          collected.push({ channel: "tiktok", count: 0, error: e instanceof Error ? e.message : "Erro ao importar TikTok." });
+          collected.push({ channel: "tiktok", count: 0, error: apiErrorForDisplay(e, "Erro ao importar TikTok.") });
         }
       } else {
         collected.push({ channel: "tiktok", count: 0 });
@@ -20439,7 +20488,7 @@ function CommentImportUnifiedModal({
             </div>
           )}
 
-          {scanError && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-sm font-bold text-rose-700">{scanError}</p>}
+          {scanError && <IntegrationErrorNotice error={scanError} canManageIntegrations={canManageIntegrations} compact />}
 
           <div className="flex gap-2">
             <button onClick={onClose} className="flex-1 rounded-2xl border border-slate-200 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50">Cancelar</button>
@@ -20517,7 +20566,7 @@ function CommentImportUnifiedModal({
             <div className="rounded-2xl bg-slate-950 p-4 text-white">
               <p className="mb-1 text-xs font-black uppercase text-white/60">TikTok</p>
               {scanErrorsByChannel.tiktok ? (
-                <p className="text-sm font-bold text-rose-100">{scanErrorsByChannel.tiktok}</p>
+                <IntegrationErrorNotice error={scanErrorsByChannel.tiktok} canManageIntegrations={canManageIntegrations} compact />
               ) : tiktokHasChanges ? (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm">
@@ -20565,7 +20614,7 @@ function CommentImportUnifiedModal({
                   <span className="text-sm font-black">{chLabel(r.channel)}</span>
                 </div>
                 {r.error ? (
-                  <p className="text-xs font-bold text-rose-700">{r.error}</p>
+                  <IntegrationErrorNotice error={r.error} canManageIntegrations={canManageIntegrations} compact />
                 ) : (
                   <p className="text-xs font-bold text-green-700">{r.count > 0 ? `${r.count} item${r.count !== 1 ? "s" : ""} importado${r.count !== 1 ? "s" : ""}` : "Nenhuma novidade encontrada."}</p>
                 )}

@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { Client as QStashClient } from "@upstash/qstash";
 import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
 import { getInstagramConnection, metaRequestContext, type MetaRequestContext } from "@/lib/meta-server";
-import { publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
+import { cleanupPublicationAssets, publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
@@ -213,6 +213,12 @@ export async function POST(request: Request) {
         // Falha na métrica não impede o retorno de sucesso
       }
     }
+
+    await cleanupPublicationAssets(context.service, {
+      assetUrl: assetUrl,
+      carouselAssets: carouselAssets,
+      thumbnailUrl: body.thumbnailUrl
+    });
 
     return NextResponse.json(result);
   } catch (error) {
