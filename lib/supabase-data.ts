@@ -142,6 +142,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
   const visitorsPromise = fetchAllRows<Record<string, unknown>>(
     () => client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false })
   );
+  const metricsPromise = fetchAllRows<Record<string, unknown>>(
+    () => client.from("post_metrics").select("*").eq("organization_id", organizationId)
+  );
 
   const [
     profiles,
@@ -168,7 +171,6 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     checklist,
     comments,
     attachments,
-    metrics,
     notifications,
     calendarDates,
     ideaAttachments,
@@ -216,7 +218,6 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("task_checklist_items").select("*").eq("organization_id", organizationId).limit(100000),
     client.from("task_comments").select("*").eq("organization_id", organizationId).limit(100000),
     client.from("task_attachments").select("*").eq("organization_id", organizationId).limit(100000),
-    client.from("post_metrics").select("*").eq("organization_id", organizationId).limit(100000),
     client.from("notifications").select("*").eq("organization_id", organizationId).limit(100000),
     client.from("calendar_dates").select("*").eq("organization_id", organizationId).limit(100000),
     client.from("idea_attachments").select("*").eq("organization_id", organizationId).limit(100000),
@@ -241,7 +242,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(100000)
   ]);
 
-  const visitorsRaw = await visitorsPromise;
+  const [visitorsRaw, metricsRaw] = await Promise.all([visitorsPromise, metricsPromise]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
   const postAssigneeMap = groupByParent(postAssignees.data ?? [], "post_id");
@@ -270,7 +271,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     postReviewAssets: (reviewAssets.data ?? []).map((item) => mapReviewAsset(item, reviewCommentMap.get(item.id) ?? [])),
     ideas: (ideas.data ?? []).map((item) => mapIdea(item, ideaAttachmentMap.get(item.id) ?? [])),
     tasks: (tasks.data ?? []).map((item) => mapTask(item, taskAssigneeMap.get(item.id) ?? [], checklistMap.get(item.id) ?? [], commentsMap.get(item.id) ?? [], attachmentsMap.get(item.id) ?? [])),
-    metrics: (metrics.data ?? []).map(mapMetric),
+    metrics: metricsRaw.map(mapMetric),
     adAccounts: (adAccountsData.data ?? []).map(mapAdAccount),
     adCampaigns: (adCampaignsData.data ?? []).map(mapAdCampaign),
     adSets: (adSetsData.data ?? []).map(mapAdSet),
@@ -704,8 +705,10 @@ export async function deleteTask(client: SupabaseClient, id: string) {
   await deleteById(client, "tasks", id);
 }
 
-export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric[], previous: PostMetric[] = []) {
-  await replaceSimple(client, "post_metrics", metrics, previous, (item, organizationId) => ({
+export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric[]) {
+  if (!metrics.length) return;
+  const organizationId = await currentOrganizationId(client);
+  const { error } = await client.from("post_metrics").upsert(metrics.map((item) => ({
     id: item.id,
     organization_id: organizationId,
     external_id: item.externalId ?? null,
@@ -738,11 +741,12 @@ export async function replaceMetrics(client: SupabaseClient, metrics: PostMetric
     thumbnail_url: item.thumbnailUrl ?? null,
     source_url: item.sourceUrl ?? null,
     embed_url: item.embedUrl ?? null
-  }), "organization_id,external_id");
+  })), { onConflict: "organization_id,external_id" });
+  if (error) throw new Error(`post_metrics upsert: ${error.message}`);
 }
 
 export async function saveMetric(client: SupabaseClient, metric: PostMetric) {
-  await replaceMetrics(client, [metric], [metric]);
+  await replaceMetrics(client, [metric]);
 }
 
 export async function deleteMetric(client: SupabaseClient, id: string) {
