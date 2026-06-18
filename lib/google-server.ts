@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { recordIntegrationFailure, resolveIntegrationHealth, toApiErrorPayload } from "./api-errors";
 
 export type GoogleService = "drive" | "youtube" | "sheets" | "analytics";
 
@@ -183,7 +184,18 @@ export async function getGoogleAccessToken(context: GoogleRequestContext, google
     // A mensagem do Google ("Token has been expired or revoked.") e identica a usada por outras
     // integracoes (ex.: Instagram) — deixamos explicito qual conexao precisa ser refeita para
     // nao confundir com expiracao do token do Instagram/Meta.
-    throw new Error(`Conexao do ${serviceLabel} expirada ou revogada (Google: "${reason}"). Reconecte em Configuracoes > Conta e Permissoes > ${serviceLabel}.`);
+    const payload = toApiErrorPayload(
+      new Error(`Conexao do ${serviceLabel} expirada ou revogada (Google: "${reason}"). Reconecte em Configuracoes > Conta e Permissoes > ${serviceLabel}.`),
+      {
+        provider: googleService === "youtube" ? "youtube" : "google",
+        service: googleService,
+        code: "oauth_reconnect_required",
+        action: "reconnect_oauth",
+        reconnectTarget: googleService
+      }
+    );
+    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    throw new Error(payload.userMessage);
   }
   const { error } = await context.service
     .from("google_connections")
@@ -194,5 +206,6 @@ export async function getGoogleAccessToken(context: GoogleRequestContext, google
     })
     .eq("id", connection.id);
   if (error) throw error;
+  await resolveIntegrationHealth(context.service, context.organizationId, googleService === "youtube" ? "youtube" : "google", googleService);
   return refreshed.accessToken;
 }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
+import { getGoogleAccessToken, googleRequestContext, type GoogleRequestContext } from "@/lib/google-server";
 
 async function ytFetch(url: string, token: string) {
   const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -121,8 +122,9 @@ async function fetchYouTubeAnalyticsByVideo(videoIds: string[], token: string) {
 }
 
 export async function GET(request: Request) {
+  let context: GoogleRequestContext | null = null;
   try {
-    const context = await googleRequestContext(request);
+    context = await googleRequestContext(request);
     const token = await getGoogleAccessToken(context, "youtube");
     const channelData = await ytFetch("https://www.googleapis.com/youtube/v3/channels?part=contentDetails&mine=true", token);
     const playlistId = channelData?.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
@@ -177,6 +179,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ videos, analyticsWarnings: warnings });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Erro ao importar YouTube." }, { status: 401 });
+    const payload = toApiErrorPayload(error, { provider: "youtube", service: "youtube" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    return NextResponse.json(payload, { status: 401 });
   }
 }

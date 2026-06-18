@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { errorFromResponse } from "./api-errors";
 
 async function getAuthHeaders(): Promise<HeadersInit> {
   if (!supabase) {
@@ -16,6 +17,7 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 25000):
   const headers = await getAuthHeaders();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const service = url.includes("/ads/") ? "meta_ads" : "instagram";
   try {
     const res = await fetch(url, {
       ...init,
@@ -27,7 +29,11 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 25000):
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data?.error ?? "Erro na integracao Instagram/Meta.");
+      errorFromResponse(data, {
+        provider: service === "meta_ads" ? "meta_ads" : "instagram",
+        service,
+        error: service === "meta_ads" ? "Erro na integracao Meta Ads." : "Erro na integracao Instagram/Meta."
+      });
     }
     return data as T;
   } catch (err) {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { fetchTikTokUserInfo, getTikTokAccessToken, tiktokRequestContext } from "@/lib/tiktok-server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
+import { fetchTikTokUserInfo, getTikTokAccessToken, tiktokRequestContext, type TikTokRequestContext } from "@/lib/tiktok-server";
 
 const VIDEO_FIELDS = [
   "id",
@@ -37,8 +38,9 @@ function normalizeVideo(item: any) {
 }
 
 export async function GET(request: Request) {
+  let context: TikTokRequestContext | null = null;
   try {
-    const context = await tiktokRequestContext(request);
+    context = await tiktokRequestContext(request);
     const accessToken = await getTikTokAccessToken(context);
     const userInfo = await fetchTikTokUserInfo(accessToken);
     const videos: any[] = [];
@@ -102,6 +104,8 @@ export async function GET(request: Request) {
       }
     });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Erro ao importar dados do TikTok." }, { status: 401 });
+    const payload = toApiErrorPayload(error, { provider: "tiktok", service: "tiktok" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    return NextResponse.json(payload, { status: 401 });
   }
 }

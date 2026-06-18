@@ -19,6 +19,7 @@ import type {
   EditorialPost,
   FunnelStage,
   Idea,
+  IntegrationHealth,
   Notification,
   PostReviewAsset,
   PostReviewComment,
@@ -75,6 +76,7 @@ export type AppData = {
   ads: Ad[];
   adInsightsDaily: AdInsightDaily[];
   adAlerts: AdAlert[];
+  integrationHealth: IntegrationHealth[];
   notifications: Notification[];
   calendarDates: CalendarDate[];
   customerQuestions: CustomerQuestion[];
@@ -164,57 +166,59 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adsData,
     adInsightsDailyData,
     adAlertsData,
+    integrationHealthData,
     trackableLinksData,
     visitorsData,
     personsData,
     conversionsData
   ] = await Promise.all([
-    client.from("profiles").select("*").eq("organization_id", organizationId),
-    client.from("profile_areas").select("*").eq("organization_id", organizationId),
-    client.from("profile_module_permissions").select("*").eq("organization_id", organizationId),
-    client.from("channels").select("*").eq("organization_id", organizationId),
-    client.from("product_lines").select("*").eq("organization_id", organizationId),
-    client.from("vehicle_types").select("*").eq("organization_id", organizationId),
-    client.from("content_types").select("*").eq("organization_id", organizationId),
-    client.from("funnel_stages").select("*").eq("organization_id", organizationId),
-    client.from("task_boards").select("*").eq("organization_id", organizationId),
-    client.from("task_columns").select("*").eq("organization_id", organizationId),
-    client.from("campaigns").select("*").eq("organization_id", organizationId),
-    client.from("campaign_audiences").select("*").eq("organization_id", organizationId),
-    client.from("post_templates").select("*").eq("organization_id", organizationId),
-    client.from("campaign_assignees").select("*").eq("organization_id", organizationId),
-    client.from("posts").select("*").eq("organization_id", organizationId),
-    client.from("post_assignees").select("*").eq("organization_id", organizationId),
-    client.from("post_review_assets").select("*").eq("organization_id", organizationId),
-    client.from("post_review_comments").select("*").eq("organization_id", organizationId),
-    client.from("ideas").select("*").eq("organization_id", organizationId),
-    client.from("tasks").select("*").eq("organization_id", organizationId),
-    client.from("task_assignees").select("*").eq("organization_id", organizationId),
-    client.from("task_checklist_items").select("*").eq("organization_id", organizationId),
-    client.from("task_comments").select("*").eq("organization_id", organizationId),
-    client.from("task_attachments").select("*").eq("organization_id", organizationId),
-    client.from("post_metrics").select("*").eq("organization_id", organizationId).limit(10000),
-    client.from("notifications").select("*").eq("organization_id", organizationId),
-    client.from("calendar_dates").select("*").eq("organization_id", organizationId),
-    client.from("idea_attachments").select("*").eq("organization_id", organizationId),
-    client.from("customer_questions").select("*").eq("organization_id", organizationId),
-    client.from("comments").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
-    client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }),
-    client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("post_publications").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
-    client.from("youtube_upload_queue").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100),
-    client.from("ad_accounts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("ad_campaigns").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("ad_sets").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("ads").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }),
-    client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }),
-    client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
-    client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
-    client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false }).limit(10000),
-    client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(5000),
-    client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(5000)
+    client.from("profiles").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("profile_areas").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("profile_module_permissions").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("channels").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("product_lines").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("vehicle_types").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("content_types").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("funnel_stages").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_boards").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_columns").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("campaigns").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("campaign_audiences").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_templates").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("campaign_assignees").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("posts").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_assignees").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_review_assets").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_review_comments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("ideas").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("tasks").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_assignees").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_checklist_items").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_comments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_attachments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_metrics").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("notifications").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("calendar_dates").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("idea_attachments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("customer_questions").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("comments").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
+    client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }).limit(100000),
+    client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("post_publications").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
+    client.from("youtube_upload_queue").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
+    client.from("ad_accounts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("ad_campaigns").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("ad_sets").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("ads").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }).limit(100000),
+    client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
+    client.from("integration_health").select("*").eq("organization_id", organizationId).order("updated_at", { ascending: false }).limit(100000),
+    client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
+    client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false }).limit(100000),
+    client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
+    client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(100000)
   ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
@@ -251,6 +255,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     ads: (adsData.data ?? []).map(mapAd),
     adInsightsDaily: (adInsightsDailyData.data ?? []).map(mapAdInsightDaily),
     adAlerts: (adAlertsData.data ?? []).map(mapAdAlert),
+    integrationHealth: (integrationHealthData.data ?? []).map(mapIntegrationHealth),
     notifications: (notifications.data ?? []).map(mapNotification),
     calendarDates: (calendarDates.data ?? []).map(mapCalendarDate),
     customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion),
@@ -1374,6 +1379,24 @@ function mapAdAlert(row: any): AdAlert {
 
 function mapNotification(row: any): Notification {
   return { id: row.id, userId: row.user_id, title: row.title, description: row.description, createdAt: row.created_at, read: row.read, targetKind: row.target_kind, targetId: row.target_id };
+}
+
+function mapIntegrationHealth(row: any): IntegrationHealth {
+  return {
+    id: row.id,
+    organizationId: row.organization_id,
+    provider: row.provider ?? "supabase",
+    service: row.service ?? "",
+    status: row.status ?? "ok",
+    lastErrorCode: row.last_error_code ?? undefined,
+    lastErrorMessage: row.last_error_message ?? undefined,
+    lastTechnicalMessage: row.last_technical_message ?? undefined,
+    action: row.action ?? undefined,
+    reconnectTarget: row.reconnect_target ?? undefined,
+    lastFailedAt: row.last_failed_at ?? undefined,
+    resolvedAt: row.resolved_at ?? undefined,
+    updatedAt: row.updated_at ?? row.created_at ?? new Date().toISOString()
+  };
 }
 
 function mapCalendarDate(row: any): CalendarDate {

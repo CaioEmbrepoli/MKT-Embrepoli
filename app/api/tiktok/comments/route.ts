@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { getTikTokAccessToken, tiktokRequestContext } from "@/lib/tiktok-server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
+import { getTikTokAccessToken, tiktokRequestContext, type TikTokRequestContext } from "@/lib/tiktok-server";
 
 const TIKTOK_COMMENTS_UNAVAILABLE_MESSAGE =
   "A API TikTok conectada ainda não permite ler o texto dos comentários. Habilite o produto/escopo oficial de comentários no TikTok Developer, reconecte a conta e tente novamente.";
@@ -59,9 +60,10 @@ async function countVideosWithOfficialApi(accessToken: string) {
 
 export async function GET(request: Request) {
   const scope = parseScope(request);
+  let context: TikTokRequestContext | null = null;
 
   try {
-    const context = await tiktokRequestContext(request);
+    context = await tiktokRequestContext(request);
     const accessToken = await getTikTokAccessToken(context);
     const videoSummary = await countVideosWithOfficialApi(accessToken).catch(() => ({ videoCount: 0, videosWithComments: 0 }));
 
@@ -81,11 +83,13 @@ export async function GET(request: Request) {
       { status: 400 }
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Erro ao importar comentários do TikTok.";
-    const isConnectionError = /TikTok|Sessao|Perfil|Usuario|conexao/i.test(message);
+    const payload = toApiErrorPayload(error, { provider: "tiktok", service: "tiktok" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    const isConnectionError = payload.action === "reconnect_oauth" || payload.code === "not_connected";
     return NextResponse.json(
       {
-        error: isConnectionError ? message : TIKTOK_COMMENTS_UNAVAILABLE_MESSAGE,
+        ...payload,
+        error: isConnectionError ? payload.userMessage : TIKTOK_COMMENTS_UNAVAILABLE_MESSAGE,
         comments: [],
         summary: {
           videoCount: 0,

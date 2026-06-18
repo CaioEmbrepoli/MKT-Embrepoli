@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { fetchInstagramCommentsForMedia, fetchInstagramMedia, getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
+import { fetchInstagramCommentsForMedia, fetchInstagramMedia, getInstagramConnection, metaRequestContext, type MetaRequestContext } from "@/lib/meta-server";
 
 const DEFAULT_RECENT_DAYS = 30;
 const DEFAULT_MAX_MEDIA = 80;
@@ -13,6 +14,7 @@ function positiveInt(value: string | null, fallback: number, max: number) {
 }
 
 export async function GET(request: Request) {
+  let context: MetaRequestContext | null = null;
   try {
     const url = new URL(request.url);
     const scope = url.searchParams.get("scope") === "all" ? "all" : "recent";
@@ -21,7 +23,7 @@ export async function GET(request: Request) {
     const maxCommentsPerMedia = positiveInt(url.searchParams.get("maxCommentsPerMedia"), DEFAULT_MAX_COMMENTS_PER_MEDIA, 250);
     const since = scope === "all" ? undefined : new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000);
 
-    const context = await metaRequestContext(request);
+    context = await metaRequestContext(request);
     const connection = await getInstagramConnection(context);
     const media = await fetchInstagramMedia(connection.access_token, connection.instagram_account_id, {
       maxMedia,
@@ -63,9 +65,8 @@ export async function GET(request: Request) {
       }
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erro ao buscar comentarios do Instagram." },
-      { status: 400 }
-    );
+    const payload = toApiErrorPayload(error, { provider: "instagram", service: "instagram" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    return NextResponse.json(payload, { status: 400 });
   }
 }

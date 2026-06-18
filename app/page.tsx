@@ -97,6 +97,7 @@ import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getAnalyticsO
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
 import { disconnectInstagramConnection, disconnectMetaAdsConnection, getInstagramStatus, getMetaAdsStatus, importMetaAdsData, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportSummary } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
+import { IntegrationApiError, serviceLabel, type ApiErrorPayload } from "@/lib/api-errors";
 import { derivePostStatusFromPublications, derivedPostStatus, publicationsForPost } from "@/lib/post-publication-status";
 import {
   type AppData,
@@ -189,6 +190,7 @@ import type {
   FileAttachment,
   FunnelStage,
   Idea,
+  IntegrationHealth,
   Notification,
   CustomerQuestion,
   CustomerQuestionStatus,
@@ -1201,6 +1203,7 @@ export default function Home() {
   const [ads, setAds] = useState<Ad[]>([]);
   const [adInsightsDaily, setAdInsightsDaily] = useState<AdInsightDaily[]>([]);
   const [adAlerts, setAdAlerts] = useState<AdAlert[]>([]);
+  const [integrationHealth, setIntegrationHealth] = useState<IntegrationHealth[]>([]);
   const [customerQuestions, setCustomerQuestions] = useState<CustomerQuestion[]>([]);
   const [ytComments, setYtComments] = useState<Comment[]>([]);
   const [autoFilters, setAutoFilters] = useState<AutoFilter[]>([]);
@@ -1424,6 +1427,17 @@ export default function Home() {
     setActiveSection("marketing-configuracoes");
   }, [loggedIn]);
 
+  useEffect(() => {
+    function openIntegrationsSettings() {
+      setActiveArea("marketing");
+      setActiveSection("marketing-configuracoes");
+      setMarketingConfigTab("Conta e Permissões");
+      setSalesConfigTab("Conta e Permissões");
+    }
+    window.addEventListener("embrepoli:open-integrations", openIntegrationsSettings);
+    return () => window.removeEventListener("embrepoli:open-integrations", openIntegrationsSettings);
+  }, []);
+
   // Lê ?instagram=connected|error após retorno do OAuth e navega para Configurações
   useEffect(() => {
     if (!loggedIn) return;
@@ -1548,6 +1562,7 @@ export default function Home() {
     setAds(data.ads);
     setAdInsightsDaily(data.adInsightsDaily);
     setAdAlerts(data.adAlerts);
+    setIntegrationHealth(data.integrationHealth);
     setCustomerQuestions(data.customerQuestions);
     setYtComments(data.ytComments);
     setAutoFilters(data.autoFilters);
@@ -1617,6 +1632,7 @@ export default function Home() {
       "ads",
       "ad_insights_daily",
       "ad_alerts",
+      "integration_health",
       "notifications",
       "comments",
       "auto_filters",
@@ -2880,6 +2896,7 @@ export default function Home() {
               setVehicleTypes={syncVehicleTypes}
               setContentTypes={syncContentTypes}
               calendarDates={calendarDates}
+              integrationHealth={integrationHealth}
               setCalendarDates={syncCalendarDates}
               setFunnelStages={syncFunnelStages}
               uploadProfilePhoto={uploadProfilePhoto}
@@ -11007,6 +11024,7 @@ function SettingsPanel(props: {
   contentTypes: ContentType[];
   funnelStages: FunnelStage[];
   calendarDates: CalendarDate[];
+  integrationHealth: IntegrationHealth[];
   configTab: ConfigTab;
   setConfigTab: Dispatch<SetStateAction<ConfigTab>>;
   setProfiles: Dispatch<SetStateAction<Profile[]>>;
@@ -11044,7 +11062,7 @@ function SettingsPanel(props: {
       {props.activeArea === "marketing" && props.configTab === "Filtros" && <ChannelsLinesSettings channels={props.channels} campaignAudiences={props.campaignAudiences} productLines={props.productLines} vehicleTypes={props.vehicleTypes} contentTypes={props.contentTypes} setChannels={props.setChannels} setCampaignAudiences={props.setCampaignAudiences} setProductLines={props.setProductLines} setVehicleTypes={props.setVehicleTypes} setContentTypes={props.setContentTypes} />}
       {props.activeArea === "marketing" && props.configTab === "Modelos" && <PostTemplateSettings templates={props.postTemplates} setTemplates={props.setPostTemplates} channels={props.channels} contentTypes={props.contentTypes} funnelStages={props.funnelStages} />}
       {props.activeArea === "marketing" && props.configTab === "Datas" && <CalendarDateSettings calendarDates={props.calendarDates} setCalendarDates={props.setCalendarDates} />}
-      {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} canManageIntegrations={canManageSharedSettings} />}
+      {props.configTab === "Conta e Permissões" && <PermissionsSettings currentUser={props.currentUser} setProfiles={props.setProfiles} canManageIntegrations={canManageSharedSettings} integrationHealth={props.integrationHealth} />}
     </div>
   );
 }
@@ -17548,6 +17566,90 @@ function makeMonth(date: Date) {
 
 function Stat({ label, value, icon: Icon }: { label: string; value: string | number; icon: LucideIcon }) {
   return <div className="rounded-[28px] bg-gradient-to-br from-blue-700 to-blue-500 p-5 text-white shadow-lg shadow-blue-900/10 motion-smooth animate-soft-pop"><div className="flex items-center justify-between"><p className="text-sm font-bold opacity-80">{label}</p><Icon size={20} /></div><p className="mt-4 text-3xl font-black">{value}</p></div>;
+}
+
+type DisplayIntegrationError = ApiErrorPayload | string | null | undefined;
+
+function apiErrorForDisplay(error: DisplayIntegrationError | unknown, fallback = "Erro na integração."): ApiErrorPayload {
+  if (error instanceof IntegrationApiError) return error.payload;
+  if (typeof error === "object" && error && "userMessage" in error && "code" in error) {
+    return error as ApiErrorPayload;
+  }
+  const message = typeof error === "string"
+    ? error
+    : error instanceof Error
+      ? error.message
+      : fallback;
+  return {
+    error: message,
+    code: "unknown_error",
+    provider: "supabase",
+    service: "sistema",
+    userMessage: message,
+    action: "none"
+  };
+}
+
+function openIntegrationsSettings() {
+  window.dispatchEvent(new Event("embrepoli:open-integrations"));
+}
+
+function IntegrationErrorNotice({
+  error,
+  canManageIntegrations,
+  onRetry,
+  compact = false
+}: {
+  error: DisplayIntegrationError;
+  canManageIntegrations?: boolean;
+  onRetry?: () => void;
+  compact?: boolean;
+}) {
+  if (!error) return null;
+  const payload = apiErrorForDisplay(error);
+  const needsReconnect = payload.action === "reconnect_oauth";
+  const title = needsReconnect
+    ? `Conexão do ${serviceLabel(payload.service, payload.provider)} precisa ser refeita`
+    : payload.action === "check_config"
+      ? `Configuração de ${serviceLabel(payload.service, payload.provider)} precisa de atenção`
+      : payload.action === "retry"
+        ? `Falha temporária em ${serviceLabel(payload.service, payload.provider)}`
+        : "Erro na integração";
+  return (
+    <div className={`rounded-2xl border border-rose-200 bg-rose-50 ${compact ? "p-3" : "p-4"}`}>
+      <div className="flex items-start gap-3">
+        <AlertTriangle size={18} className="mt-0.5 shrink-0 text-rose-600" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-black text-rose-900">{title}</p>
+          <p className="mt-1 text-sm font-bold text-rose-700">{payload.userMessage || payload.error}</p>
+          {payload.technicalMessage && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs font-black text-rose-700/80">Detalhe técnico</summary>
+              <p className="mt-1 break-words text-xs font-mono text-rose-700/80">{payload.technicalMessage}</p>
+            </details>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {needsReconnect ? (
+              canManageIntegrations ? (
+                <button type="button" onClick={openIntegrationsSettings} className="inline-flex items-center gap-1.5 rounded-2xl bg-rose-700 px-3 py-2 text-xs font-black text-white hover:bg-rose-800">
+                  <ExternalLink size={14} /> Abrir Conta e Permissões
+                </button>
+              ) : (
+                <p className="rounded-2xl bg-white px-3 py-2 text-xs font-black text-rose-700">
+                  Peça para um gestor/admin reconectar esta integração.
+                </p>
+              )
+            ) : null}
+            {onRetry && payload.action !== "check_config" && (
+              <button type="button" onClick={onRetry} className="inline-flex items-center gap-1.5 rounded-2xl bg-white px-3 py-2 text-xs font-black text-rose-700 hover:bg-rose-100">
+                <RefreshCw size={14} /> Tentar novamente
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {

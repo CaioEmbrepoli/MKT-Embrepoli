@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
 import { importMetaAdsData } from "@/lib/meta-ads-server";
-import { metaRequestContext, requireMetaManager } from "@/lib/meta-server";
+import { metaRequestContext, requireMetaManager, type MetaRequestContext } from "@/lib/meta-server";
 
 export async function POST(request: Request) {
+  let context: MetaRequestContext | null = null;
   try {
-    const context = await metaRequestContext(request);
+    context = await metaRequestContext(request);
     requireMetaManager(context);
     const summary = await importMetaAdsData(context);
     return NextResponse.json({ summary });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Erro ao importar Meta Ads.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    const payload = toApiErrorPayload(error, { provider: "meta_ads", service: "meta_ads" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    return NextResponse.json(payload, { status: 400 });
   }
 }

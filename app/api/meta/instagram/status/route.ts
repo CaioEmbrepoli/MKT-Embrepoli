@@ -1,10 +1,14 @@
 import { NextResponse } from "next/server";
+import { resolveIntegrationHealth, toApiErrorPayload } from "@/lib/api-errors";
 import { getMetaConnection, metaRequestContext } from "@/lib/meta-server";
 
 export async function GET(request: Request) {
   try {
     const context = await metaRequestContext(request);
     const connection = await getMetaConnection(context.service, context.organizationId, "instagram");
+    if (connection?.access_token) {
+      await resolveIntegrationHealth(context.service, context.organizationId, "instagram", "instagram");
+    }
     return NextResponse.json({
       connected: Boolean(connection?.access_token),
       service: "instagram",
@@ -20,9 +24,6 @@ export async function GET(request: Request) {
       canManage: context.role === "admin" || context.role === "gestor"
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erro ao consultar conexao Instagram/Meta." },
-      { status: 401 }
-    );
+    return NextResponse.json(toApiErrorPayload(error, { provider: "instagram", service: "instagram" }), { status: 401 });
   }
 }

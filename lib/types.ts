@@ -553,6 +553,25 @@ export type Notification = {
   targetId: string;
 };
 
+export type IntegrationHealthStatus = "ok" | "warning" | "error";
+export type IntegrationHealthAction = "reconnect_oauth" | "ask_manager" | "retry" | "check_config" | "none";
+
+export type IntegrationHealth = {
+  id: string;
+  organizationId: string;
+  provider: "google" | "youtube" | "instagram" | "meta_ads" | "tiktok" | "supabase" | "vercel";
+  service: string;
+  status: IntegrationHealthStatus;
+  lastErrorCode?: string;
+  lastErrorMessage?: string;
+  lastTechnicalMessage?: string;
+  action?: IntegrationHealthAction;
+  reconnectTarget?: string;
+  lastFailedAt?: string;
+  resolvedAt?: string;
+  updatedAt: string;
+};
+
 export type CommentStatus = "novo" | "respondido" | "ignorado";
 export type CommentClassificationStatus = "pendente" | "relevante" | "normal" | "erro";
 

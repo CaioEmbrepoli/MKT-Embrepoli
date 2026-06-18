@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { resolveIntegrationHealth, toApiErrorPayload } from "@/lib/api-errors";
 import { googleRequestContext, type GoogleService } from "@/lib/google-server";
 
 function toStatus(connection: any) {
@@ -21,6 +22,11 @@ export async function GET(request: Request) {
       .in("service", ["drive", "youtube", "sheets", "analytics"]);
     if (error) throw error;
     const byService = new Map((data ?? []).map((item: any) => [item.service as GoogleService, item]));
+    for (const service of ["drive", "youtube", "sheets", "analytics"] as GoogleService[]) {
+      if (byService.get(service)?.refresh_token) {
+        await resolveIntegrationHealth(context.service, context.organizationId, service === "youtube" ? "youtube" : "google", service);
+      }
+    }
     return NextResponse.json({
       drive: toStatus(byService.get("drive")),
       youtube: toStatus(byService.get("youtube")),
@@ -29,6 +35,6 @@ export async function GET(request: Request) {
       canManage: context.role === "admin" || context.role === "gestor"
     });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Erro ao consultar conexao Google." }, { status: 401 });
+    return NextResponse.json(toApiErrorPayload(error, { provider: "google", service: "drive" }), { status: 401 });
   }
 }

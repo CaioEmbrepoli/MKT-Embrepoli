@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { errorFromResponse } from "./api-errors";
 
 type GoogleConfig = { apiKey: string; clientId: string };
 
@@ -28,6 +29,7 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 20000):
   const headers = await getAuthHeaders();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const service = url.includes("/youtube/") ? "youtube" : url.includes("/analytics/") ? "analytics" : url.includes("/sheets/") ? "sheets" : "drive";
   try {
     const res = await fetch(url, {
       ...init,
@@ -39,7 +41,11 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 20000):
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data?.error ?? "Erro na integracao Google.");
+      errorFromResponse(data, {
+        provider: service === "youtube" ? "youtube" : "google",
+        service,
+        error: "Erro na integracao Google."
+      });
     }
     return data as T;
   } catch (err) {

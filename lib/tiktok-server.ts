@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { recordIntegrationFailure, resolveIntegrationHealth, toApiErrorPayload } from "./api-errors";
 
 export type TikTokEnvironment = "sandbox" | "production";
 
@@ -190,14 +191,37 @@ export async function getTikTokConnection(supabaseClient: SupabaseClient, organi
 export async function getTikTokAccessToken(context: TikTokRequestContext) {
   const environment = tiktokEnvironment();
   const connection = await getTikTokConnection(context.service, context.organizationId, environment);
-  if (!connection?.refresh_token) throw new Error("TikTok Sandbox nao conectado. Peca para um Gestor conectar a conta.");
+  if (!connection?.refresh_token) {
+    const payload = toApiErrorPayload(new Error("TikTok Sandbox nao conectado. Peca para um Gestor conectar a conta."), {
+      provider: "tiktok",
+      service: "tiktok",
+      code: "not_connected",
+      action: "reconnect_oauth",
+      reconnectTarget: "tiktok"
+    });
+    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    throw new Error(payload.userMessage);
+  }
 
   const expiresAt = new Date(connection.expires_at || 0).getTime();
   if (connection.access_token && expiresAt > Date.now() + 60_000) {
     return connection.access_token;
   }
 
-  const refreshed = await exchangeTikTokRefreshToken(connection.refresh_token);
+  let refreshed: Awaited<ReturnType<typeof exchangeTikTokRefreshToken>>;
+  try {
+    refreshed = await exchangeTikTokRefreshToken(connection.refresh_token);
+  } catch (error) {
+    const payload = toApiErrorPayload(error, {
+      provider: "tiktok",
+      service: "tiktok",
+      code: "oauth_reconnect_required",
+      action: "reconnect_oauth",
+      reconnectTarget: "tiktok"
+    });
+    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    throw new Error(payload.userMessage);
+  }
   const { error } = await context.service
     .from("tiktok_connections")
     .update({
@@ -209,6 +233,7 @@ export async function getTikTokAccessToken(context: TikTokRequestContext) {
     })
     .eq("id", connection.id);
   if (error) throw error;
+  await resolveIntegrationHealth(context.service, context.organizationId, "tiktok", "tiktok");
   return refreshed.accessToken;
 }
 

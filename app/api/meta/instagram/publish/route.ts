@@ -1,7 +1,8 @@
 import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
 import { Client as QStashClient } from "@upstash/qstash";
-import { getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
+import { getInstagramConnection, metaRequestContext, type MetaRequestContext } from "@/lib/meta-server";
 import { publishInstagramMedia, scheduleInstagramMedia } from "@/lib/instagram-publish-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
@@ -50,8 +51,9 @@ function shouldPersistInstagramThumbnail(format?: string | null) {
 }
 
 export async function POST(request: Request) {
+  let context: MetaRequestContext | null = null;
   try {
-    const context = await metaRequestContext(request);
+    context = await metaRequestContext(request);
     const body = await request.json().catch(() => ({})) as PublishBody;
 
     const connection = await getInstagramConnection(context);
@@ -215,9 +217,8 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     console.error("[meta/instagram/publish]", error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erro ao publicar no Instagram." },
-      { status: 500 }
-    );
+    const payload = toApiErrorPayload(error, { provider: "instagram", service: "instagram" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    return NextResponse.json(payload, { status: 500 });
   }
 }

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { recordIntegrationFailure, resolveIntegrationHealth, toApiErrorPayload } from "./api-errors";
 
 export type MetaService = "instagram" | "ads";
 
@@ -248,22 +249,56 @@ export async function getMetaConnection(supabaseClient: SupabaseClient, organiza
 export async function getInstagramConnection(context: MetaRequestContext): Promise<MetaConnectionRow & { instagram_account_id: string }> {
   const connection = await getMetaConnection(context.service, context.organizationId, "instagram");
   if (!connection?.access_token || !connection.instagram_account_id) {
-    throw new Error("Instagram / Meta nao conectado. Cadastre o token em Conta e Permissoes.");
+    const payload = toApiErrorPayload(new Error("Instagram / Meta nao conectado. Cadastre o token em Conta e Permissoes."), {
+      provider: "instagram",
+      service: "instagram",
+      code: "not_connected",
+      action: "reconnect_oauth",
+      reconnectTarget: "instagram"
+    });
+    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    throw new Error(payload.userMessage);
   }
   if (connection.expires_at && new Date(connection.expires_at).getTime() < Date.now()) {
-    throw new Error("Token do Instagram expirado. Gere um novo token no Meta Developer e atualize a conexao.");
+    const payload = toApiErrorPayload(new Error("Token do Instagram expirado. Gere um novo token no Meta Developer e atualize a conexao."), {
+      provider: "instagram",
+      service: "instagram",
+      code: "oauth_reconnect_required",
+      action: "reconnect_oauth",
+      reconnectTarget: "instagram"
+    });
+    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    throw new Error(payload.userMessage);
   }
+  await resolveIntegrationHealth(context.service, context.organizationId, "instagram", "instagram");
   return { ...connection, instagram_account_id: connection.instagram_account_id };
 }
 
 export async function getMetaAdsConnection(context: MetaRequestContext) {
   const connection = await getMetaConnection(context.service, context.organizationId, "ads");
   if (!connection?.access_token) {
-    throw new Error("Meta Ads nao conectado. Conecte a conta em Conta e Permissoes.");
+    const payload = toApiErrorPayload(new Error("Meta Ads nao conectado. Conecte a conta em Conta e Permissoes."), {
+      provider: "meta_ads",
+      service: "meta_ads",
+      code: "not_connected",
+      action: "reconnect_oauth",
+      reconnectTarget: "meta_ads"
+    });
+    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    throw new Error(payload.userMessage);
   }
   if (connection.expires_at && new Date(connection.expires_at).getTime() < Date.now()) {
-    throw new Error("Token do Meta Ads expirado. Reconecte a conta de anuncios.");
+    const payload = toApiErrorPayload(new Error("Token do Meta Ads expirado. Reconecte a conta de anuncios."), {
+      provider: "meta_ads",
+      service: "meta_ads",
+      code: "oauth_reconnect_required",
+      action: "reconnect_oauth",
+      reconnectTarget: "meta_ads"
+    });
+    await recordIntegrationFailure(context.service, context.organizationId, payload);
+    throw new Error(payload.userMessage);
   }
+  await resolveIntegrationHealth(context.service, context.organizationId, "meta_ads", "meta_ads");
   return connection;
 }
 

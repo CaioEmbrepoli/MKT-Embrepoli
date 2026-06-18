@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
-import { fetchInstagramInsightsForMedia, fetchInstagramMedia, getInstagramConnection, metaRequestContext } from "@/lib/meta-server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
+import { fetchInstagramInsightsForMedia, fetchInstagramMedia, getInstagramConnection, metaRequestContext, type MetaRequestContext } from "@/lib/meta-server";
 
 export async function GET(request: Request) {
+  let context: MetaRequestContext | null = null;
   try {
-    const context = await metaRequestContext(request);
+    context = await metaRequestContext(request);
     const connection = await getInstagramConnection(context);
     const media = await fetchInstagramMedia(connection.access_token, connection.instagram_account_id);
     const metrics = await Promise.all(media.map(async (item) => ({
@@ -12,9 +14,8 @@ export async function GET(request: Request) {
     })));
     return NextResponse.json({ metrics });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erro ao buscar metricas do Instagram." },
-      { status: 400 }
-    );
+    const payload = toApiErrorPayload(error, { provider: "instagram", service: "instagram" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    return NextResponse.json(payload, { status: 400 });
   }
 }

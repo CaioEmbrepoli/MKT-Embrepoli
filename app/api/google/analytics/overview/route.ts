@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
-import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server";
+import { recordIntegrationFailure, toApiErrorPayload } from "@/lib/api-errors";
+import { getGoogleAccessToken, googleRequestContext, type GoogleRequestContext } from "@/lib/google-server";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  let context: GoogleRequestContext | null = null;
   try {
-    const context = await googleRequestContext(request);
+    context = await googleRequestContext(request);
     const propertyId = process.env.GA4_PROPERTY_ID;
     if (!propertyId) {
-      return NextResponse.json({ error: "GA4_PROPERTY_ID nao configurado." }, { status: 500 });
+      const payload = toApiErrorPayload(new Error("GA4_PROPERTY_ID nao configurado."), { provider: "google", service: "analytics", code: "env_missing", action: "check_config" });
+      await recordIntegrationFailure(context.service, context.organizationId, payload);
+      return NextResponse.json(payload, { status: 500 });
     }
 
     const accessToken = await getGoogleAccessToken(context, "analytics");
@@ -105,6 +109,8 @@ export async function GET(request: Request) {
       topPages
     });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Erro ao consultar Google Analytics." }, { status: 401 });
+    const payload = toApiErrorPayload(error, { provider: "google", service: "analytics" });
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload);
+    return NextResponse.json(payload, { status: 401 });
   }
 }

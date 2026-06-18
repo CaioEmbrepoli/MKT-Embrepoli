@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { errorFromResponse } from "./api-errors";
 
 async function getAuthHeaders(): Promise<HeadersInit> {
   if (!supabase) {
@@ -27,7 +28,7 @@ async function fetchJson<T>(url: string, init?: RequestInit, timeoutMs = 25000):
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data?.error ?? "Erro na integracao TikTok.");
+      errorFromResponse(data, { provider: "tiktok", service: "tiktok", error: "Erro na integracao TikTok." });
     }
     return data as T;
   } catch (err) {
