@@ -8,6 +8,7 @@ import {
   validateInstagramComment
 } from "@/lib/meta-server";
 import { recordCommentWebhookEvent, stripKnownCommentPrefix, type CommentSource } from "@/lib/comment-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 type ReplyMode = "create" | "edit";
 type ReplyKind = "primary" | "additional";
@@ -245,9 +246,11 @@ async function recoverReplyIdFromEvents(
 }
 
 export async function POST(request: Request) {
+  let context: Awaited<ReturnType<typeof googleRequestContext>> | null = null;
+  let commentId = "";
   try {
     const body = await request.json().catch(() => ({}));
-    const commentId = String(body.commentId || "").trim();
+    commentId = String(body.commentId || "").trim();
     const responseText = sanitizeText(body.response);
     const mode = body.mode === "edit" ? "edit" : "create";
     const kind: ReplyKind = body.kind === "additional" ? "additional" : "primary";
@@ -256,7 +259,7 @@ export async function POST(request: Request) {
     if (!responseText) return NextResponse.json({ error: "Resposta obrigatoria." }, { status: 400 });
     if (responseText.length > 5000) return NextResponse.json({ error: "Resposta muito longa." }, { status: 400 });
 
-    const context = await googleRequestContext(request);
+    context = await googleRequestContext(request);
     const { data: comment, error } = await context.service
       .from("comments")
       .select("id,organization_id,source,external_id,video_id,video_title,author_name,text,response,response_external_id,response_history,bank_question_id")
@@ -419,6 +422,22 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, externalReplyId, comment: updated, question: updatedQuestion });
   } catch (error) {
+    if (context) {
+      await recordDiagnostic(context.service, {
+        organizationId: context.organizationId,
+        provider: "youtube",
+        service: "comments",
+        error,
+        category: "comentarios",
+        severity: "erro",
+        eventKey: `comentarios:resposta:${commentId || "desconhecido"}`,
+        title: "Falha ao enviar resposta para comentário",
+        profileId: context.userId,
+        targetKind: "comment",
+        targetId: commentId || undefined,
+        metadata: { operation: "responder" }
+      }).catch(() => undefined);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao responder comentario." },
       { status: 400 }

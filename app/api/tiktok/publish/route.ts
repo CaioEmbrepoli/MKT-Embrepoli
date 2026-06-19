@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getTikTokAccessToken, tiktokRequestContext } from "@/lib/tiktok-server";
 import { getGoogleAccessToken } from "@/lib/google-server";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 /** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
@@ -15,8 +16,10 @@ function extractDriveFileId(url: string): string | null {
 export const maxDuration = 300; // 5 minutos
 
 export async function POST(request: Request) {
+  let context: Awaited<ReturnType<typeof tiktokRequestContext>> | null = null;
+  let postId = "";
   try {
-    const context = await tiktokRequestContext(request);
+    context = await tiktokRequestContext(request);
     const accessToken = await getTikTokAccessToken(context);
 
     const body = await request.json() as {
@@ -29,6 +32,7 @@ export async function POST(request: Request) {
       postId?: string;
       allowDuplicate?: boolean;
     };
+    postId = body.postId ?? "";
 
     const { assetUrl, title, privacyLevel } = body;
 
@@ -195,6 +199,22 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ publishId: publish_id });
   } catch (error) {
+    if (context) {
+      await recordDiagnostic(context.service, {
+        organizationId: context.organizationId,
+        provider: "tiktok",
+        service: "tiktok",
+        error,
+        category: "publicacao",
+        severity: "critico",
+        eventKey: `publicacao:tiktok:imediata:${postId || "sem-post"}`,
+        title: "Falha ao publicar no TikTok",
+        profileId: context.userId,
+        targetKind: "post",
+        targetId: postId || undefined,
+        metadata: { mode: "imediata" }
+      }).catch(() => undefined);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao publicar no TikTok." },
       { status: 500 }

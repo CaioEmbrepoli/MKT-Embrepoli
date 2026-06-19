@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server";
 import { parseSaoPauloDateTime } from "@/lib/app-time";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -41,8 +42,10 @@ async function resolveAssetMetadata(assetUrl: string, driveToken: string) {
 }
 
 export async function POST(request: Request) {
+  let context: Awaited<ReturnType<typeof googleRequestContext>> | null = null;
+  let postId = "";
   try {
-    const context = await googleRequestContext(request);
+    context = await googleRequestContext(request);
     const [ytToken, driveToken] = await Promise.all([
       getGoogleAccessToken(context, "youtube"),
       getGoogleAccessToken(context, "drive")
@@ -59,6 +62,7 @@ export async function POST(request: Request) {
       postId?: string;
       allowDuplicate?: boolean;
     };
+    postId = body.postId ?? "";
 
     const { assetUrl, title, description, format, scheduledAt, thumbnailUrl } = body;
     if (!assetUrl || !title) {
@@ -169,6 +173,22 @@ export async function POST(request: Request) {
       contentType: metadata.contentType
     });
   } catch (error) {
+    if (context) {
+      await recordDiagnostic(context.service, {
+        organizationId: context.organizationId,
+        provider: "youtube",
+        service: "youtube",
+        error,
+        category: "fila",
+        severity: "erro",
+        eventKey: `fila:youtube:criar:${postId || "sem-post"}`,
+        title: "Falha ao criar fila de upload do YouTube",
+        profileId: context.userId,
+        targetKind: "post",
+        targetId: postId || undefined,
+        metadata: { operation: "criar_fila" }
+      }).catch(() => undefined);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao enfileirar upload no YouTube." },
       { status: 400 }

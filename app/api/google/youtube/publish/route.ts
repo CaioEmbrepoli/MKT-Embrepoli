@@ -3,6 +3,7 @@ import { getGoogleAccessToken, googleRequestContext } from "@/lib/google-server"
 import { parseSaoPauloDateTime } from "@/lib/app-time";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 /** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
@@ -21,8 +22,10 @@ export const maxDuration = 300; // 5 minutos (Vercel Pro/Enterprise)
 const STREAM_THRESHOLD = 200 * 1024 * 1024; // 200 MB
 
 export async function POST(request: Request) {
+  let context: Awaited<ReturnType<typeof googleRequestContext>> | null = null;
+  let postId = "";
   try {
-    const context = await googleRequestContext(request);
+    context = await googleRequestContext(request);
     const ytToken = await getGoogleAccessToken(context, "youtube");
 
     const body = await request.json() as {
@@ -37,6 +40,7 @@ export async function POST(request: Request) {
     };
 
     const { assetUrl, title, description, format, scheduledAt, thumbnailUrl } = body;
+    postId = body.postId ?? "";
 
     if (!assetUrl || !title) {
       return NextResponse.json({ error: "assetUrl e title são obrigatórios." }, { status: 400 });
@@ -286,6 +290,22 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ videoId, privacyStatus, uploadStatus });
   } catch (error) {
+    if (context) {
+      await recordDiagnostic(context.service, {
+        organizationId: context.organizationId,
+        provider: "youtube",
+        service: "youtube",
+        error,
+        category: "publicacao",
+        severity: "critico",
+        eventKey: `publicacao:youtube:imediata:${postId || "sem-post"}`,
+        title: "Falha ao publicar no YouTube",
+        profileId: context.userId,
+        targetKind: "post",
+        targetId: postId || undefined,
+        metadata: { mode: "imediata" }
+      }).catch(() => undefined);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao publicar no YouTube." },
       { status: 401 }

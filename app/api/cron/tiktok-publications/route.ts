@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { getTikTokAccessToken } from "@/lib/tiktok-server";
 import type { TikTokRequestContext } from "@/lib/tiktok-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -16,6 +17,22 @@ type PublicationRow = {
   format: string | null;
   attempts: number | null;
 };
+
+async function recordTikTokPublicationDiagnostic(service: any, publication: PublicationRow, error: unknown) {
+  await recordDiagnostic(service, {
+    organizationId: publication.organization_id,
+    provider: "tiktok",
+    service: "tiktok",
+    error,
+    category: "publicacao",
+    severity: "critico",
+    eventKey: `publicacao:tiktok:agendada:${publication.id}`,
+    title: "Falha na publicação agendada do TikTok",
+    targetKind: "publication",
+    targetId: publication.id,
+    metadata: { postId: publication.post_id, externalId: publication.external_id }
+  });
+}
 
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -125,6 +142,7 @@ export async function GET(request: Request) {
           last_attempt_at: now,
           updated_at: now,
         }).eq("id", pub.id);
+        await recordTikTokPublicationDiagnostic(service, pub, "TikTok reportou falha na publicação.").catch(() => undefined);
         results.push({ id: pub.id, status: "error", error: "FAILED" });
       } else {
         // PROCESSING_UPLOAD ou SEND_TO_USER_INBOX — aguarda próxima rodada
@@ -143,6 +161,7 @@ export async function GET(request: Request) {
         last_attempt_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }).eq("id", pub.id);
+      await recordTikTokPublicationDiagnostic(service, pub, message).catch(() => undefined);
       results.push({ id: pub.id, status: "error", error: message });
     }
   }

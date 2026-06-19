@@ -4,6 +4,7 @@ import { exchangeRefreshToken } from "@/lib/google-server";
 import { fetchInstagramInsightsForMedia, fetchInstagramMedia, type InstagramMetricItem, type MetaRequestContext } from "@/lib/meta-server";
 import { importMetaAdsData } from "@/lib/meta-ads-server";
 import { fetchTikTokUserInfo, getTikTokAccessToken, tiktokEnvironment, type TikTokRequestContext } from "@/lib/tiktok-server";
+import { recordDiagnostic, type ApiErrorProvider } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -711,6 +712,28 @@ export async function GET(request: Request) {
       }];
     }
   }
+
+  const providers: Record<PlatformKey, ApiErrorProvider> = {
+    youtube: "youtube",
+    instagram: "instagram",
+    tiktok: "tiktok",
+    metaads: "meta_ads"
+  };
+  await Promise.all(Object.entries(results).flatMap(([platform, rows]) => rows
+    .filter((row) => !row.ok && row.orgId)
+    .map((row) => recordDiagnostic(adminClient, {
+      organizationId: String(row.orgId),
+      provider: providers[platform as PlatformKey],
+      service: platform === "metaads" ? "meta_ads" : platform,
+      error: row.error ?? `Falha no cron de métricas ${platform}.`,
+      category: "metricas",
+      severity: "erro",
+      eventKey: `metricas:${platform}:${row.connectionId ?? row.orgId}`,
+      title: `Falha ao atualizar métricas do ${platform === "metaads" ? "Meta Ads" : platform}`,
+      targetKind: "cron",
+      targetId: platform,
+      metadata: { connectionId: row.connectionId ?? null }
+    }).catch(() => undefined))));
 
   return NextResponse.json({
     ok: Object.values(results).flat().every((item) => item.ok),

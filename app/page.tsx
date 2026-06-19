@@ -125,6 +125,7 @@ import {
   deleteVehicleType,
   ensureCurrentProfile,
   loadAppData,
+  loadInitialAppData,
   saveCampaign,
   saveCampaignAudience,
   saveCalendarDate,
@@ -1314,6 +1315,7 @@ export default function Home() {
   const remoteReady = useRef(false);
   const lastLocalSaveAt = useRef(0);
   const initialLandingAppliedFor = useRef("");
+  const authBootstrapInFlight = useRef(false);
 
   const emptyUser: Profile = { id: "", organizationId: "", role: "colaborador", name: "", email: "", phone: "", bio: "", active: false, notificationSound: false, avatarUrl: "" };
   const currentUser = profiles.find((profile) => profile.id === currentUserId)
@@ -1728,6 +1730,7 @@ export default function Home() {
       "task_comments",
       "task_attachments",
       "post_metrics",
+      "post_publications",
       "youtube_upload_queue",
       "ad_accounts",
       "ad_campaigns",
@@ -1736,6 +1739,7 @@ export default function Home() {
       "ad_insights_daily",
       "ad_alerts",
       "integration_health",
+      "error_logs",
       "notifications",
       "comments",
       "auto_filters",
@@ -1854,10 +1858,40 @@ export default function Home() {
   const syncSalesFunnelStages = syncState("salesFunnelStages", setSalesFunnelStages, (previous, next) => persistArrayChanges(previous, next, (item) => saveSalesFunnelStage(supabase!, item), (id) => deleteSalesFunnelStage(supabase!, id)));
   const syncCallSchedules = syncState("callSchedules", setCallSchedules, (previous, next) => persistArrayChanges(previous, next, (item) => saveCallSchedule(supabase!, item), (id) => deleteCallSchedule(supabase!, id)));
 
+  async function openAuthenticatedApp(profile: Profile) {
+    if (!supabase) return;
+    const data = await loadInitialAppData(supabase, profile);
+    const authenticatedProfile = data.profiles.find((item) => item.id === profile.id) ?? profile;
+    const landing = defaultLandingForProfile(authenticatedProfile, data.profileAreas, data.profileModulePermissions);
+
+    setProfiles(data.profiles);
+    setProfileAreas(data.profileAreas);
+    setProfileModulePermissions(data.profileModulePermissions);
+    setChannels(data.channels);
+    setCampaigns(data.campaigns);
+    setPosts(data.posts);
+    setPostReviewAssets(data.postReviewAssets);
+    setIdeas(data.ideas);
+    setTasks(data.tasks);
+    setMetrics(data.metrics);
+    setSalesClients(data.salesClients);
+    setSalesFunnelStages(data.salesFunnelStages);
+    setCallSchedules(data.callSchedules);
+    setCurrentUserId(authenticatedProfile.id);
+    setActiveArea(landing.area);
+    setActiveSection(landing.sectionId);
+    initialLandingAppliedFor.current = `${authenticatedProfile.id}:${allowedAreasForProfile(authenticatedProfile, data.profileAreas, data.profileModulePermissions).join("|")}`;
+    setAuthMode("login");
+    setLoggedIn(true);
+  }
+
   async function loadCurrentSession() {
+    if (authBootstrapInFlight.current) return;
+    authBootstrapInFlight.current = true;
     console.log("[auth] loadCurrentSession: start");
     if (!supabase || !isSupabaseConfigured) {
       console.warn("[auth] supabase not configured — abort", { hasSupabase: !!supabase, isSupabaseConfigured });
+      authBootstrapInFlight.current = false;
       setInitializing(false);
       return;
     }
@@ -1918,8 +1952,7 @@ export default function Home() {
       setCurrentUserId(profile.id);
       if (profile.active) {
         console.log("[auth] profile active — entering app");
-        setLoggedIn(true);
-        setAuthMode("login");
+        await openAuthenticatedApp(profile);
       } else {
         console.log("[auth] profile inactive — pending approval");
         setLoggedIn(false);
@@ -1928,6 +1961,7 @@ export default function Home() {
         void notifyManagersOfPendingSignup(profile);
       }
     } finally {
+      authBootstrapInFlight.current = false;
       setInitializing(false);
     }
   }
@@ -2048,20 +2082,9 @@ export default function Home() {
           setAuthLoading(false);
           return;
         }
-        setSessionUserId(data.user.id);
-        const profile = await ensureCurrentProfile(supabase);
-        if (!profile?.active) {
-          setCurrentUserId(profile?.id ?? data.user.id);
-          setAuthMode("pending");
-          setAuthMessage("Sua conta está aguardando aprovação de um Gestor ou Administrador.");
-          if (profile) void notifyManagersOfPendingSignup(profile);
-          setAuthLoading(false);
-          return;
-        }
-        setCurrentUserId(profile.id);
+        setInitializing(true);
+        await loadCurrentSession();
         setAuthLoading(false);
-        setAuthMode("login");
-        setLoggedIn(true);
       } catch (err) {
         setAuthError(`Erro ao conectar: ${err instanceof Error ? err.message : "tente novamente."}`);
         setAuthLoading(false);
@@ -19438,6 +19461,17 @@ function CommentSourceBadge({ source }: { source: Comment["source"] }) {
 
 function DiagnosticSettings({ errorLogs, profiles }: { errorLogs: ErrorLog[]; profiles: Profile[] }) {
   const profileById = new Map(profiles.map((p) => [p.id, p]));
+  const [category, setCategory] = useState<"todos" | NonNullable<ErrorLog["category"]>>("todos");
+  const [severity, setSeverity] = useState<"todas" | NonNullable<ErrorLog["severity"]>>("todas");
+  const [period, setPeriod] = useState<"todos" | "hoje" | "7d">("todos");
+  const now = Date.now();
+  const filteredLogs = errorLogs.filter((log) => {
+    if (category !== "todos" && log.category !== category) return false;
+    if (severity !== "todas" && log.severity !== severity) return false;
+    if (period === "todos") return true;
+    const age = now - new Date(log.lastSeenAt ?? log.createdAt).getTime();
+    return age <= (period === "hoje" ? 24 : 7 * 24) * 60 * 60 * 1000;
+  });
 
   function errorCodeLabel(code: string | null): string {
     const labels: Record<string, string> = {
@@ -19460,9 +19494,39 @@ function DiagnosticSettings({ errorLogs, profiles }: { errorLogs: ErrorLog[]; pr
     return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
   }
 
+  const severityStyle: Record<NonNullable<ErrorLog["severity"]>, string> = {
+    aviso: "bg-amber-100 text-amber-800",
+    erro: "bg-red-100 text-red-700",
+    critico: "bg-rose-700 text-white"
+  };
+
   return (
     <Panel title="Diagnóstico — Histórico de Erros">
-      {errorLogs.length === 0 ? (
+      <div className="mb-4 flex flex-wrap gap-2">
+        <select value={category} onChange={(event) => setCategory(event.target.value as typeof category)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+          <option value="todos">Todas as categorias</option>
+          <option value="publicacao">Publicações</option>
+          <option value="fila">Filas</option>
+          <option value="cron">Crons</option>
+          <option value="webhook">Webhooks</option>
+          <option value="comentarios">Comentários</option>
+          <option value="metricas">Métricas</option>
+          <option value="integracao">Integrações</option>
+          <option value="sistema">Sistema</option>
+        </select>
+        <select value={severity} onChange={(event) => setSeverity(event.target.value as typeof severity)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+          <option value="todas">Todas as severidades</option>
+          <option value="critico">Críticos</option>
+          <option value="erro">Erros</option>
+          <option value="aviso">Avisos</option>
+        </select>
+        <select value={period} onChange={(event) => setPeriod(event.target.value as typeof period)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+          <option value="todos">Todo o histórico</option>
+          <option value="hoje">Últimas 24 horas</option>
+          <option value="7d">Últimos 7 dias</option>
+        </select>
+      </div>
+      {filteredLogs.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-12 text-slate-400">
           <span className="text-4xl mb-3">✓</span>
           <p className="font-semibold text-slate-500">Nenhum erro registrado.</p>
@@ -19475,6 +19539,7 @@ function DiagnosticSettings({ errorLogs, profiles }: { errorLogs: ErrorLog[]; pr
               <tr className="border-b border-slate-200 text-left text-xs font-bold text-slate-500 uppercase tracking-wide">
                 <th className="py-2 pr-4 whitespace-nowrap">Horário</th>
                 <th className="py-2 pr-4 whitespace-nowrap">Integração</th>
+                <th className="py-2 pr-4 whitespace-nowrap">Severidade</th>
                 <th className="py-2 pr-4 whitespace-nowrap">Tipo do Erro</th>
                 <th className="py-2 pr-4">Mensagem</th>
                 <th className="py-2 pr-4 whitespace-nowrap">Usuário</th>
@@ -19482,12 +19547,17 @@ function DiagnosticSettings({ errorLogs, profiles }: { errorLogs: ErrorLog[]; pr
               </tr>
             </thead>
             <tbody>
-              {errorLogs.map((log) => (
+              {filteredLogs.map((log) => (
                 <tr key={log.id} className="border-b border-slate-100 bg-red-50/50 hover:bg-red-50 transition-colors">
-                  <td className="py-2 pr-4 whitespace-nowrap text-slate-500 font-mono text-xs">{formatDateTime(log.createdAt)}</td>
+                  <td className="py-2 pr-4 whitespace-nowrap text-slate-500 font-mono text-xs">{formatDateTime(log.lastSeenAt ?? log.createdAt)}</td>
                   <td className="py-2 pr-4 whitespace-nowrap">
                     <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
                       {serviceLabel(log.service, log.provider as Parameters<typeof serviceLabel>[1])}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-4 whitespace-nowrap">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${severityStyle[log.severity ?? "erro"]}`}>
+                      {log.severity ?? "erro"}
                     </span>
                   </td>
                   <td className="py-2 pr-4 whitespace-nowrap">
@@ -19495,7 +19565,7 @@ function DiagnosticSettings({ errorLogs, profiles }: { errorLogs: ErrorLog[]; pr
                       {errorCodeLabel(log.errorCode)}
                     </span>
                   </td>
-                  <td className="py-2 pr-4 text-slate-700 max-w-xs">{log.userMessage ?? "—"}</td>
+                  <td className="py-2 pr-4 text-slate-700 max-w-xs"><p className="font-bold">{log.title ?? "Falha operacional"}</p><p>{log.userMessage ?? "—"}</p>{(log.occurrenceCount ?? 1) > 1 && <p className="mt-1 text-xs font-bold text-amber-700">Repetido {log.occurrenceCount} vezes</p>}</td>
                   <td className="py-2 pr-4 whitespace-nowrap text-slate-600">
                     {log.profileId ? (profileById.get(log.profileId)?.name ?? "ID: " + log.profileId.slice(0, 8)) : "Sistema"}
                   </td>

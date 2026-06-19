@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { appendServerCommentExternalReply, commentServiceClient, createServerQuestionsFromComments, deleteServerCommentByExternalId, getDefaultOrganizationId, recordCommentWebhookEvent, updateServerCommentResponseByExternalId, upsertServerComments, type ServerCommentInput } from "@/lib/comment-server";
 import { fetchInstagramCommentById, fetchInstagramMediaById } from "@/lib/meta-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 type MetaConnection = {
   id: string;
@@ -112,6 +113,21 @@ async function recordInstagramDiagnostic(input: {
       processedAt: input.processedAt,
       error: input.error
     });
+    if (input.error) {
+      await recordDiagnostic(service, {
+        organizationId,
+        provider: "instagram",
+        service: "instagram",
+        error: input.error,
+        category: "webhook",
+        severity: "erro",
+        eventKey: `webhook:instagram:${input.eventType}:${input.externalCommentId ?? input.eventId ?? "geral"}`,
+        title: "Falha no webhook de comentários do Instagram",
+        targetKind: "webhook",
+        targetId: input.externalCommentId ?? input.eventId,
+        metadata: { eventType: input.eventType, mediaId: input.externalMediaId ?? null }
+      });
+    }
   } catch (error) {
     console.warn("[instagram-webhook:diagnostic]", error instanceof Error ? error.message : error);
   }

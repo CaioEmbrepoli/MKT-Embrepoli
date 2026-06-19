@@ -5,6 +5,7 @@ import type { GoogleRequestContext } from "@/lib/google-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 import { upsertInternalNotifications } from "@/lib/notifications-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -18,6 +19,22 @@ type PublicationRow = {
   format: string | null;
   attempts: number | null;
 };
+
+async function recordPublicationDiagnostic(service: any, publication: PublicationRow, error: unknown) {
+  await recordDiagnostic(service, {
+    organizationId: publication.organization_id,
+    provider: "youtube",
+    service: "youtube",
+    error,
+    category: "publicacao",
+    severity: "critico",
+    eventKey: `publicacao:youtube:agendada:${publication.id}`,
+    title: "Falha na publicação agendada do YouTube",
+    targetKind: "publication",
+    targetId: publication.id,
+    metadata: { postId: publication.post_id, externalId: publication.external_id }
+  });
+}
 
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -88,6 +105,7 @@ export async function GET(request: Request) {
           organizationId: pub.organization_id,
           postId: pub.post_id
         });
+        await recordPublicationDiagnostic(service, pub, message).catch(() => undefined);
         await upsertInternalNotifications(service, {
           organizationId: pub.organization_id,
           recipientMode: "admins_managers",
@@ -206,6 +224,7 @@ export async function GET(request: Request) {
         organizationId: pub.organization_id,
         postId: pub.post_id
       });
+      await recordPublicationDiagnostic(service, pub, message).catch(() => undefined);
       await upsertInternalNotifications(service, {
         organizationId: pub.organization_id,
         recipientMode: "admins_managers",

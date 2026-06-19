@@ -13,6 +13,7 @@ import {
 } from "@/lib/instagram-publish-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -75,6 +76,22 @@ function instagramQueueFieldsReset() {
     next_attempt_at: null,
     last_heartbeat_at: new Date().toISOString()
   };
+}
+
+async function recordInstagramPublicationDiagnostic(service: any, publication: any, error: unknown, severity: "aviso" | "erro" | "critico") {
+  await recordDiagnostic(service, {
+    organizationId: publication.organization_id,
+    provider: "instagram",
+    service: "instagram",
+    error,
+    category: "publicacao",
+    severity,
+    eventKey: `publicacao:instagram:agendada:${publication.id}`,
+    title: "Falha na publicação agendada do Instagram",
+    targetKind: "publication",
+    targetId: publication.id,
+    metadata: { postId: publication.post_id, stage: publication.processing_stage ?? null, attempts: publication.attempts ?? 0 }
+  });
 }
 
 export async function POST(request: Request) {
@@ -233,6 +250,7 @@ async function processPublication(publicationId: string) {
       organizationId: publication.organization_id,
       postId: publication.post_id
     });
+    await recordInstagramPublicationDiagnostic(service, publication, errorMessage, "critico").catch(() => undefined);
     return NextResponse.json({ error: errorMessage, attempts }, { status: 500 });
   }
 
@@ -325,6 +343,7 @@ async function processPublication(publicationId: string) {
             organizationId: publication.organization_id,
             postId: publication.post_id
           });
+          await recordInstagramPublicationDiagnostic(service, publication, message, "critico").catch(() => undefined);
           return NextResponse.json({ error: message, attempts: currentAttempts }, { status: 500 });
         }
 
@@ -341,6 +360,7 @@ async function processPublication(publicationId: string) {
             updated_at: now
           })
           .eq("id", publicationId);
+        await recordInstagramPublicationDiagnostic(service, publication, message, "aviso").catch(() => undefined);
         return NextResponse.json({ ok: true, status: "retry_scheduled", error: message, nextAttemptAt: nextPollAt() });
       }
 
@@ -514,6 +534,7 @@ async function processPublication(publicationId: string) {
         postId: publication.post_id
       });
     }
+    if (publication) await recordInstagramPublicationDiagnostic(service, publication, message, "critico").catch(() => undefined);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

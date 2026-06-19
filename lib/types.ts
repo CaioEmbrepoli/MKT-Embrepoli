@@ -591,6 +591,16 @@ export type ErrorLog = {
   action: string | null;
   profileId: string | null;
   createdAt: string;
+  category?: "integracao" | "publicacao" | "fila" | "cron" | "webhook" | "comentarios" | "metricas" | "sistema";
+  severity?: "aviso" | "erro" | "critico";
+  eventKey?: string | null;
+  title?: string | null;
+  targetKind?: string | null;
+  targetId?: string | null;
+  metadata?: Record<string, unknown>;
+  occurrenceCount?: number;
+  lastSeenAt?: string | null;
+  resolvedAt?: string | null;
 };
 
 export type CommentStatus = "novo" | "respondido" | "ignorado";

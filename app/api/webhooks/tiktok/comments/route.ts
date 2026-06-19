@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { commentServiceClient, createServerQuestionsFromComments, getDefaultOrganizationId, recordCommentWebhookEvent, upsertServerComments } from "@/lib/comment-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 function safeText(value: unknown) {
   return String(value ?? "").trim();
@@ -30,10 +31,12 @@ function extractTikTokComment(payload: any) {
 }
 
 export async function POST(request: Request) {
+  let service: ReturnType<typeof commentServiceClient> | null = null;
+  let organizationId = "";
   try {
     const payload = await request.json().catch(() => ({}));
-    const service = commentServiceClient();
-    const organizationId = await getDefaultOrganizationId(service);
+    service = commentServiceClient();
+    organizationId = await getDefaultOrganizationId(service);
     const eventId = safeText(payload.event_id || payload.id || crypto.randomUUID());
     const comment = extractTikTokComment(payload);
 
@@ -60,6 +63,21 @@ export async function POST(request: Request) {
       note: comment ? undefined : "A API TikTok atual ainda nao enviou texto de comentario neste evento."
     });
   } catch (error) {
+    if (service && organizationId) {
+      await recordDiagnostic(service, {
+        organizationId,
+        provider: "tiktok",
+        service: "tiktok",
+        error,
+        category: "webhook",
+        severity: "erro",
+        eventKey: "webhook:tiktok:comments",
+        title: "Falha no webhook de comentários do TikTok",
+        targetKind: "webhook",
+        targetId: "tiktok-comments",
+        metadata: { eventType: "comments" }
+      }).catch(() => undefined);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao processar webhook do TikTok." },
       { status: 400 }

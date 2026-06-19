@@ -29,6 +29,8 @@ export type ApiErrorAction =
   | "none";
 
 export type IntegrationHealthStatus = "ok" | "warning" | "error";
+export type DiagnosticCategory = "integracao" | "publicacao" | "fila" | "cron" | "webhook" | "comentarios" | "metricas" | "sistema";
+export type DiagnosticSeverity = "aviso" | "erro" | "critico";
 
 export type ApiErrorPayload = {
   error: string;
@@ -55,6 +57,21 @@ export type IntegrationHealth = {
   lastFailedAt?: string;
   resolvedAt?: string;
   updatedAt: string;
+};
+
+export type DiagnosticInput = {
+  organizationId: string;
+  provider: ApiErrorProvider;
+  service: string;
+  error: unknown;
+  category: DiagnosticCategory;
+  severity?: DiagnosticSeverity;
+  eventKey?: string;
+  title?: string;
+  profileId?: string;
+  targetKind?: string;
+  targetId?: string;
+  metadata?: Record<string, unknown>;
 };
 
 export class IntegrationApiError extends Error {
@@ -212,11 +229,49 @@ export function sanitizeTechnicalMessage(message: string) {
     .slice(0, 500);
 }
 
+const diagnosticCategoryTitle: Record<DiagnosticCategory, string> = {
+  integracao: "Falha na integracao",
+  publicacao: "Falha na publicacao",
+  fila: "Falha na fila de processamento",
+  cron: "Falha na tarefa automatica",
+  webhook: "Falha no webhook",
+  comentarios: "Falha ao processar comentario",
+  metricas: "Falha na atualizacao de metricas",
+  sistema: "Falha no sistema"
+};
+
+export async function recordDiagnostic(client: SupabaseClient, input: DiagnosticInput) {
+  const payload = toApiErrorPayload(input.error, {
+    provider: input.provider,
+    service: input.service
+  });
+  const { error } = await client.rpc("upsert_error_log_event", {
+    p_organization_id: input.organizationId,
+    p_provider: input.provider,
+    p_service: input.service,
+    p_error_code: payload.code,
+    p_user_message: payload.userMessage,
+    p_technical_message: payload.technicalMessage ?? null,
+    p_action: payload.action,
+    p_profile_id: input.profileId ?? null,
+    p_category: input.category,
+    p_severity: input.severity ?? "erro",
+    p_event_key: input.eventKey ?? null,
+    p_title: input.title ?? diagnosticCategoryTitle[input.category],
+    p_target_kind: input.targetKind ?? null,
+    p_target_id: input.targetId ?? null,
+    p_metadata: input.metadata ?? {}
+  });
+  if (error) throw error;
+  return payload;
+}
+
 export async function recordIntegrationFailure(
   client: SupabaseClient,
   organizationId: string,
   payload: ApiErrorPayload,
-  profileId?: string
+  profileId?: string,
+  diagnostic?: Omit<DiagnosticInput, "organizationId" | "provider" | "service" | "error" | "profileId">
 ) {
   try {
     const now = new Date().toISOString();
@@ -234,16 +289,19 @@ export async function recordIntegrationFailure(
       resolved_at: null,
       updated_at: now
     }, { onConflict: "organization_id,provider,service" });
-    await client.from("error_logs").insert({
-      organization_id: organizationId,
+    await recordDiagnostic(client, {
+      organizationId,
       provider: payload.provider,
       service: payload.service,
-      error_code: payload.code ?? null,
-      user_message: payload.userMessage ?? null,
-      technical_message: payload.technicalMessage ?? null,
-      action: payload.action ?? null,
-      profile_id: profileId ?? null,
-      created_at: now
+      error: payload,
+      profileId,
+      category: diagnostic?.category ?? "integracao",
+      severity: diagnostic?.severity ?? "erro",
+      eventKey: diagnostic?.eventKey ?? `integracao:${payload.provider}:${payload.service}:${payload.code}`,
+      title: diagnostic?.title,
+      targetKind: diagnostic?.targetKind,
+      targetId: diagnostic?.targetId,
+      metadata: diagnostic?.metadata
     });
   } catch (error) {
     console.warn("[integration-health] failed to record", error);

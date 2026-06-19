@@ -60,6 +60,35 @@ function getJwtRole(request: Request) {
   }
 }
 
+function sanitizeDiagnosticMessage(value: unknown) {
+  return String(value ?? "Erro desconhecido.")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/access_token=([^&\s]+)/gi, "access_token=[redacted]")
+    .replace(/refresh_token=([^&\s]+)/gi, "refresh_token=[redacted]")
+    .slice(0, 500);
+}
+
+async function recordQueueDiagnostic(service: ReturnType<typeof createClient>, job: QueueJob, error: unknown) {
+  const technicalMessage = sanitizeDiagnosticMessage(error instanceof Error ? error.message : error);
+  await service.rpc("upsert_error_log_event", {
+    p_organization_id: job.organization_id,
+    p_provider: "youtube",
+    p_service: "youtube",
+    p_error_code: "provider_api_error",
+    p_user_message: "A fila de upload do YouTube não conseguiu concluir este vídeo.",
+    p_technical_message: technicalMessage,
+    p_action: "retry",
+    p_profile_id: job.created_by ?? null,
+    p_category: "fila",
+    p_severity: "critico",
+    p_event_key: `fila:youtube:job:${job.id}`,
+    p_title: "Falha na fila de upload do YouTube",
+    p_target_kind: "youtube_upload_queue",
+    p_target_id: job.id,
+    p_metadata: { postId: job.post_id, publicationId: job.post_publication_id }
+  });
+}
+
 function extractDriveFileId(url: string): string | null {
   const m1 = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
   if (m1) return m1[1];
@@ -405,6 +434,7 @@ async function processJob(service: ReturnType<typeof createClient>, requestedJob
       last_heartbeat_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }).eq("id", (job ?? picked).id);
+    await recordQueueDiagnostic(service, job ?? picked, error).catch(() => undefined);
     throw error;
   }
 }

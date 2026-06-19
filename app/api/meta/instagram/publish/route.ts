@@ -52,9 +52,10 @@ function shouldPersistInstagramThumbnail(format?: string | null) {
 
 export async function POST(request: Request) {
   let context: MetaRequestContext | null = null;
+  let body: PublishBody = {};
   try {
     context = await metaRequestContext(request);
-    const body = await request.json().catch(() => ({})) as PublishBody;
+    body = await request.json().catch(() => ({})) as PublishBody;
 
     const connection = await getInstagramConnection(context);
     const scheduledAt = parseScheduledAt(body.scheduledAt);
@@ -224,7 +225,15 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("[meta/instagram/publish]", error);
     const payload = toApiErrorPayload(error, { provider: "instagram", service: "instagram" });
-    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId);
+    if (context) await recordIntegrationFailure(context.service, context.organizationId, payload, context.userId, {
+      category: "publicacao",
+      severity: "critico",
+      eventKey: `publicacao:instagram:imediata:${body?.postId ?? "sem-post"}:${payload.code}`,
+      title: "Falha ao publicar no Instagram",
+      targetKind: "post",
+      targetId: body?.postId,
+      metadata: { format: body?.format ?? null, mode: "imediata" }
+    });
     return NextResponse.json(payload, { status: 500 });
   }
 }

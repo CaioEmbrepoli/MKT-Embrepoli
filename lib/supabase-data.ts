@@ -97,6 +97,23 @@ export type AppData = {
   conversions: Conversion[];
 };
 
+export type InitialAppData = Pick<
+  AppData,
+  | "profiles"
+  | "profileAreas"
+  | "profileModulePermissions"
+  | "channels"
+  | "campaigns"
+  | "posts"
+  | "postReviewAssets"
+  | "ideas"
+  | "tasks"
+  | "metrics"
+  | "salesClients"
+  | "salesFunnelStages"
+  | "callSchedules"
+>;
+
 const EMBREPOLI_ORG_ID = "00000000-0000-0000-0000-000000000001";
 
 export async function ensureCurrentProfile(client: SupabaseClient): Promise<Profile | null> {
@@ -135,6 +152,86 @@ async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
     page++;
   }
   return all;
+}
+
+// Data required to choose and render the user's first dashboard. Heavier modules
+// continue loading after the app is visible so login does not wait on every table.
+export async function loadInitialAppData(client: SupabaseClient, currentProfile?: Profile | null): Promise<InitialAppData> {
+  const profile = currentProfile ?? await ensureCurrentProfile(client);
+  const organizationId = profile?.id ? await getOrganizationId(client, profile.id) : EMBREPOLI_ORG_ID;
+
+  const metricsPromise = fetchAllRows<Record<string, unknown>>(
+    () => client.from("post_metrics").select("*").eq("organization_id", organizationId)
+  );
+  const [
+    profiles,
+    profileAreas,
+    profileModulePermissions,
+    channels,
+    campaigns,
+    campaignAssignees,
+    posts,
+    postAssignees,
+    reviewAssets,
+    reviewComments,
+    ideas,
+    ideaAttachments,
+    tasks,
+    taskAssignees,
+    checklist,
+    comments,
+    attachments,
+    salesClientsData,
+    salesFunnelStagesData,
+    callSchedulesData
+  ] = await Promise.all([
+    client.from("profiles").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("profile_areas").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("profile_module_permissions").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("channels").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("campaigns").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("campaign_assignees").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("posts").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_assignees").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_review_assets").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("post_review_comments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("ideas").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("idea_attachments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("tasks").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_assignees").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_checklist_items").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_comments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("task_attachments").select("*").eq("organization_id", organizationId).limit(100000),
+    client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
+    client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }).limit(100000),
+    client.from("call_schedules").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000)
+  ]);
+  const metricsRaw = await metricsPromise;
+
+  const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
+  const postAssigneeMap = groupByParent(postAssignees.data ?? [], "post_id");
+  const reviewCommentMap = groupByParent(reviewComments.data ?? [], "asset_id");
+  const ideaAttachmentMap = groupByParent(ideaAttachments.data ?? [], "idea_id");
+  const taskAssigneeMap = groupByParent(taskAssignees.data ?? [], "task_id");
+  const checklistMap = groupByParent(checklist.data ?? [], "task_id");
+  const commentsMap = groupByParent(comments.data ?? [], "task_id");
+  const attachmentsMap = groupByParent(attachments.data ?? [], "task_id");
+
+  return {
+    profiles: (profiles.data ?? []).map(mapProfile),
+    profileAreas: (profileAreas.data ?? []).map(mapProfileArea),
+    profileModulePermissions: (profileModulePermissions.data ?? []).map(mapProfileModulePermission),
+    channels: (channels.data ?? []).map(mapChannel),
+    campaigns: (campaigns.data ?? []).map((item) => mapCampaign(item, campaignAssigneeMap.get(item.id) ?? [])),
+    posts: (posts.data ?? []).map((item) => mapPost(item, postAssigneeMap.get(item.id) ?? [])),
+    postReviewAssets: (reviewAssets.data ?? []).map((item) => mapReviewAsset(item, reviewCommentMap.get(item.id) ?? [])),
+    ideas: (ideas.data ?? []).map((item) => mapIdea(item, ideaAttachmentMap.get(item.id) ?? [])),
+    tasks: (tasks.data ?? []).map((item) => mapTask(item, taskAssigneeMap.get(item.id) ?? [], checklistMap.get(item.id) ?? [], commentsMap.get(item.id) ?? [], attachmentsMap.get(item.id) ?? [])),
+    metrics: metricsRaw.map(mapMetric),
+    salesClients: (salesClientsData.data ?? []).map(mapSalesClient),
+    salesFunnelStages: (salesFunnelStagesData.data ?? []).map(mapSalesFunnelStage),
+    callSchedules: (callSchedulesData.data ?? []).map(mapCallSchedule)
+  };
 }
 
 export async function loadAppData(client: SupabaseClient): Promise<AppData> {
@@ -1430,7 +1527,17 @@ function mapErrorLog(row: any): ErrorLog {
     technicalMessage: row.technical_message ?? null,
     action: row.action ?? null,
     profileId: row.profile_id ?? null,
-    createdAt: row.created_at ?? new Date().toISOString()
+    createdAt: row.created_at ?? new Date().toISOString(),
+    category: row.category ?? "integracao",
+    severity: row.severity ?? "erro",
+    eventKey: row.event_key ?? null,
+    title: row.title ?? null,
+    targetKind: row.target_kind ?? null,
+    targetId: row.target_id ?? null,
+    metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
+    occurrenceCount: Number(row.occurrence_count ?? 1),
+    lastSeenAt: row.last_seen_at ?? row.created_at ?? null,
+    resolvedAt: row.resolved_at ?? null
   };
 }
 

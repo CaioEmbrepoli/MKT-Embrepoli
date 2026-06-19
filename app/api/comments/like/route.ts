@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { googleRequestContext } from "@/lib/google-server";
 import { recordCommentWebhookEvent, type CommentSource } from "@/lib/comment-server";
+import { recordDiagnostic } from "@/lib/api-errors";
 
 const sourceLabels: Record<CommentSource, string> = {
   youtube: "YouTube",
@@ -17,12 +18,14 @@ function unsupportedLikeMessage(source: CommentSource) {
 }
 
 export async function POST(request: Request) {
+  let context: Awaited<ReturnType<typeof googleRequestContext>> | null = null;
+  let commentId = "";
   try {
     const body = await request.json().catch(() => ({}));
-    const commentId = String(body.commentId || "").trim();
+    commentId = String(body.commentId || "").trim();
     if (!commentId) return NextResponse.json({ error: "commentId obrigatorio." }, { status: 400 });
 
-    const context = await googleRequestContext(request);
+    context = await googleRequestContext(request);
     const { data: comment, error } = await context.service
       .from("comments")
       .select("id,source,external_id,video_id")
@@ -57,6 +60,22 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: message }, { status: 400 });
   } catch (error) {
+    if (context) {
+      await recordDiagnostic(context.service, {
+        organizationId: context.organizationId,
+        provider: "instagram",
+        service: "comments",
+        error,
+        category: "comentarios",
+        severity: "erro",
+        eventKey: `comentarios:acao:${commentId || "desconhecido"}`,
+        title: "Falha ao executar ação em comentário",
+        profileId: context.userId,
+        targetKind: "comment",
+        targetId: commentId || undefined,
+        metadata: { operation: "curtir" }
+      }).catch(() => undefined);
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao processar acao de comentario." },
       { status: 400 }
