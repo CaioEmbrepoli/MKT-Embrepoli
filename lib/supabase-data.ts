@@ -962,6 +962,14 @@ export async function replaceNotifications(client: SupabaseClient, notifications
     description: item.description,
     created_at: item.createdAt,
     read: item.read,
+    category: item.category ?? "system",
+    priority: item.priority ?? "normal",
+    source: item.source ?? null,
+    event_key: item.eventKey ?? null,
+    action_label: item.actionLabel ?? null,
+    archived_at: item.archivedAt ?? null,
+    read_at: item.readAt ?? null,
+    metadata: item.metadata ?? {},
     target_kind: item.targetKind,
     target_id: item.targetId
   }));
@@ -1427,7 +1435,24 @@ function mapErrorLog(row: any): ErrorLog {
 }
 
 function mapNotification(row: any): Notification {
-  return { id: row.id, userId: row.user_id, title: row.title, description: row.description, createdAt: row.created_at, read: row.read, targetKind: row.target_kind, targetId: row.target_id };
+  return {
+    id: row.id,
+    userId: row.user_id,
+    title: row.title,
+    description: row.description,
+    createdAt: row.created_at,
+    read: row.read,
+    category: row.category ?? "system",
+    priority: row.priority ?? "normal",
+    source: row.source ?? undefined,
+    eventKey: row.event_key ?? undefined,
+    actionLabel: row.action_label ?? undefined,
+    archivedAt: row.archived_at ?? undefined,
+    readAt: row.read_at ?? undefined,
+    metadata: row.metadata && typeof row.metadata === "object" ? row.metadata : {},
+    targetKind: row.target_kind,
+    targetId: row.target_id
+  };
 }
 
 function mapIntegrationHealth(row: any): IntegrationHealth {

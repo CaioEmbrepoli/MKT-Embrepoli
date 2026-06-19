@@ -549,7 +549,15 @@ export type Notification = {
   description: string;
   createdAt: string;
   read: boolean;
-  targetKind: "post" | "task" | "review" | "idea" | "campaign" | "metric" | "calendar" | "question" | "system";
+  category?: "comments" | "publications" | "reviews" | "tasks" | "metrics" | "questions" | "integrations" | "system";
+  priority?: "critical" | "high" | "normal" | "low";
+  source?: string;
+  eventKey?: string;
+  actionLabel?: string;
+  archivedAt?: string;
+  readAt?: string;
+  metadata?: Record<string, unknown>;
+  targetKind: "post" | "task" | "review" | "idea" | "campaign" | "metric" | "calendar" | "question" | "comment" | "publication" | "integration" | "system";
   targetId: string;
 };
 

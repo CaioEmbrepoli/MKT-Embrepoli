@@ -4,6 +4,7 @@ import { getGoogleAccessToken } from "@/lib/google-server";
 import type { GoogleRequestContext } from "@/lib/google-server";
 import { createMetricAfterPublish } from "@/lib/post-metrics-server";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
+import { upsertInternalNotifications } from "@/lib/notifications-server";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -87,6 +88,20 @@ export async function GET(request: Request) {
           organizationId: pub.organization_id,
           postId: pub.post_id
         });
+        await upsertInternalNotifications(service, {
+          organizationId: pub.organization_id,
+          recipientMode: "admins_managers",
+          title: "Publicação do YouTube com erro",
+          description: `${pub.title || "Publicação"}: ${message}`,
+          category: "publications",
+          priority: "critical",
+          source: "youtube",
+          eventKey: `publication:youtube:error:${pub.id}`,
+          targetKind: "publication",
+          targetId: pub.id,
+          actionLabel: "Abrir publicação",
+          metadata: { postId: pub.post_id, publicationId: pub.id, externalId: pub.external_id }
+        }).catch(() => {});
         results.push({ id: pub.id, status: "error", error: message });
         continue;
       }
@@ -125,6 +140,20 @@ export async function GET(request: Request) {
           // Falha na métrica não reverte a publicação
         }
 
+        await upsertInternalNotifications(service, {
+          organizationId: pub.organization_id,
+          recipientMode: "admins_managers",
+          title: "YouTube publicado",
+          description: pub.title || "Publicação confirmada pela API do YouTube.",
+          category: "publications",
+          priority: "normal",
+          source: "youtube",
+          eventKey: `publication:youtube:published:${pub.id}`,
+          targetKind: "publication",
+          targetId: pub.id,
+          actionLabel: "Abrir post",
+          metadata: { postId: pub.post_id, publicationId: pub.id, externalId: pub.external_id }
+        }).catch(() => {});
         results.push({ id: pub.id, status: "published" });
       } else if (uploadStatus === "failed" || uploadStatus === "rejected" || privacyStatus === "rejected") {
         const now = new Date().toISOString();
@@ -140,6 +169,20 @@ export async function GET(request: Request) {
           organizationId: pub.organization_id,
           postId: pub.post_id
         });
+        await upsertInternalNotifications(service, {
+          organizationId: pub.organization_id,
+          recipientMode: "admins_managers",
+          title: "Publicação do YouTube recusada",
+          description: `${pub.title || "Publicação"}: ${message}`,
+          category: "publications",
+          priority: "critical",
+          source: "youtube",
+          eventKey: `publication:youtube:error:${pub.id}`,
+          targetKind: "publication",
+          targetId: pub.id,
+          actionLabel: "Abrir publicação",
+          metadata: { postId: pub.post_id, publicationId: pub.id, externalId: pub.external_id }
+        }).catch(() => {});
         results.push({ id: pub.id, status: "error", error: message });
       } else {
         // Ainda agendado/processando — atualiza apenas o attempt
@@ -163,6 +206,20 @@ export async function GET(request: Request) {
         organizationId: pub.organization_id,
         postId: pub.post_id
       });
+      await upsertInternalNotifications(service, {
+        organizationId: pub.organization_id,
+        recipientMode: "admins_managers",
+        title: "Erro ao verificar YouTube",
+        description: `${pub.title || "Publicação"}: ${message}`,
+        category: "publications",
+        priority: "critical",
+        source: "youtube",
+        eventKey: `publication:youtube:error:${pub.id}`,
+        targetKind: "publication",
+        targetId: pub.id,
+        actionLabel: "Abrir publicação",
+        metadata: { postId: pub.post_id, publicationId: pub.id, externalId: pub.external_id }
+      }).catch(() => {});
       results.push({ id: pub.id, status: "error", error: message });
     }
   }

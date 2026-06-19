@@ -74,6 +74,7 @@ import {
   Copy,
   Check,
   Link2,
+  Archive,
   type LucideIcon
 } from "lucide-react";
 import type { Dispatch, FormEvent, ReactNode, RefObject, SetStateAction } from "react";
@@ -268,6 +269,16 @@ type ModalState =
   | { kind: "teamMember"; id: string }
   | { kind: "publish"; postId: string }
   | null;
+
+type CreateNotificationOptions = Partial<Pick<Notification, "category" | "priority" | "source" | "eventKey" | "actionLabel" | "metadata">>;
+type CreateNotificationsFn = (
+  userIds: string[],
+  title: string,
+  description: string,
+  targetKind: Notification["targetKind"],
+  targetId: string,
+  options?: CreateNotificationOptions
+) => void;
 
 type MediaPreviewItem = Pick<FileAttachment, "name" | "type" | "source" | "url" | "previewUrl" | "mimeType">;
 type PostReviewUploadOptions = { carousel?: boolean };
@@ -1367,6 +1378,10 @@ export default function Home() {
           description: task.title,
           createdAt: task.dueDate ? `${task.dueDate}T12:00:00` : new Date().toISOString(),
           read: false,
+          category: "tasks",
+          priority: "normal",
+          eventKey: `task-assigned:${task.id}:${currentUser.id}`,
+          actionLabel: "Abrir tarefa",
           targetKind: "task",
           targetId: task.id
         })),
@@ -1383,6 +1398,10 @@ export default function Home() {
           description: post.title,
           createdAt: post.publishAt || new Date().toISOString(),
           read: false,
+          category: "tasks",
+          priority: "normal",
+          eventKey: `post-assigned:${post.id}:${currentUser.id}`,
+          actionLabel: "Abrir post",
           targetKind: "post",
           targetId: post.id
         })),
@@ -1399,6 +1418,10 @@ export default function Home() {
           description: campaign.name,
           createdAt: campaign.startDate ? `${campaign.startDate}T09:00:00` : new Date().toISOString(),
           read: false,
+          category: "tasks",
+          priority: "normal",
+          eventKey: `campaign-assigned:${campaign.id}:${currentUser.id}`,
+          actionLabel: "Abrir campanha",
           targetKind: "campaign",
           targetId: campaign.id
         })),
@@ -1421,6 +1444,10 @@ export default function Home() {
             description: task.title,
             createdAt: `${task.dueDate}T08:00:00`,
             read: false,
+            category: "tasks",
+            priority: overdue ? "high" : "normal",
+            eventKey: `task-deadline:${task.id}:${currentUser.id}:${task.dueDate}`,
+            actionLabel: "Abrir tarefa",
             targetKind: "task",
             targetId: task.id
           };
@@ -1438,6 +1465,10 @@ export default function Home() {
           description: post.title,
           createdAt: post.publishAt,
           read: false,
+          category: "publications",
+          priority: "normal",
+          eventKey: `post-today:${post.id}:${currentUser.id}:${today}`,
+          actionLabel: "Abrir post",
           targetKind: "calendar",
           targetId: post.id
         })),
@@ -1453,11 +1484,16 @@ export default function Home() {
       ...derivedCalendarNotifications
     ];
     for (const item of derived) merged.set(item.id, item);
-    for (const item of notifications.filter((notification) => notification.userId === currentUser.id)) {
+    for (const item of notifications.filter((notification) => notification.userId === currentUser.id && !notification.archivedAt)) {
       merged.set(item.id, item);
     }
-    return Array.from(merged.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return Array.from(merged.values()).filter((item) => !item.archivedAt).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }, [notifications, derivedTaskNotifications, derivedPostNotifications, derivedCampaignNotifications, derivedDeadlineNotifications, derivedCalendarNotifications, currentUser.id]);
+  const marketingNotificationUserIds = useMemo(() =>
+    profiles
+      .filter((profile) => profile.active && hasModulePermission(profile, "marketing", "comentarios", "view", profileAreas, profileModulePermissions))
+      .map((profile) => profile.id),
+  [profiles, profileAreas, profileModulePermissions]);
   const seenNotificationIds = useRef<Set<string>>(new Set());
   const recentQuickTaskSignature = useRef<{ signature: string; at: number } | null>(null);
   const recentSubtaskSignature = useRef<{ signature: string; at: number } | null>(null);
@@ -1533,7 +1569,9 @@ export default function Home() {
   }, [loggedIn]);
 
   useEffect(() => {
-    const unreadIds = currentNotifications.filter((item) => !item.read).map((item) => item.id);
+    const unreadIds = currentNotifications
+      .filter((item) => !item.read && !item.archivedAt && item.priority !== "low")
+      .map((item) => item.id);
     const fresh = unreadIds.some((id) => !seenNotificationIds.current.has(id));
     if (seenNotificationIds.current.size && fresh && currentUser.notificationSound) {
       playNotificationSound();
@@ -2324,22 +2362,55 @@ export default function Home() {
     syncTasks((current) => current.map((task) => (task.id === taskId ? updater(task) : task)));
   }
 
-  function createNotifications(userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) {
+  const createNotifications: CreateNotificationsFn = (
+    userIds,
+    title,
+    description,
+    targetKind,
+    targetId,
+    options = {}
+  ) => {
     const uniqueUserIds = Array.from(new Set(userIds.filter(Boolean)));
     if (!uniqueUserIds.length) return;
     const createdAt = new Date().toISOString();
+    const eventKey = options.eventKey ?? `${targetKind}:${targetId}:${slug(title)}`;
     const newNotifications = uniqueUserIds.map((userId): Notification => ({
-      id: `notification:${targetKind}:${targetId}:${slug(title)}:${userId}`,
+      id: `notification:${eventKey}:${userId}`,
       userId,
       title,
       description,
       createdAt,
       read: false,
+      category: options.category ?? "system",
+      priority: options.priority ?? "normal",
+      source: options.source,
+      eventKey,
+      actionLabel: options.actionLabel,
+      metadata: options.metadata ?? {},
       targetKind,
       targetId
     }));
-    syncNotifications((current) => [...newNotifications.filter((item) => !current.some((existing) => existing.id === item.id)), ...current]);
-  }
+    syncNotifications((current) => {
+      const currentByEvent = new Map(current.filter((item) => item.eventKey).map((item) => [`${item.userId}:${item.eventKey}`, item]));
+      const nextById = new Map(current.map((item) => [item.id, item]));
+      for (const notification of newNotifications) {
+        const existing = currentByEvent.get(`${notification.userId}:${notification.eventKey}`);
+        if (existing) {
+          nextById.set(existing.id, {
+            ...existing,
+            ...notification,
+            id: existing.id,
+            read: existing.read,
+            readAt: existing.readAt,
+            archivedAt: undefined
+          });
+          continue;
+        }
+        if (!nextById.has(notification.id)) nextById.set(notification.id, notification);
+      }
+      return Array.from(nextById.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    });
+  };
 
   function reviewRecipients(post: EditorialPost) {
     const assignedManagers = post.assignedTo.filter((profileId) => {
@@ -2405,7 +2476,12 @@ export default function Home() {
     syncPostReviewAssets((current) => [...uploaded, ...current]);
     if (!isCover) {
       syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
-      createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id);
+      createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", uploaded[0].id, {
+        category: "reviews",
+        priority: "high",
+        actionLabel: "Abrir revisão",
+        eventKey: `review:new-asset:${uploaded[0].id}`
+      });
     }
   }
 
@@ -2468,7 +2544,12 @@ export default function Home() {
     syncPostReviewAssets((current) => [asset, ...current]);
     if (!isCover) {
       syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: "Revisão" } : item));
-      createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", asset.id);
+      createNotifications(reviewRecipients(post), "Nova arte para revisar", post.title, "review", asset.id, {
+        category: "reviews",
+        priority: "high",
+        actionLabel: "Abrir revisão",
+        eventKey: `review:new-asset:${asset.id}`
+      });
     }
   }
 
@@ -2494,7 +2575,12 @@ export default function Home() {
         : current.comments
     }));
     syncPosts((current) => current.map((item) => item.id === post.id ? { ...item, status: status === "Aprovado" ? "Aprovado" : "Revisão" } : item));
-    createNotifications([asset.uploadedBy].filter((id) => id !== currentUser.id), status === "Aprovado" ? "Arte aprovada" : "Ajustes solicitados", post.title, "review", asset.id);
+    createNotifications([asset.uploadedBy].filter((id) => id !== currentUser.id), status === "Aprovado" ? "Arte aprovada" : "Ajustes solicitados", post.title, "review", asset.id, {
+      category: "reviews",
+      priority: status === "Aprovado" ? "normal" : "high",
+      actionLabel: "Abrir post",
+      eventKey: `review:${status}:${asset.id}`
+    });
   }
 
   function addReviewComment(assetId: string, message: string) {
@@ -2828,6 +2914,8 @@ export default function Home() {
                 replaceCustomerQuestions(supabase!, next, prev).catch(() => setCustomerQuestions(prev));
               }}
               currentUser={currentUser}
+              marketingNotificationUserIds={marketingNotificationUserIds}
+              createNotifications={createNotifications}
               channels={channels}
               metrics={metrics}
             />
@@ -7653,7 +7741,9 @@ function Header({
 }) {
   const title = menu.find((item) => item.sectionId === activeSection)?.label ?? "Painel";
   const areaLabel = appAreas.find((area) => area.id === activeArea)?.label ?? "Marketing";
-  const unreadCount = notifications.filter((item) => !item.read).length;
+  const activeNotifications = notifications.filter((item) => !item.archivedAt);
+  const unreadCount = activeNotifications.filter((item) => !item.read).length;
+  const [notificationFilter, setNotificationFilter] = useState<"all" | "unread" | "critical" | NonNullable<Notification["category"]>>("all");
   const [isPwa, setIsPwa] = useState(false);
   useEffect(() => {
     setIsPwa(
@@ -7661,24 +7751,64 @@ function Header({
       (window.navigator as Navigator & { standalone?: boolean }).standalone === true
     );
   }, []);
-  // Notificações visíveis no painel: não lidas (sempre) + lidas há menos de 1 hora
-  const ONE_HOUR = 60 * 60 * 1000;
-  const panelNotifications = notifications.filter(
-    (n) => !n.read || Date.now() - new Date(n.createdAt).getTime() < ONE_HOUR
-  );
+  const categoryMeta: Record<NonNullable<Notification["category"]>, { label: string; icon: LucideIcon; className: string }> = {
+    comments: { label: "Comentários", icon: MessageSquare, className: "bg-pink-50 text-pink-700" },
+    publications: { label: "Publicações", icon: Megaphone, className: "bg-blue-50 text-blue-700" },
+    reviews: { label: "Revisões", icon: CheckCircle2, className: "bg-emerald-50 text-emerald-700" },
+    tasks: { label: "Tarefas", icon: ClipboardList, className: "bg-amber-50 text-amber-700" },
+    metrics: { label: "Métricas", icon: BarChart3, className: "bg-cyan-50 text-cyan-700" },
+    questions: { label: "Dúvidas", icon: HelpCircle, className: "bg-violet-50 text-violet-700" },
+    integrations: { label: "Integrações", icon: Settings, className: "bg-rose-50 text-rose-700" },
+    system: { label: "Sistema", icon: Bell, className: "bg-slate-100 text-slate-700" }
+  };
+  const priorityMeta: Record<NonNullable<Notification["priority"]>, { label: string; className: string }> = {
+    critical: { label: "Crítica", className: "border-rose-200 bg-rose-50 text-rose-700" },
+    high: { label: "Alta", className: "border-amber-200 bg-amber-50 text-amber-700" },
+    normal: { label: "Normal", className: "border-blue-100 bg-blue-50 text-blue-700" },
+    low: { label: "Baixa", className: "border-slate-200 bg-slate-50 text-slate-500" }
+  };
+  const notificationTabs: Array<{ id: typeof notificationFilter; label: string; count: number }> = [
+    { id: "all", label: "Todas", count: activeNotifications.length },
+    { id: "unread", label: "Não lidas", count: activeNotifications.filter((item) => !item.read).length },
+    { id: "critical", label: "Críticas", count: activeNotifications.filter((item) => item.priority === "critical" || item.priority === "high").length },
+    { id: "comments", label: "Comentários", count: activeNotifications.filter((item) => item.category === "comments").length },
+    { id: "publications", label: "Publicações", count: activeNotifications.filter((item) => item.category === "publications").length },
+    { id: "reviews", label: "Revisões", count: activeNotifications.filter((item) => item.category === "reviews").length },
+    { id: "system", label: "Sistema", count: activeNotifications.filter((item) => item.category === "system" || item.category === "integrations").length }
+  ];
+  const panelNotifications = activeNotifications.filter((notification) => {
+    if (notificationFilter === "all") return true;
+    if (notificationFilter === "unread") return !notification.read;
+    if (notificationFilter === "critical") return notification.priority === "critical" || notification.priority === "high";
+    if (notificationFilter === "system") return notification.category === "system" || notification.category === "integrations";
+    return notification.category === notificationFilter;
+  });
   function markNotificationsRead(ids: string[]) {
     const idsToRead = new Set(ids);
+    const readAt = new Date().toISOString();
     setNotifications((current) => {
       const visibleById = new Map(notifications.map((item) => [item.id, item]));
       const nextById = new Map(current.map((item) => [item.id, item]));
       for (const id of idsToRead) {
         const existing = nextById.get(id);
         if (existing) {
-          nextById.set(id, { ...existing, read: true });
+          nextById.set(id, { ...existing, read: true, readAt: existing.readAt ?? readAt });
           continue;
         }
         const visible = visibleById.get(id);
-        if (visible) nextById.set(id, { ...visible, read: true });
+        if (visible) nextById.set(id, { ...visible, read: true, readAt: visible.readAt ?? readAt });
+      }
+      return Array.from(nextById.values());
+    });
+  }
+  function archiveReadNotifications() {
+    const archivedAt = new Date().toISOString();
+    setNotifications((current) => {
+      const visibleById = new Map(notifications.map((item) => [item.id, item]));
+      const nextById = new Map(current.map((item) => [item.id, item]));
+      for (const notification of activeNotifications.filter((item) => item.read)) {
+        const existing = nextById.get(notification.id) ?? visibleById.get(notification.id);
+        if (existing) nextById.set(notification.id, { ...existing, archivedAt });
       }
       return Array.from(nextById.values());
     });
@@ -7686,6 +7816,7 @@ function Header({
   function openNotification(notification: Notification) {
     markNotificationsRead([notification.id]);
     setNotificationsOpen(false);
+    const postId = typeof notification.metadata?.postId === "string" ? notification.metadata.postId : "";
     if (notification.targetKind === "task") {
       setModal({ kind: "task", id: notification.targetId });
       return;
@@ -7713,6 +7844,19 @@ function Header({
     }
     if (notification.targetKind === "metric") {
       setModal({ kind: "metric", id: notification.targetId });
+      return;
+    }
+    if (notification.targetKind === "comment") {
+      openSection("marketing-comentarios");
+      return;
+    }
+    if (notification.targetKind === "publication") {
+      if (postId) setModal({ kind: "post", id: postId });
+      else openSection("marketing-calendario");
+      return;
+    }
+    if (notification.targetKind === "integration") {
+      openSection("marketing-configuracoes");
       return;
     }
     if (notification.targetKind === "question") {
@@ -7777,19 +7921,58 @@ function Header({
             {unreadCount > 0 && <span className="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-rose-600 px-1 text-[10px] font-black text-white">{unreadCount}</span>}
           </button>
           {notificationsOpen && (
-            <div className="absolute right-0 z-30 mt-3 w-96 rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl animate-fade-in-up">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="font-black">Notificações</h3>
-                <button onClick={() => markNotificationsRead(panelNotifications.map((n) => n.id))} className="text-xs font-black text-blue-700">Marcar lidas</button>
+            <div className="absolute right-0 z-30 mt-3 w-[28rem] max-w-[calc(100vw-2rem)] rounded-3xl border border-slate-200 bg-white p-4 shadow-2xl animate-fade-in-up">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-black">Notificações</h3>
+                  <p className="text-xs font-bold text-slate-400">{unreadCount ? `${unreadCount} não lida${unreadCount !== 1 ? "s" : ""}` : "Tudo em dia"}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => markNotificationsRead(panelNotifications.map((n) => n.id))} className="rounded-full bg-blue-50 px-3 py-1.5 text-xs font-black text-blue-700">Marcar lidas</button>
+                  <button onClick={archiveReadNotifications} className="rounded-full bg-slate-100 p-1.5 text-slate-600" title="Arquivar lidas">
+                    <Archive size={15} />
+                  </button>
+                </div>
               </div>
-              <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-                {panelNotifications.map((notification) => (
-                  <button key={notification.id} onClick={() => openNotification(notification)} className={`w-full rounded-2xl p-3 text-left transition hover:bg-blue-50 ${notification.read ? "bg-slate-50" : "bg-blue-50"}`}>
-                    <p className={`text-sm font-black ${notification.read ? "text-slate-600" : "text-slate-950"}`}>{notification.title}</p>
-                    <p className={`mt-1 line-clamp-2 text-xs font-bold ${notification.read ? "text-slate-400" : "text-slate-500"}`}>{notification.description}</p>
-                    <p className="mt-2 text-[11px] font-bold text-slate-400">{formatDate(notification.createdAt)}</p>
+              <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+                {notificationTabs.map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setNotificationFilter(tab.id)}
+                    className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-black transition ${notificationFilter === tab.id ? "bg-slate-950 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                  >
+                    {tab.label}{tab.count ? ` ${tab.count}` : ""}
                   </button>
                 ))}
+              </div>
+              <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+                {panelNotifications.map((notification) => {
+                  const category = categoryMeta[notification.category ?? "system"];
+                  const priority = priorityMeta[notification.priority ?? "normal"];
+                  const Icon = category.icon;
+                  return (
+                    <button key={notification.id} onClick={() => openNotification(notification)} className={`w-full rounded-2xl border p-3 text-left transition hover:border-blue-200 hover:bg-blue-50 ${notification.read ? "border-slate-100 bg-slate-50" : "border-blue-100 bg-white shadow-sm"}`}>
+                      <div className="flex items-start gap-3">
+                        <span className={`mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-2xl ${category.className}`}>
+                          <Icon size={17} />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span className={`truncate text-sm font-black ${notification.read ? "text-slate-600" : "text-slate-950"}`}>{notification.title}</span>
+                            {!notification.read && <span className="h-2 w-2 shrink-0 rounded-full bg-blue-600" />}
+                          </span>
+                          <span className={`mt-1 block line-clamp-2 text-xs font-bold ${notification.read ? "text-slate-400" : "text-slate-500"}`}>{notification.description}</span>
+                          <span className="mt-2 flex flex-wrap items-center gap-2 text-[11px] font-bold text-slate-400">
+                            <span>{formatDate(notification.createdAt)}</span>
+                            <span className={`rounded-full border px-2 py-0.5 ${priority.className}`}>{priority.label}</span>
+                            {notification.actionLabel && <span className="text-blue-700">{notification.actionLabel}</span>}
+                          </span>
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
                 {!panelNotifications.length && <p className="rounded-2xl bg-slate-50 p-4 text-sm font-bold text-slate-400">Nenhuma notificação por enquanto.</p>}
               </div>
             </div>
@@ -8488,7 +8671,7 @@ function Tasks(props: {
   channelById: Map<string, Channel>;
   funnelById: Map<string, FunnelStage>;
   setModal: Dispatch<SetStateAction<ModalState>>;
-  createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void;
+  createNotifications: CreateNotificationsFn;
   addQuickTask: (columnId: string, title: string) => void;
   areaScope?: "marketing" | "vendas";
 }) {
@@ -9032,7 +9215,7 @@ function TopHorizontalScroll({ children }: { children: ReactNode }) {
   );
 }
 
-function CalendarPostsKanban({ posts, postPublications, setPosts, ideas, currentUser, campaigns, channels, channelById, setModal, createNotifications }: { posts: EditorialPost[]; postPublications: PostPublication[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; ideas: Idea[]; currentUser: Profile; campaigns: Campaign[]; channels: Channel[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>>; createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void }) {
+function CalendarPostsKanban({ posts, postPublications, setPosts, ideas, currentUser, campaigns, channels, channelById, setModal, createNotifications }: { posts: EditorialPost[]; postPublications: PostPublication[]; setPosts: Dispatch<SetStateAction<EditorialPost[]>>; ideas: Idea[]; currentUser: Profile; campaigns: Campaign[]; channels: Channel[]; channelById: Map<string, Channel>; setModal: Dispatch<SetStateAction<ModalState>>; createNotifications: CreateNotificationsFn }) {
   const sensors = useSensors(useSensor(AnyButtonPointerSensor, { activationConstraint: { distance: 7 } }));
   const statuses = [...postStatuses, ...(posts.some((post) => !postStatuses.includes(derivedPostStatus(post, postPublications))) ? ["Outros"] : [])];
   const neutralCampaign = campaigns.find((campaign) => normalizeText(campaign.name) === "campanha neutra");
@@ -9100,9 +9283,9 @@ function CalendarPostsKanban({ posts, postPublications, setPosts, ideas, current
       }
       const normalizedStatus = targetStatus === "Outros" ? activePost.status : targetStatus;
       if (normalizedStatus !== activePost.status) {
-        if (normalizedStatus === "Revisão") createNotifications(activePost.assignedTo.filter((id) => id !== currentUser.id), "Post entrou em revisão", activePost.title, "post", activePost.id);
-        if (normalizedStatus === "Aprovado") createNotifications([activePost.createdBy, ...activePost.assignedTo].filter((id) => id !== currentUser.id), "Post aprovado", activePost.title, "post", activePost.id);
-        if (normalizedStatus === "Publicado") createNotifications([activePost.createdBy, ...activePost.assignedTo].filter((id) => id !== currentUser.id), "Post publicado", activePost.title, "post", activePost.id);
+        if (normalizedStatus === "Revisão") createNotifications(activePost.assignedTo.filter((id) => id !== currentUser.id), "Post entrou em revisão", activePost.title, "post", activePost.id, { category: "reviews", priority: "high", actionLabel: "Abrir post", eventKey: `post-review:${activePost.id}` });
+        if (normalizedStatus === "Aprovado") createNotifications([activePost.createdBy, ...activePost.assignedTo].filter((id) => id !== currentUser.id), "Post aprovado", activePost.title, "post", activePost.id, { category: "reviews", priority: "normal", actionLabel: "Abrir post", eventKey: `post-approved:${activePost.id}` });
+        if (normalizedStatus === "Publicado") createNotifications([activePost.createdBy, ...activePost.assignedTo].filter((id) => id !== currentUser.id), "Post publicado", activePost.title, "post", activePost.id, { category: "publications", priority: "normal", actionLabel: "Abrir post", eventKey: `post-published:${activePost.id}` });
       }
       const targetPosts = current.filter((post) => post.id !== activeId && statusFor(post) === targetStatus).sort((a, b) => (a.order ?? 1) - (b.order ?? 1));
       const moved = current.map((post) => post.id === activeId ? { ...post, status: normalizedStatus, order: targetPosts.length + 1 } : post);
@@ -13104,7 +13287,7 @@ function EntityModal(props: {
   addIdeaExternalLink: (ideaId: string, url: string) => void;
   prepareIdeaAttachment: (ideaId: string, file: File) => Promise<TaskAttachment>;
   openMediaPreview: (item: MediaPreviewItem) => void;
-  createNotifications: (userIds: string[], title: string, description: string, targetKind: Notification["targetKind"], targetId: string) => void;
+  createNotifications: CreateNotificationsFn;
   setCampaigns: Dispatch<SetStateAction<Campaign[]>>;
   metrics: PostMetric[];
   setMetrics: Dispatch<SetStateAction<PostMetric[]>>;
@@ -15000,7 +15183,12 @@ function TaskModal({ task, profiles, profileById, funnelStages, taskColumns, tas
         <DetailRow label="Criado por"><span className="font-bold text-slate-600">{profileById.get(task.createdBy)?.name}</span></DetailRow>
         <DetailRow label="Responsáveis"><MultiSelect label="" values={task.assignedTo} profiles={profiles} onChange={(values) => {
           const added = values.filter((id) => !task.assignedTo.includes(id) && id !== currentUser.id);
-          if (added.length) createNotifications(added, "Tarefa atribuída", task.title, "task", task.id);
+          if (added.length) createNotifications(added, "Tarefa atribuída", task.title, "task", task.id, {
+            category: "tasks",
+            priority: "normal",
+            actionLabel: "Abrir tarefa",
+            eventKey: `task-assigned:${task.id}`
+          });
           updateTask(task.id, (current) => ({ ...current, assignedTo: values }));
         }} /></DetailRow>
         <DetailRow label="Data de conclusão">
@@ -15498,11 +15686,16 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
       ));
     }
     const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
-    if (newAssignees.length) createNotifications(newAssignees, "Post atribuído", value.title, "post", value.id);
+    if (newAssignees.length) createNotifications(newAssignees, "Post atribuído", value.title, "post", value.id, {
+      category: "tasks",
+      priority: "normal",
+      actionLabel: "Abrir post",
+      eventKey: `post-assigned:${value.id}`
+    });
     if (editing && editing.status !== value.status) {
-      if (value.status === "Revisão") createNotifications(value.assignedTo.filter((id) => id !== currentUser.id), "Post entrou em revisão", value.title, "post", value.id);
-      if (value.status === "Aprovado") createNotifications([value.createdBy, ...value.assignedTo].filter((id) => id !== currentUser.id), "Post aprovado", value.title, "post", value.id);
-      if (value.status === "Publicado") createNotifications([value.createdBy, ...value.assignedTo].filter((id) => id !== currentUser.id), "Post publicado", value.title, "post", value.id);
+      if (value.status === "Revisão") createNotifications(value.assignedTo.filter((id) => id !== currentUser.id), "Post entrou em revisão", value.title, "post", value.id, { category: "reviews", priority: "high", actionLabel: "Abrir post", eventKey: `post-review:${value.id}` });
+      if (value.status === "Aprovado") createNotifications([value.createdBy, ...value.assignedTo].filter((id) => id !== currentUser.id), "Post aprovado", value.title, "post", value.id, { category: "reviews", priority: "normal", actionLabel: "Abrir post", eventKey: `post-approved:${value.id}` });
+      if (value.status === "Publicado") createNotifications([value.createdBy, ...value.assignedTo].filter((id) => id !== currentUser.id), "Post publicado", value.title, "post", value.id, { category: "publications", priority: "normal", actionLabel: "Abrir post", eventKey: `post-published:${value.id}` });
     }
     close();
   }
@@ -16963,7 +17156,12 @@ function IdeaModalV2({ modal, currentUser, profiles, channels, productLines, veh
     };
     setIdeas((current) => editing ? current.map((idea) => idea.id === value.id ? value : idea) : [value, ...current]);
     if (creating) {
-      createNotifications(profiles.filter((profile) => profile.id !== currentUser.id && profile.active).map((profile) => profile.id), "Nova ideia cadastrada", value.title, "idea", value.id);
+      createNotifications(profiles.filter((profile) => profile.id !== currentUser.id && profile.active).map((profile) => profile.id), "Nova ideia cadastrada", value.title, "idea", value.id, {
+        category: "tasks",
+        priority: "low",
+        actionLabel: "Abrir ideia",
+        eventKey: `idea-created:${value.id}`
+      });
     }
     close();
   }
@@ -17049,7 +17247,12 @@ function CampaignModalV2({ modal, currentUser, profiles, campaignAudiences, prod
     const value: Campaign = { id: editing?.id ?? crypto.randomUUID(), name: String(form.get("name")), objective: String(form.get("objective")), audience, message: String(form.get("message")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), startDate: String(form.get("startDate")), endDate: String(form.get("endDate")), status: editing?.status ?? "Planejada" };
     setCampaigns((current) => editing ? current.map((item) => item.id === value.id ? value : item) : [value, ...current]);
     const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
-    if (newAssignees.length) createNotifications(newAssignees, "Campanha atribuída", value.name, "campaign", value.id);
+    if (newAssignees.length) createNotifications(newAssignees, "Campanha atribuída", value.name, "campaign", value.id, {
+      category: "tasks",
+      priority: "normal",
+      actionLabel: "Abrir campanha",
+      eventKey: `campaign-assigned:${value.id}`
+    });
     close();
   }
   return <><EntityForm onSubmit={submit}><TextInput name="name" label="Nome" required defaultValue={editing?.name} /><label className="block text-sm font-bold text-slate-600">Público<select value={audienceChoice} onChange={(event) => setAudienceChoice(event.target.value)} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-slate-950 outline-none focus:border-blue-500">{audienceNames.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>{normalizeText(audienceChoice) === "outros" && <TextInput name="customAudience" label="Qual público?" defaultValue={audienceNames.includes(editing?.audience ?? "") ? "" : editing?.audience} />}<TextArea name="objective" label="Objetivo" defaultValue={editing?.objective} /><TextInput name="message" label="Mensagem" defaultValue={editing?.message} /><Select name="productLineId" label="Linha de produto" defaultValue={editing?.productLineId} options={[["", "Sem linha específica"], ...productLines.map((item) => [item.id, item.name])]} /><Select name="vehicleTypeId" label="Tipo de veículo" defaultValue={editing?.vehicleTypeId} options={[["", "Sem tipo específico"], ...vehicleTypes.map((item) => [item.id, item.name])]} /><Select name="funnelStageId" label="Funil" defaultValue={editing?.funnelStageId} options={[["", "Sem funil"], ...funnelStages.map((item) => [item.id, item.name])]} /><MultiSelectField name="assignedTo" label="Responsáveis" profiles={profiles} values={editing?.assignedTo ?? []} /><TextInput name="startDate" label="Início" type="date" defaultValue={editing?.startDate} /><TextInput name="endDate" label="Fim" type="date" defaultValue={editing?.endDate} /><SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton></EntityForm>{editing && <DeleteButton label="Excluir campanha" onDelete={() => { setCampaigns((current) => current.filter((campaign) => campaign.id !== editing.id)); close(); }} />}</>;
@@ -19337,6 +19540,8 @@ function ComentariosSection({
   questions,
   setQuestions,
   currentUser,
+  marketingNotificationUserIds,
+  createNotifications,
   channels,
   metrics,
 }: {
@@ -19347,6 +19552,8 @@ function ComentariosSection({
   questions: CustomerQuestion[];
   setQuestions: (next: CustomerQuestion[]) => void;
   currentUser: Profile;
+  marketingNotificationUserIds: string[];
+  createNotifications: CreateNotificationsFn;
   channels: Channel[];
   metrics: PostMetric[];
 }) {
@@ -19648,6 +19855,7 @@ function ComentariosSection({
       if (qId) c.bankQuestionId = qId;
     }
 
+    const newImportedComments = newComments.filter((comment) => !existingCommentByKey.has(commentStableKey(comment)));
     const importedKeys = new Set(newComments.map(commentStableKey));
     const merged = [...newComments, ...comments.filter((comment) => !importedKeys.has(commentStableKey(comment)))];
     setComments(merged);
@@ -19686,6 +19894,43 @@ function ComentariosSection({
       if (supabase) {
         await insertCustomerQuestions(supabase, newQuestions).catch(() => {});
       }
+    }
+
+    const sourceLabel = source === "youtube" ? "YouTube" : source === "instagram" ? "Instagram" : source === "tiktok" ? "TikTok" : "Facebook";
+    const openNewComments = newImportedComments.filter((comment) => comment.status === "novo");
+    if (openNewComments.length) {
+      createNotifications(
+        marketingNotificationUserIds,
+        `${openNewComments.length} novo${openNewComments.length !== 1 ? "s" : ""} comentário${openNewComments.length !== 1 ? "s" : ""} no ${sourceLabel}`,
+        openNewComments.slice(0, 3).map((comment) => `${comment.authorName}: ${comment.text}`).join(" · "),
+        "comment",
+        source,
+        {
+          category: "comments",
+          priority: openNewComments.some((comment) => comment.isRelevant || comment.addedToBank) ? "high" : "normal",
+          source,
+          actionLabel: "Abrir comentários",
+          eventKey: `comments:import:${source}:${new Date().toISOString().slice(0, 16)}`,
+          metadata: { source, count: openNewComments.length }
+        }
+      );
+    }
+    if (bankItems.length) {
+      createNotifications(
+        marketingNotificationUserIds,
+        `${bankItems.length} dúvida${bankItems.length !== 1 ? "s" : ""} enviada${bankItems.length !== 1 ? "s" : ""} ao Banco`,
+        bankItems.slice(0, 3).map((comment) => comment.text).join(" · "),
+        "question",
+        "comments-import",
+        {
+          category: "questions",
+          priority: "high",
+          source,
+          actionLabel: "Abrir Banco de Dúvidas",
+          eventKey: `questions:comments-import:${source}:${new Date().toISOString().slice(0, 16)}`,
+          metadata: { source, count: bankItems.length }
+        }
+      );
     }
 
     setCommentImportOpen(false);

@@ -100,6 +100,12 @@ export async function GET(request: Request) {
       description,
       target_kind: "system",
       target_id: conn.id,
+      category: "integrations",
+      priority: daysLeft <= 0 ? "critical" : "high",
+      source: conn.service,
+      event_key: `integration:google-token-expiry:${conn.id}:${cycleKey}`,
+      action_label: "Abrir integrações",
+      metadata: { service: conn.service, daysLeft },
       read: false,
       created_at: new Date(now).toISOString()
     }));

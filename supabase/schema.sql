@@ -584,8 +584,26 @@ create table if not exists public.notifications (
   read boolean not null default false,
   target_kind text not null,
   target_id text not null,
+  category text not null default 'system',
+  priority text not null default 'normal',
+  source text,
+  event_key text,
+  action_label text,
+  archived_at timestamptz,
+  read_at timestamptz,
+  metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
+
+create index if not exists notifications_org_user_created_idx
+on public.notifications (organization_id, user_id, created_at desc);
+
+create index if not exists notifications_org_user_unread_idx
+on public.notifications (organization_id, user_id, read, archived_at);
+
+create unique index if not exists notifications_org_user_event_key_uidx
+on public.notifications (organization_id, user_id, event_key)
+where event_key is not null;
 
 create table if not exists public.google_connections (
   id text primary key default gen_random_uuid()::text,

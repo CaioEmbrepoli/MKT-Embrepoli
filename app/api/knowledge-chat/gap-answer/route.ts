@@ -98,6 +98,12 @@ export async function POST(request: Request) {
         description: gap.question_text.slice(0, 140),
         target_kind: "question",
         target_id: questionId,
+        category: "questions",
+        priority: "normal",
+        source: "knowledge_chat",
+        event_key: `question:review:${questionId}`,
+        action_label: "Abrir Banco de Dúvidas",
+        metadata: { gapId: gap.id },
         read: false,
         created_at: now
       }));
