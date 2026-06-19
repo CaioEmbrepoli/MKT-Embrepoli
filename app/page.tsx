@@ -137,6 +137,7 @@ import {
   replaceCustomerQuestions,
   insertCustomerQuestions,
   saveCustomerQuestion,
+  mapCustomerQuestion,
   deleteCustomerQuestion,
   saveComment,
   deleteComment,
@@ -234,6 +235,7 @@ import type {
   PostPublication,
   YouTubeUploadQueueItem,
   Visitor,
+  TrackingSession,
   Person,
   Conversion
 } from "@/lib/types";
@@ -520,6 +522,28 @@ function saoPauloLocalDate(value = new Date()) {
 function localSaoPauloToUtcIso(year: number, month: number, day: number, time: string) {
   const [hour = 23, minute = 59] = time.split(":").map(Number);
   return new Date(Date.UTC(year, month - 1, day, hour + 3, minute, 0, 0)).toISOString();
+}
+
+function addSaoPauloDays(date: { year: number; month: number; day: number }, days: number) {
+  return saoPauloLocalDate(new Date(Date.UTC(date.year, date.month - 1, date.day + days, 12)));
+}
+
+function saoPauloPeriodRange(period: string, from = new Date()) {
+  if (period === "all") return null;
+  const days = Math.max(1, Number(period) || 1);
+  const today = saoPauloLocalDate(from);
+  const startLocal = days === 1 ? today : addSaoPauloDays(today, -(days - 1));
+  const nextLocal = addSaoPauloDays(today, 1);
+  return {
+    start: new Date(localSaoPauloToUtcIso(startLocal.year, startLocal.month, startLocal.day, "00:00")),
+    end: new Date(localSaoPauloToUtcIso(nextLocal.year, nextLocal.month, nextLocal.day, "00:00"))
+  };
+}
+
+function isInDateRange(value: string, range: { start: Date; end: Date } | null) {
+  if (!range) return true;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date >= range.start && date < range.end;
 }
 
 function lastDayOfMonth(year: number, month: number) {
@@ -953,18 +977,48 @@ function normalizeCommentPart(value: string | undefined) {
   return (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+function normalizeCommentTimestamp(value?: string) {
+  const raw = (value ?? "").trim();
+  if (!raw) return undefined;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function canonicalCommentExternalId(source: Comment["source"], externalId?: string) {
+  const raw = (externalId ?? "").trim();
+  if (!raw) return undefined;
+  if (source === "youtube") {
+    const clean = raw.replace(/^(yt_comment:)+/i, "");
+    return clean ? `yt_comment:${clean}` : undefined;
+  }
+  if (source === "instagram") {
+    const clean = raw.replace(/^(instagram:)+/i, "");
+    return clean ? `instagram:${clean}` : undefined;
+  }
+  if (source === "tiktok") {
+    const clean = raw.replace(/^(tiktok:)+/i, "");
+    return clean ? `tiktok:${clean}` : undefined;
+  }
+  if (source === "facebook") {
+    const clean = raw.replace(/^(facebook:)+/i, "");
+    return clean ? `facebook:${clean}` : undefined;
+  }
+  return raw;
+}
+
 function commentImportSignature(comment: Pick<Comment, "source" | "videoId" | "authorName" | "text" | "publishedAt">) {
   return [
     comment.source,
     comment.videoId ?? "",
     normalizeCommentPart(comment.authorName),
     normalizeCommentPart(comment.text),
-    comment.publishedAt ?? ""
+    normalizeCommentTimestamp(comment.publishedAt) ?? ""
   ].join("|");
 }
 
 function commentStableKey(comment: Pick<Comment, "source" | "externalId" | "videoId" | "authorName" | "text" | "publishedAt">) {
-  if (comment.externalId) return `${comment.source}:external:${comment.externalId}`;
+  const externalId = canonicalCommentExternalId(comment.source, comment.externalId);
+  if (externalId) return `${comment.source}:external:${externalId}`;
   return `${comment.source}:signature:${commentImportSignature(comment)}`;
 }
 
@@ -999,7 +1053,7 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
   return {
     ...existing,
     source: incoming.source,
-    externalId: existing.externalId ?? incoming.externalId,
+    externalId: existing.externalId ?? canonicalCommentExternalId(incoming.source, incoming.externalId),
     importSignature: existing.importSignature ?? incoming.importSignature,
     videoId: incoming.videoId ?? existing.videoId,
     videoTitle: incoming.videoTitle ?? existing.videoTitle,
@@ -1017,7 +1071,7 @@ function mergeImportedComment(existing: Comment | undefined, incoming: Comment):
     status,
     addedToBank,
     bankQuestionId: existing.bankQuestionId ?? incoming.bankQuestionId,
-    publishedAt: incoming.publishedAt ?? existing.publishedAt,
+    publishedAt: normalizeCommentTimestamp(existing.publishedAt) ?? normalizeCommentTimestamp(incoming.publishedAt) ?? existing.publishedAt,
     retentionUntil: existing.retentionUntil ?? incoming.retentionUntil,
     processedAt: existing.processedAt ?? incoming.processedAt,
     isRelevant: existing.isRelevant ?? incoming.isRelevant ?? addedToBank,
@@ -1128,18 +1182,22 @@ function formatDateOnly(value: Date) {
 }
 
 function formatCommentTimestamp(value?: string) {
-  if (!value) return "";
+  if (!value) return "Data não disponível";
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
+  if (Number.isNaN(date.getTime())) return "Data não disponível";
   const now = new Date();
-  const time = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(date);
-  if (sameDay(date, now)) return `Hoje · ${time}`;
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (sameDay(date, yesterday)) return `Ontem · ${time}`;
-  const diffDays = Math.floor((now.getTime() - date.getTime()) / 86400000);
+  const time = new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" }).format(date);
+  const local = saoPauloLocalDate(date);
+  const today = saoPauloLocalDate(now);
+  const yesterday = addSaoPauloDays(today, -1);
+  const dayId = (item: { year: number; month: number; day: number }) => `${item.year}-${String(item.month).padStart(2, "0")}-${String(item.day).padStart(2, "0")}`;
+  if (dayId(local) === dayId(today)) return `Hoje · ${time}`;
+  if (dayId(local) === dayId(yesterday)) return `Ontem · ${time}`;
+  const localMidday = Date.UTC(local.year, local.month - 1, local.day, 12);
+  const todayMidday = Date.UTC(today.year, today.month - 1, today.day, 12);
+  const diffDays = Math.floor((todayMidday - localMidday) / 86400000);
   if (diffDays >= 0 && diffDays < 7) return `${diffDays} dia${diffDays !== 1 ? "s" : ""} atrás`;
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(date);
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric", timeZone: "America/Sao_Paulo" }).format(date);
 }
 
 function toDateTimeLocalValue(value: Date) {
@@ -1182,6 +1240,7 @@ export default function Home() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [trackableLinks, setTrackableLinks] = useState<TrackableLink[]>([]);
   const [visitors, setVisitors] = useState<Visitor[]>([]);
+  const [trackingSessions, setTrackingSessions] = useState<TrackingSession[]>([]);
   const [persons, setPersons] = useState<Person[]>([]);
   const [conversions, setConversions] = useState<Conversion[]>([]);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
@@ -1577,6 +1636,7 @@ export default function Home() {
     setPostPublications(data.postPublications);
     setYoutubeUploadQueue(data.youtubeUploadQueue);
     setVisitors(data.visitors);
+    setTrackingSessions(data.trackingSessions);
     setPersons(data.persons);
     setConversions(data.conversions);
     setNotifications(data.notifications);
@@ -1641,6 +1701,9 @@ export default function Home() {
       "notifications",
       "comments",
       "auto_filters",
+      "visitors",
+      "tracking_sessions",
+      "persons",
       "conversions"
     ];
     const channel = supabase.channel("embrepoli-marketing-realtime");
@@ -2720,6 +2783,7 @@ export default function Home() {
               trackableLinks={trackableLinks}
               setTrackableLinks={syncTrackableLinks}
               visitors={visitors}
+              trackingSessions={trackingSessions}
               persons={persons}
               conversions={conversions}
               salesClients={salesClients}
@@ -9376,6 +9440,7 @@ function Metrics({
   trackableLinks,
   setTrackableLinks,
   visitors,
+  trackingSessions,
   persons,
   conversions,
   salesClients,
@@ -9410,6 +9475,7 @@ function Metrics({
   trackableLinks: TrackableLink[];
   setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
   visitors: Visitor[];
+  trackingSessions: TrackingSession[];
   persons: Person[];
   conversions: Conversion[];
   salesClients: SalesClient[];
@@ -9646,49 +9712,70 @@ function Metrics({
   }, [resolvedMetrics]);
   const activeChannelName = activeChannel === "all" ? "Geral" : (channelById.get(activeChannel)?.name ?? activeChannel);
 
-  const periodCutoff = useMemo(() => {
-    if (period === "all") return null;
-    return new Date(todayMs - Number(period) * 86400000);
-  }, [period, todayMs]);
+  const periodRange = useMemo(() => saoPauloPeriodRange(period, today), [period, todayMs]);
 
   const overviewMetrics = useMemo(() => resolvedMetrics.filter((m) => {
-    if (!periodCutoff) return true;
-    return new Date(`${m.date || todayIso()}T12:00:00`) >= periodCutoff;
-  }), [resolvedMetrics, periodCutoff]);
+    return isInDateRange(`${m.date || todayIso()}T12:00:00-03:00`, periodRange);
+  }), [resolvedMetrics, periodRange]);
 
-  const overviewVisitors = useMemo(() => visitors.filter((v) => {
-    if (!periodCutoff) return true;
-    return new Date(v.firstTouchAt) >= periodCutoff;
-  }), [visitors, periodCutoff]);
+  const overviewSessions = useMemo(() =>
+    trackingSessions.filter((session) => isInDateRange(session.startedAt, periodRange)),
+  [trackingSessions, periodRange]);
+
+  const overviewVisitorIds = useMemo(() =>
+    new Set(overviewSessions.map((session) => session.visitorId).filter(Boolean)),
+  [overviewSessions]);
+
+  const overviewVisitors = useMemo(() => {
+    if (!periodRange) return visitors;
+    return visitors.filter((visitor) => overviewVisitorIds.has(visitor.id));
+  }, [visitors, periodRange, overviewVisitorIds]);
 
   const overviewPersons = useMemo(() => persons.filter((p) => {
-    if (!periodCutoff) return true;
-    return new Date(p.createdAt) >= periodCutoff;
-  }), [persons, periodCutoff]);
+    return isInDateRange(p.createdAt, periodRange);
+  }), [persons, periodRange]);
 
   const overviewConversions = useMemo(() => conversions.filter((c) => {
-    if (!periodCutoff) return true;
-    return new Date(`${c.saleDate}T12:00:00`) >= periodCutoff;
-  }), [conversions, periodCutoff]);
+    return isInDateRange(`${c.saleDate}T12:00:00-03:00`, periodRange);
+  }), [conversions, periodRange]);
 
   const overviewConversionValue = useMemo(() =>
     overviewConversions.reduce((sum, conversion) => sum + conversion.saleValue, 0),
   [overviewConversions]);
 
   const overviewInsights = useMemo(() => adInsightsDaily.filter((ins) => {
-    if (!periodCutoff) return true;
-    return new Date(`${ins.date}T12:00:00`) >= periodCutoff;
-  }), [adInsightsDaily, periodCutoff]);
+    return isInDateRange(`${ins.date}T12:00:00-03:00`, periodRange);
+  }), [adInsightsDaily, periodRange]);
 
   const overviewVisitorsBySource = useMemo(() => {
-    const map: Record<string, { source: string | null; medium: string | null; count: number }> = {};
-    for (const v of overviewVisitors) {
-      const key = `${v.firstTouchSource ?? ""}|${v.firstTouchMedium ?? ""}`;
-      if (!map[key]) map[key] = { source: v.firstTouchSource, medium: v.firstTouchMedium, count: 0 };
-      map[key].count++;
+    const visitorById = new Map(visitors.map((visitor) => [visitor.id, visitor]));
+    const map: Record<string, { source: string | null; medium: string | null; visitorIds: Set<string> }> = {};
+    const addVisitorSource = (visitorId: string, source: string | null, medium: string | null) => {
+      if (!visitorId) return;
+      const key = `${source ?? ""}|${medium ?? ""}`;
+      if (!map[key]) map[key] = { source, medium, visitorIds: new Set<string>() };
+      map[key].visitorIds.add(visitorId);
+    };
+
+    if (periodRange) {
+      for (const session of overviewSessions) {
+        const visitor = visitorById.get(session.visitorId);
+        addVisitorSource(
+          session.visitorId,
+          session.utmSource ?? visitor?.firstTouchSource ?? null,
+          session.utmMedium ?? visitor?.firstTouchMedium ?? null
+        );
+      }
+    } else {
+      for (const visitor of visitors) {
+        addVisitorSource(visitor.id, visitor.firstTouchSource, visitor.firstTouchMedium);
+      }
     }
-    return Object.values(map).sort((a, b) => b.count - a.count).slice(0, 5);
-  }, [overviewVisitors]);
+    return Object.values(map)
+      .map((item) => ({ source: item.source, medium: item.medium, count: item.visitorIds.size }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }, [visitors, periodRange, overviewSessions]);
 
   const overviewLeadsByChannel = useMemo(() => {
     const map: Record<string, number> = {};
@@ -15260,6 +15347,8 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
   const [reviewOpen, setReviewOpen] = useState(false);
   const [cancelingPublicationId, setCancelingPublicationId] = useState("");
   const [publicationCancelError, setPublicationCancelError] = useState("");
+  const [publicationRescheduleError, setPublicationRescheduleError] = useState("");
+  const [reschedulingPublications, setReschedulingPublications] = useState(false);
   const [publicationDetailModal, setPublicationDetailModal] = useState<PostPublication | null>(null);
   const assets = editing ? postReviewAssets.filter((asset) => asset.postId === editing.id) : [];
   const canReview = hasModulePermission(currentUser, "marketing", "revisoes", "approve", profileAreas, profileModulePermissions);
@@ -15353,7 +15442,26 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
     setFormValue(form, "publishAt", defaultPublishAt);
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function syncActivePublicationSchedule(postId: string, publishAt: string) {
+    const activePublications = editingPublications.filter((publication) =>
+      publication.status === "scheduled" || publication.status === "pending" || publication.status === "processing"
+    );
+    if (!editing || editing.publishAt === publishAt || activePublications.length === 0) return null;
+    if (!supabase) throw new Error("Supabase não configurado.");
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) throw new Error("Sessão expirada. Entre novamente.");
+    const response = await fetch("/api/post-publications/reschedule", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ postId, publishAt })
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string; publicationIds?: string[]; scheduledAt?: string };
+    if (!response.ok) throw new Error(result.error ?? "Não foi possível sincronizar os agendamentos.");
+    return result;
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const status = editing?.status ?? "Produção";
@@ -15366,7 +15474,29 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
       return { ...entry, format: normalizePostFormatForChannel(entryChannel, entry.format) };
     });
     const value: EditorialPost = { id: editing?.id ?? crypto.randomUUID(), ideaId: String(form.get("ideaId") ?? "") || undefined, templateId: String(form.get("templateId") ?? "") || undefined, title: String(form.get("title")), channelId: mainEntry.channelId, campaignId: String(form.get("campaignId")), productLineId: String(form.get("productLineId")), vehicleTypeId: String(form.get("vehicleTypeId")), contentTypeId: String(form.get("contentTypeId")), funnelStageId: String(form.get("funnelStageId")), createdBy: editing?.createdBy ?? currentUser.id, assignedTo: form.getAll("assignedTo").map(String), status, format: normalizedMainFormat, extraChannels: normalizedExtraEntries, order: editing?.order ?? posts.filter((post) => post.status === status).length + 1, publishAt: String(form.get("publishAt")), description: String(form.get("description")), productionChecklist };
+    setPublicationRescheduleError("");
+    let rescheduleResult: Awaited<ReturnType<typeof syncActivePublicationSchedule>> = null;
+    if (editing && editing.publishAt !== value.publishAt) {
+      try {
+        setReschedulingPublications(true);
+        rescheduleResult = await syncActivePublicationSchedule(value.id, value.publishAt);
+      } catch (error) {
+        setPublicationRescheduleError(error instanceof Error ? error.message : "Erro ao sincronizar agendamentos.");
+        setReschedulingPublications(false);
+        return;
+      } finally {
+        setReschedulingPublications(false);
+      }
+    }
     setPosts((current) => editing ? current.map((post) => post.id === value.id ? value : post) : [value, ...current]);
+    if (rescheduleResult?.publicationIds?.length && rescheduleResult.scheduledAt) {
+      const ids = new Set(rescheduleResult.publicationIds);
+      setPostPublications?.((current) => current.map((publication) =>
+        ids.has(publication.id)
+          ? { ...publication, scheduledAt: rescheduleResult.scheduledAt, updatedAt: new Date().toISOString() }
+          : publication
+      ));
+    }
     const newAssignees = value.assignedTo.filter((id) => id !== currentUser.id && !(editing?.assignedTo ?? []).includes(id));
     if (newAssignees.length) createNotifications(newAssignees, "Post atribuído", value.title, "post", value.id);
     if (editing && editing.status !== value.status) {
@@ -15514,6 +15644,8 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
               <div className="md:col-span-2 space-y-2">
                 <p className="text-xs font-black uppercase tracking-wide text-slate-400">Publicações</p>
                 {publicationCancelError && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700">{publicationCancelError}</p>}
+                {publicationRescheduleError && <p className="rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700">{publicationRescheduleError}</p>}
+                {reschedulingPublications && <p className="rounded-2xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-700">Sincronizando data e horário com os agendamentos...</p>}
                 {pubs.map((pub) => {
                   const isDuplicate = pub.status === "scheduled" && (scheduledByPlatform[pub.platform] ?? 0) > 1;
                   return (
@@ -15563,7 +15695,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
           )}
           {editing && approvedCount > 0 ? (
             <div className="flex gap-3 md:col-span-2">
-              <SubmitButton className="flex-1">Salvar</SubmitButton>
+              <SubmitButton className="flex-1">{reschedulingPublications ? "Sincronizando..." : "Salvar"}</SubmitButton>
               <button
                 type="button"
                 onClick={() => setModal({ kind: "publish", postId: editing.id })}
@@ -15573,7 +15705,7 @@ function PostModalV2({ modal, setModal, currentUser, profiles, profileById, chan
               </button>
             </div>
           ) : (
-            <SubmitButton>{editing ? "Salvar" : "Criar"}</SubmitButton>
+            <SubmitButton>{reschedulingPublications ? "Sincronizando..." : editing ? "Salvar" : "Criar"}</SubmitButton>
           )}
         </EntityForm>
         {editing && <DeleteButton label="Excluir post" onDelete={() => { setPosts((current) => current.filter((post) => post.id !== editing.id)); close(); }} />}
@@ -16240,6 +16372,7 @@ function PublishModal({
     const scheduledDateTime = scheduledAt ? parseSaoPauloDateTime(scheduledAt) : null;
     const scheduledIsPast = scheduledDateTime !== null && scheduledDateTime.getTime() <= Date.now() + 2 * 60_000;
     const effectiveScheduledAt = scheduledIsPast ? null : scheduledAt;
+    const nextPostPublishAt = effectiveScheduledAt ? `${scheduledDate}T${scheduledTime}` : null;
     setChannelConfigs((prev) => prev.map((c) => {
       if (!c.enabled) return c;
       const platform = publishPlatformKey(channelById.get(c.channelId)?.name ?? "");
@@ -16282,12 +16415,21 @@ function PublishModal({
                   };
                   setPostPublications?.((current) => [newPub, ...current]);
                 }
+                if (nextPostPublishAt) {
+                  setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishAt: nextPostPublishAt, status: "Agendado" } : p));
+                }
                 return;
               }
               const { videoId, privacyStatus } = await res.json() as { videoId: string; privacyStatus?: string };
               const newStatus = (privacyStatus === "private" && effectiveScheduledAt) ? "Agendado" : "Publicado";
               updateConfig(config.channelId, { status: "success" });
-              setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishedVideoId: videoId, status: newStatus, publishedAt: new Date().toISOString() } : p));
+              setPosts((prev) => prev.map((p) => p.id === post.id ? {
+                ...p,
+                publishAt: nextPostPublishAt ?? p.publishAt,
+                publishedVideoId: videoId,
+                status: newStatus,
+                publishedAt: newStatus === "Publicado" ? new Date().toISOString() : p.publishedAt
+              } : p));
             } else {
               const data = await res.json().catch(() => ({})) as ({ error?: string } & Partial<ApiErrorPayload>);
               const errorDetail = apiErrorForDisplay(data, data.error ?? "Erro ao publicar.");
@@ -16343,6 +16485,7 @@ function PublishModal({
               updateConfig(config.channelId, { status: "success" });
               setPosts((prev) => prev.map((p) => p.id === post.id ? {
                 ...p,
+                publishAt: nextPostPublishAt ?? p.publishAt,
                 status: newStatus,
                 publishedAt: data.status === "scheduled" ? p.publishedAt : (data.publishedAt ?? new Date().toISOString()),
               } : p));
@@ -19380,16 +19523,18 @@ function ComentariosSection({
     const newComments: Comment[] = items.map((item) => {
       const autoAdded = activeFilters.some((f) => matchesFilter(item.text, f));
       const mediaFields = item as Partial<Pick<Comment, "mediaThumbnailUrl" | "mediaUrl" | "mediaPermalink" | "authorAvatarUrl" | "externalReplies">>;
+      const externalId = canonicalCommentExternalId(source, source === "youtube" ? `yt_comment:${item.commentId}` : item.commentId);
+      const publishedAt = normalizeCommentTimestamp(item.publishedAt);
       const incoming: Comment = {
         id: crypto.randomUUID(),
         source,
-        externalId: source === "youtube" ? `yt_comment:${item.commentId}` : item.commentId,
+        externalId,
         importSignature: commentImportSignature({
           source,
           videoId: item.videoId,
           authorName: item.authorName,
           text: item.text,
-          publishedAt: item.publishedAt
+          publishedAt
         }),
         videoId: item.videoId,
         videoTitle: item.videoTitle,
@@ -19405,7 +19550,7 @@ function ComentariosSection({
         response: item.channelReply,
         responseExternalId: "channelReplyExternalId" in item ? item.channelReplyExternalId : undefined,
         addedToBank: autoAdded,
-        publishedAt: item.publishedAt,
+        publishedAt,
         retentionUntil: addDaysIso(importStartedAt, 90),
         processedAt: autoAdded ? importStartedAt : undefined,
         isRelevant: autoAdded,
@@ -19605,7 +19750,7 @@ function ComentariosSection({
         headers: await commentAuthHeaders(),
         body: JSON.stringify({ commentId: comment.id, response, mode: isEditing ? "edit" : "create", kind: "primary" })
       });
-      const data = await res.json().catch(() => ({})) as { error?: string; externalReplyId?: string; comment?: any };
+      const data = await res.json().catch(() => ({})) as { error?: string; externalReplyId?: string; comment?: any; question?: any };
       if (!res.ok) throw new Error(data.error || "Erro ao responder comentário no canal.");
       const responseHistory = Array.isArray(data.comment?.response_history) ? data.comment.response_history : comment.responseHistory ?? [];
       const updated = comments.map((c) => c.id === comment.id ? {
@@ -19613,9 +19758,19 @@ function ComentariosSection({
         response,
         responseExternalId: data.comment?.response_external_id ?? data.externalReplyId ?? c.responseExternalId,
         responseHistory,
-        status: "respondido" as CommentStatus
+        status: "respondido" as CommentStatus,
+        bankQuestionId: data.comment?.bank_question_id ?? c.bankQuestionId,
+        addedToBank: c.addedToBank || Boolean(data.comment?.bank_question_id)
       } : c);
       setComments(updated);
+
+      // Sincroniza o Banco de Dúvidas com a resposta, sem precisar reimportar nada.
+      if (data.question) {
+        const mappedQuestion = mapCustomerQuestion(data.question);
+        setQuestions(questions.some((q) => q.id === mappedQuestion.id)
+          ? questions.map((q) => q.id === mappedQuestion.id ? mappedQuestion : q)
+          : [mappedQuestion, ...questions]);
+      }
     } catch (err) {
       setReplyError((prev) => ({ ...prev, [comment.id]: err instanceof Error ? err.message : "Erro ao enviar resposta." }));
     }

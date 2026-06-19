@@ -9,7 +9,7 @@ export type CommentExternalReplyInput = {
   authorName: string;
   authorAvatarUrl?: string;
   text: string;
-  publishedAt: string;
+  publishedAt?: string;
   likes?: number;
   isOwnReply?: boolean;
 };
@@ -60,6 +60,7 @@ type ExistingCommentRow = {
   import_signature: string | null;
   retention_until: string | null;
   created_at: string | null;
+  published_at: string | null;
   response: string | null;
   status: "novo" | "respondido" | "ignorado" | null;
   media_thumbnail_url: string | null;
@@ -120,6 +121,35 @@ function normalizeCommentText(value: string) {
   return sanitizeText(value).toLowerCase().replace(/\s+/g, " ").slice(0, 500);
 }
 
+function normalizeCommentTimestamp(value: unknown) {
+  const raw = sanitizeText(value);
+  if (!raw) return undefined;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function canonicalCommentExternalId(source: CommentSource, externalId?: string) {
+  const raw = sanitizeText(externalId);
+  if (!raw) return undefined;
+  if (source === "youtube") {
+    const clean = raw.replace(/^(yt_comment:)+/i, "");
+    return clean ? `yt_comment:${clean}` : undefined;
+  }
+  if (source === "instagram") {
+    const clean = raw.replace(/^(instagram:)+/i, "");
+    return clean ? `instagram:${clean}` : undefined;
+  }
+  if (source === "tiktok") {
+    const clean = raw.replace(/^(tiktok:)+/i, "");
+    return clean ? `tiktok:${clean}` : undefined;
+  }
+  if (source === "facebook") {
+    const clean = raw.replace(/^(facebook:)+/i, "");
+    return clean ? `facebook:${clean}` : undefined;
+  }
+  return raw;
+}
+
 function normalizeExternalReplies(value: unknown): CommentExternalReplyInput[] {
   if (!Array.isArray(value)) return [];
   const byId = new Map<string, CommentExternalReplyInput>();
@@ -134,7 +164,7 @@ function normalizeExternalReplies(value: unknown): CommentExternalReplyInput[] {
       authorName: sanitizeText(row.authorName) || "Instagram",
       authorAvatarUrl: sanitizeText(row.authorAvatarUrl) || undefined,
       text,
-      publishedAt: sanitizeText(row.publishedAt) || new Date().toISOString(),
+      publishedAt: normalizeCommentTimestamp(row.publishedAt),
       likes: Number(row.likes ?? 0),
       isOwnReply: Boolean(row.isOwnReply)
     });
@@ -170,10 +200,10 @@ function normalizeResponseHistory(value: unknown): CommentResponseHistoryInput[]
 }
 
 export function stripKnownCommentPrefix(source: CommentSource, externalId: string) {
-  if (source === "youtube") return externalId.replace(/^yt_comment:/, "");
-  if (source === "instagram") return externalId.replace(/^instagram:/, "");
-  if (source === "tiktok") return externalId.replace(/^tiktok:/, "");
-  if (source === "facebook") return externalId.replace(/^facebook:/, "");
+  if (source === "youtube") return externalId.replace(/^(yt_comment:)+/i, "");
+  if (source === "instagram") return externalId.replace(/^(instagram:)+/i, "");
+  if (source === "tiktok") return externalId.replace(/^(tiktok:)+/i, "");
+  if (source === "facebook") return externalId.replace(/^(facebook:)+/i, "");
   return externalId;
 }
 
@@ -183,7 +213,7 @@ export function buildCommentSignature(comment: Pick<ServerCommentInput, "source"
     comment.videoId ?? "",
     sanitizeText(comment.authorName).toLowerCase(),
     normalizeCommentText(comment.text),
-    comment.publishedAt ?? ""
+    normalizeCommentTimestamp(comment.publishedAt) ?? ""
   ].join("|");
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
@@ -194,7 +224,7 @@ function addDaysIso(days: number) {
 
 function normalizeComment(comment: ServerCommentInput): ServerCommentInput {
   const source = comment.source;
-  const externalId = comment.externalId?.trim() || undefined;
+  const externalId = canonicalCommentExternalId(source, comment.externalId);
   const normalized: ServerCommentInput = {
     ...comment,
     source,
@@ -216,13 +246,16 @@ function normalizeComment(comment: ServerCommentInput): ServerCommentInput {
     likes: Number(comment.likes ?? 0),
     status: comment.status ?? (comment.response ? "respondido" : "novo"),
     addedToBank: Boolean(comment.addedToBank),
-    classificationStatus: comment.classificationStatus ?? "pendente"
+    classificationStatus: comment.classificationStatus ?? "pendente",
+    publishedAt: normalizeCommentTimestamp(comment.publishedAt)
   };
   return normalized;
 }
 
 function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput, existing?: ExistingCommentRow) {
   const createdAt = existing?.created_at ?? new Date().toISOString();
+  const existingPublishedAt = normalizeCommentTimestamp(existing?.published_at);
+  const incomingPublishedAt = normalizeCommentTimestamp(comment.publishedAt);
   const retentionUntil = existing?.retention_until ?? comment.retentionUntil ?? addDaysIso(90);
   const responseHistory = comment.responseHistory?.length
     ? comment.responseHistory
@@ -281,7 +314,7 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
     response_external_id: responseExternalId,
     response_history: responseHistory,
     bank_question_id: bankQuestionId,
-    published_at: comment.publishedAt || null,
+    published_at: existingPublishedAt ?? incomingPublishedAt ?? null,
     retention_until: retentionUntil,
     processed_at: comment.processedAt ?? null,
     is_relevant: existing?.is_relevant ?? comment.isRelevant ?? null,
@@ -303,7 +336,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (externalIds.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name,author_avatar_url")
+      .select("id,source,external_id,import_signature,retention_until,created_at,published_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name,author_avatar_url")
       .eq("organization_id", organizationId)
       .in("external_id", externalIds);
     if (error) throw error;
@@ -313,7 +346,7 @@ export async function upsertServerComments(service: SupabaseClient, organization
   if (signatures.length) {
     const { data, error } = await service
       .from("comments")
-      .select("id,source,external_id,import_signature,retention_until,created_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name,author_avatar_url")
+      .select("id,source,external_id,import_signature,retention_until,created_at,published_at,response,response_external_id,response_history,status,media_thumbnail_url,media_url,media_permalink,external_replies,added_to_bank,bank_question_id,classification_status,suggested_reply,is_relevant,author_name,author_avatar_url")
       .eq("organization_id", organizationId)
       .in("import_signature", signatures);
     if (error) throw error;

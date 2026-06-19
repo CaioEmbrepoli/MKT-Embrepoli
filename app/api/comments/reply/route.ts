@@ -28,11 +28,13 @@ type CommentRow = {
   source: string | null;
   external_id: string | null;
   video_id: string | null;
+  video_title: string | null;
   author_name: string | null;
   text: string | null;
   response: string | null;
   response_external_id: string | null;
   response_history: unknown;
+  bank_question_id: string | null;
 };
 
 function isRecoverableInstagramActionError(error: unknown) {
@@ -257,7 +259,7 @@ export async function POST(request: Request) {
     const context = await googleRequestContext(request);
     const { data: comment, error } = await context.service
       .from("comments")
-      .select("id,organization_id,source,external_id,video_id,author_name,text,response,response_external_id,response_history")
+      .select("id,organization_id,source,external_id,video_id,video_title,author_name,text,response,response_external_id,response_history,bank_question_id")
       .eq("organization_id", context.organizationId)
       .eq("id", commentId)
       .maybeSingle();
@@ -346,6 +348,64 @@ export async function POST(request: Request) {
       .maybeSingle();
     if (updateError) throw updateError;
 
+    // Sincroniza a dúvida vinculada (Banco de Dúvidas) com a resposta principal.
+    // Vínculo via bank_question_id (caso já exista) ou, como fallback, via external_id
+    // (mesma chave usada na criação da dúvida) — sempre a partir do que já está no banco,
+    // nunca refazendo chamada à API do canal.
+    let updatedQuestion: Record<string, unknown> | null = null;
+    if (kind === "primary") {
+      let linkedQuestionId = comment.bank_question_id as string | null;
+
+      if (!linkedQuestionId && externalId) {
+        const { data: matched } = await context.service
+          .from("customer_questions")
+          .select("id")
+          .eq("organization_id", context.organizationId)
+          .eq("external_id", externalId)
+          .maybeSingle();
+        linkedQuestionId = matched?.id ?? null;
+
+        if (linkedQuestionId) {
+          await context.service
+            .from("comments")
+            .update({ bank_question_id: linkedQuestionId })
+            .eq("organization_id", context.organizationId)
+            .eq("id", commentId);
+        }
+      }
+
+      if (linkedQuestionId) {
+        const { error: questionUpdateError } = await context.service
+          .from("customer_questions")
+          .update({
+            answer_text: responseText,
+            status: "respondido",
+            answered_at: now
+          })
+          .eq("organization_id", context.organizationId)
+          .eq("id", linkedQuestionId);
+        if (questionUpdateError) throw questionUpdateError;
+
+        // Backfill do nome do vídeo/post só se a dúvida ainda não tiver um.
+        if (comment.video_title) {
+          await context.service
+            .from("customer_questions")
+            .update({ video_title: comment.video_title })
+            .eq("organization_id", context.organizationId)
+            .eq("id", linkedQuestionId)
+            .is("video_title", null);
+        }
+
+        const { data: questionRow } = await context.service
+          .from("customer_questions")
+          .select("*")
+          .eq("organization_id", context.organizationId)
+          .eq("id", linkedQuestionId)
+          .maybeSingle();
+        updatedQuestion = questionRow ?? null;
+      }
+    }
+
     await recordCommentWebhookEvent(context.service, {
       organizationId: context.organizationId,
       source,
@@ -357,7 +417,7 @@ export async function POST(request: Request) {
       processedAt: now
     });
 
-    return NextResponse.json({ ok: true, externalReplyId, comment: updated });
+    return NextResponse.json({ ok: true, externalReplyId, comment: updated, question: updatedQuestion });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Erro ao responder comentario." },

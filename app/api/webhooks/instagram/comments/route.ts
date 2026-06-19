@@ -34,8 +34,25 @@ function safeText(value: unknown) {
 }
 
 function instagramExternalCommentId(commentId: string) {
-  const cleanId = safeText(commentId).replace(/^instagram:/, "");
+  const cleanId = safeText(commentId).replace(/^(instagram:)+/i, "");
   return cleanId ? `instagram:${cleanId}` : "";
+}
+
+function normalizeInstagramTimestamp(value: unknown) {
+  const raw = safeText(value);
+  if (!raw) return undefined;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function normalizeInstagramCreatedTime(value: unknown) {
+  const raw = safeText(value);
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return new Date(seconds * 1000).toISOString();
+  }
+  return normalizeInstagramTimestamp(raw);
 }
 
 function normalizeInstagramUsername(value: unknown) {
@@ -150,9 +167,7 @@ function extractCommentEvent(payload: any, entry: any, change: any) {
   const text = safeText(value.text || value.comment?.text || value.message);
   const authorName = safeText(value.from?.username || value.from?.name || value.username || "Instagram");
   const authorAvatarUrl = safeText(value.from?.profile_picture_url || value.profile_picture_url);
-  const publishedAt = value.created_time
-    ? new Date(Number(value.created_time) * 1000).toISOString()
-    : safeText(value.timestamp || new Date().toISOString());
+  const publishedAt = normalizeInstagramCreatedTime(value.created_time) ?? normalizeInstagramTimestamp(value.timestamp);
   const eventId = safeText(value.id || value.comment_id || change?.field || entry?.time || crypto.randomUUID());
 
   return { value, commentId, parentCommentId, mediaId, text, authorName, authorAvatarUrl, publishedAt, eventId, payload };
@@ -217,7 +232,7 @@ export async function POST(request: Request) {
           await recordInstagramDiagnostic({
             eventType: "webhook_connection_not_found",
             eventId: event.eventId,
-            externalCommentId: event.commentId ? `instagram:${event.commentId.replace(/^instagram:/, "")}` : undefined,
+            externalCommentId: event.commentId ? instagramExternalCommentId(event.commentId) : undefined,
             externalMediaId: event.mediaId,
             error: "Nenhuma conexao Instagram encontrada para o evento.",
             payload: {
@@ -262,6 +277,25 @@ export async function POST(request: Request) {
           const hasActor = hasInstagramActor(event.value);
           const isOwnReply = hasActor && isOwnInstagramActor(event.value, connection);
           let updated = null;
+          if (!event.publishedAt) {
+            await recordCommentWebhookEvent(service, {
+              organizationId: connection.organization_id,
+              source: "instagram",
+              eventId: `${event.eventId}:reply_missing_timestamp`,
+              externalCommentId: parentExternalId,
+              externalMediaId: event.mediaId,
+              eventType: "comment_reply_missing_timestamp",
+              payload: {
+                field: safeText(change?.field || "comment"),
+                replyId: replyExternalId,
+                hasCreatedTime: Boolean(event.value?.created_time),
+                hasTimestamp: Boolean(event.value?.timestamp)
+              },
+              processedAt: null,
+              error: "Reply do Instagram recebido sem timestamp confiavel."
+            });
+            storedEvents += 1;
+          }
           if (isOwnReply) {
             updated = await updateServerCommentResponseByExternalId(
               service,
@@ -382,6 +416,23 @@ export async function POST(request: Request) {
         }
 
         if (comment?.text) {
+          if (!comment.publishedAt) {
+            await recordCommentWebhookEvent(service, {
+              organizationId: connection.organization_id,
+              source: "instagram",
+              eventId: `${event.eventId}:missing_timestamp`,
+              externalCommentId: comment.externalId,
+              externalMediaId: comment.videoId,
+              eventType: "comment_missing_timestamp",
+              payload: {
+                hasCreatedTime: Boolean(event.value?.created_time),
+                hasTimestamp: Boolean(event.value?.timestamp)
+              },
+              processedAt: null,
+              error: "Comentario do Instagram recebido sem timestamp confiavel."
+            });
+            storedEvents += 1;
+          }
           const upserted = await upsertServerComments(service, connection.organization_id, [comment]);
           const bankResult = await createServerQuestionsFromComments(service, connection.organization_id, upserted as Array<Record<string, any>>);
           processed += 1;

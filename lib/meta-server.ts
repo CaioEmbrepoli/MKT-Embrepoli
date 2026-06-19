@@ -96,13 +96,13 @@ export type InstagramCommentItem = {
   authorAvatarUrl?: string;
   text: string;
   likes: number;
-  publishedAt: string;
+  publishedAt?: string;
   externalReplies?: {
     id: string;
     authorName: string;
     authorAvatarUrl?: string;
     text: string;
-    publishedAt: string;
+    publishedAt?: string;
     likes?: number;
     isOwnReply?: boolean;
   }[];
@@ -436,6 +436,13 @@ function normalizeInstagramCommentText(value: unknown): string {
   return sanitizeText(String(value ?? "")).toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function normalizeInstagramTimestamp(value: unknown): string | undefined {
+  const raw = sanitizeText(String(value ?? ""));
+  if (!raw) return undefined;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
 export async function fetchInstagramMedia(
   accessToken: string,
   instagramAccountId: string,
@@ -496,7 +503,7 @@ export async function fetchInstagramCommentsForMedia(
       throw error;
     }
     for (const item of data.data ?? []) {
-      const publishedAt = String(item.timestamp || media.timestamp || new Date().toISOString());
+      const publishedAt = normalizeInstagramTimestamp(item.timestamp);
       const publishedDate = publishedAt ? new Date(publishedAt) : null;
       if (options.since && publishedDate && !Number.isNaN(publishedDate.getTime()) && publishedDate < options.since) {
         continue;
@@ -508,6 +515,7 @@ export async function fetchInstagramCommentsForMedia(
         const replyId = String(reply.id || "");
         const actorId = sanitizeText(String(reply.from?.id || reply.owner?.id || ""));
         const actorUsername = normalizeInstagramUsername(reply.from?.username || reply.username);
+        const replyPublishedAt = normalizeInstagramTimestamp(reply.timestamp) ?? publishedAt;
         const isOwnReply = Boolean(
           (ownAccountId && actorId === ownAccountId) ||
           (ownUsername && actorUsername === ownUsername)
@@ -517,7 +525,7 @@ export async function fetchInstagramCommentsForMedia(
           authorName,
           authorAvatarUrl: authorAvatarUrl || undefined,
           text: sanitizeText(String(reply.text || "")),
-          publishedAt: String(reply.timestamp || publishedAt),
+          publishedAt: replyPublishedAt,
           likes: Number(reply.like_count || 0),
           isOwnReply
         };
@@ -553,33 +561,33 @@ export async function fetchInstagramCommentsForMedia(
   const replySignatures = new Set<string>();
   for (const comment of comments) {
     for (const reply of comment.externalReplies ?? []) {
-      const cleanReplyId = reply.id.replace(/^instagram:/, "");
+      const cleanReplyId = reply.id.replace(/^(instagram:)+/i, "");
       if (cleanReplyId) replyCommentIds.add(cleanReplyId);
       replySignatures.add([
         comment.videoId,
         normalizeInstagramUsername(reply.authorName),
         normalizeInstagramCommentText(reply.text),
-        reply.publishedAt
+        normalizeInstagramTimestamp(reply.publishedAt) ?? ""
       ].join("|"));
     }
   }
 
   return comments.filter((item) => {
     if (!item.commentId || !item.text) return false;
-    const cleanCommentId = item.commentId.replace(/^instagram:/, "");
+    const cleanCommentId = item.commentId.replace(/^(instagram:)+/i, "");
     if (replyCommentIds.has(cleanCommentId)) return false;
     const signature = [
       item.videoId,
       normalizeInstagramUsername(item.authorName),
       normalizeInstagramCommentText(item.text),
-      item.publishedAt
+      normalizeInstagramTimestamp(item.publishedAt) ?? ""
     ].join("|");
     return !replySignatures.has(signature);
   });
 }
 
 export async function fetchInstagramCommentById(accessToken: string, commentId: string, fallbackMediaId = "") {
-  const cleanId = commentId.replace(/^instagram:/, "");
+  const cleanId = commentId.replace(/^(instagram:)+/i, "");
   let data: any;
   try {
     data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
@@ -604,12 +612,12 @@ export async function fetchInstagramCommentById(accessToken: string, commentId: 
     authorAvatarUrl: sanitizeText(String(data.from?.profile_picture_url || data.profile_picture_url || "")) || undefined,
     text: sanitizeText(String(data.text || "")),
     likes: Number(data.like_count || 0),
-    publishedAt: String(data.timestamp || media.timestamp || new Date().toISOString())
+    publishedAt: normalizeInstagramTimestamp(data.timestamp)
   } satisfies InstagramCommentItem;
 }
 
 export async function validateInstagramComment(accessToken: string, commentId: string) {
-  const cleanId = commentId.replace(/^instagram:/, "").trim();
+  const cleanId = commentId.replace(/^(instagram:)+/i, "").trim();
   if (!cleanId) throw new Error("Comentario Instagram sem ID externo.");
   return graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
     fields: "id,text,username,timestamp,like_count,media{id}"
@@ -622,7 +630,7 @@ export async function findInstagramCommentOnMedia(
   target: { authorName?: string; text?: string },
   options: { maxPages?: number } = {}
 ) {
-  const cleanMediaId = mediaId.replace(/^instagram:/, "").trim();
+  const cleanMediaId = mediaId.replace(/^(instagram:)+/i, "").trim();
   if (!cleanMediaId) return null;
 
   const targetAuthor = normalizeInstagramUsername(target.authorName);
@@ -657,7 +665,7 @@ export async function findInstagramCommentOnMedia(
 }
 
 export async function fetchInstagramMediaById(accessToken: string, mediaId: string): Promise<InstagramMediaItem | null> {
-  const cleanId = mediaId.replace(/^instagram:/, "").trim();
+  const cleanId = mediaId.replace(/^(instagram:)+/i, "").trim();
   if (!cleanId) return null;
   try {
     const data = await graphGet<any>(`${igApiBase(accessToken)}/${cleanId}`, accessToken, {
@@ -670,14 +678,14 @@ export async function fetchInstagramMediaById(accessToken: string, mediaId: stri
 }
 
 export async function replyToInstagramComment(accessToken: string, commentId: string, message: string) {
-  const cleanId = commentId.replace(/^instagram:/, "");
+  const cleanId = commentId.replace(/^(instagram:)+/i, "");
   return graphPost<{ id?: string }>(`${igApiBase(accessToken)}/${cleanId}/replies`, accessToken, {
     message
   });
 }
 
 export async function likeInstagramComment(accessToken: string, commentId: string) {
-  const cleanId = commentId.replace(/^instagram:/, "");
+  const cleanId = commentId.replace(/^(instagram:)+/i, "");
   return graphPost<{ success?: boolean }>(`${igApiBase(accessToken)}/${cleanId}/likes`, accessToken, {});
 }
 

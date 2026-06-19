@@ -731,6 +731,33 @@ Metas no board de Tarefas têm suporte a reset periódico:
 - Cards e gráfico devem consumir o mesmo estado filtrado.
 - Períodos usados: 7d, 14d e 30d.
 
+### Origem dos Leads e Atribuição
+- Objetivo: ligar acessos do site, links rastreáveis, WhatsApp, formulários e vendas para entender o histórico antes da conversão.
+- O identificador principal deve ser o `visitor_id` criado pelo script de tracking no navegador (`_emb_vid` no `localStorage`).
+- `visitor_id` não aparece automaticamente em uma compra; ele precisa ser enviado pelo checkout, formulário, botão de WhatsApp ou webhook.
+- Tabelas já preparadas para atribuição:
+  - `visitors`: visitante anônimo.
+  - `tracking_sessions`: sessões/acessos do visitante.
+  - `tracking_touchpoints`: eventos intermediários, como clique em WhatsApp, envio de formulário ou início de checkout.
+  - `persons`: lead/pessoa identificada, com `visitor_id`.
+  - `conversions`: venda/conversão, com `visitor_id`.
+- Integrações necessárias:
+  1. Atualizar o script de tracking para expor `window.embrepoliVisitorId` e preencher campos ocultos em formulários.
+  2. Criar endpoint de touchpoint, por exemplo `/api/tracking/touchpoint`, para registrar ações como clique em WhatsApp, formulário enviado, início de checkout e clique em CTA.
+  3. No formulário do site, enviar `visitor_id` junto com nome, telefone e e-mail; salvar em `persons.visitor_id`.
+  4. No botão de WhatsApp, registrar o clique com `visitor_id` antes de abrir o link do WhatsApp; se possível, incluir um código curto na mensagem para vinculação posterior.
+  5. No checkout/loja, gravar `visitor_id` em campo customizado, metadata, observação interna ou payload do pedido.
+  6. No webhook/importação de vendas, ler esse `visitor_id` e salvar em `conversions.visitor_id`.
+  7. Quando a venda não trouxer `visitor_id`, tentar vincular por dados identificáveis confiáveis: telefone, e-mail, CPF/CNPJ ou cliente já cadastrado.
+- IP não deve ser o identificador principal. Pode ser usado apenas como apoio probabilístico, de preferência com hash/anonymização e política de privacidade adequada.
+- Relatórios desejados:
+  - Quantas sessões ocorreram antes da compra.
+  - Primeira origem/campanha do visitante.
+  - Última origem/campanha antes da conversão.
+  - Touchpoints antes da compra: WhatsApp, formulário, checkout, links rastreáveis.
+  - Tempo entre primeira visita e venda.
+- Regra de privacidade: evitar salvar dados sensíveis sem finalidade clara; para IP/User-Agent, preferir minimização e retenção limitada.
+
 ### Vendas
 - Painel de Vendas reutiliza a visualização do Funil Comercial.
 - `salesFunnelStages` e `salesClients` devem alimentar painel e funil para manter reatividade.

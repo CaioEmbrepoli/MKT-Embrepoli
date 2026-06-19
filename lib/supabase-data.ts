@@ -47,6 +47,7 @@ import type {
   PostPublication,
   YouTubeUploadQueueItem,
   Visitor,
+  TrackingSession,
   Person,
   PersonIdentifier,
   Conversion
@@ -91,6 +92,7 @@ export type AppData = {
   youtubeUploadQueue: YouTubeUploadQueueItem[];
   trackableLinks: TrackableLink[];
   visitors: Visitor[];
+  trackingSessions: TrackingSession[];
   persons: Person[];
   conversions: Conversion[];
 };
@@ -141,6 +143,9 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
 
   const visitorsPromise = fetchAllRows<Record<string, unknown>>(
     () => client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false })
+  );
+  const trackingSessionsPromise = fetchAllRows<Record<string, unknown>>(
+    () => client.from("tracking_sessions").select("*").eq("organization_id", organizationId).order("started_at", { ascending: false })
   );
   const metricsPromise = fetchAllRows<Record<string, unknown>>(
     () => client.from("post_metrics").select("*").eq("organization_id", organizationId)
@@ -242,7 +247,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(100000)
   ]);
 
-  const [visitorsRaw, metricsRaw] = await Promise.all([visitorsPromise, metricsPromise]);
+  const [visitorsRaw, trackingSessionsRaw, metricsRaw] = await Promise.all([visitorsPromise, trackingSessionsPromise, metricsPromise]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
   const postAssigneeMap = groupByParent(postAssignees.data ?? [], "post_id");
@@ -292,6 +297,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     youtubeUploadQueue: (youtubeUploadQueueData.data ?? []).map(mapYouTubeUploadQueueItem),
     trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink),
     visitors: visitorsRaw.map(mapVisitor),
+    trackingSessions: trackingSessionsRaw.map(mapTrackingSession),
     persons: (personsData.data ?? []).map(mapPerson),
     conversions: (conversionsData.data ?? []).map(mapConversion)
   };
@@ -1450,7 +1456,7 @@ function mapFileAttachment(item: any): TaskAttachment {
   return { id: item.id, name: item.name, type: item.file_type, source: item.source ?? "upload", url: item.public_url || item.storage_path, previewUrl: item.preview_url || item.public_url || item.storage_path, originalSize: item.original_size ?? 0, compressedSize: item.compressed_size ?? item.original_size ?? 0, mimeType: item.mime_type ?? "" };
 }
 
-function mapCustomerQuestion(row: any): CustomerQuestion {
+export function mapCustomerQuestion(row: any): CustomerQuestion {
   const sourceCommentId = row.source_comment_id ?? row.from_comment_id ?? undefined;
   return {
     id: row.id,
@@ -1650,13 +1656,42 @@ function normalizeCommentText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+function normalizeCommentTimestamp(value: unknown) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return undefined;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function canonicalCommentExternalId(source: Comment["source"], externalId?: string) {
+  const raw = String(externalId ?? "").trim();
+  if (!raw) return undefined;
+  if (source === "youtube") {
+    const clean = raw.replace(/^(yt_comment:)+/i, "");
+    return clean ? `yt_comment:${clean}` : undefined;
+  }
+  if (source === "instagram") {
+    const clean = raw.replace(/^(instagram:)+/i, "");
+    return clean ? `instagram:${clean}` : undefined;
+  }
+  if (source === "tiktok") {
+    const clean = raw.replace(/^(tiktok:)+/i, "");
+    return clean ? `tiktok:${clean}` : undefined;
+  }
+  if (source === "facebook") {
+    const clean = raw.replace(/^(facebook:)+/i, "");
+    return clean ? `facebook:${clean}` : undefined;
+  }
+  return raw;
+}
+
 function commentImportSignature(comment: Pick<Comment, "source" | "videoId" | "authorName" | "text" | "publishedAt">) {
   return [
     comment.source,
     comment.videoId ?? "",
     normalizeCommentText(comment.authorName ?? ""),
     normalizeCommentText(comment.text ?? ""),
-    comment.publishedAt ?? ""
+    normalizeCommentTimestamp(comment.publishedAt) ?? ""
   ].join("|");
 }
 
@@ -1692,7 +1727,9 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
   const bankQuestionId = existing?.bank_question_id ?? comment.bankQuestionId ?? null;
   const classificationStatus = preserveCommentClassification(existing, comment);
   const isRelevant = existing?.is_relevant ?? comment.isRelevant ?? addedToBank;
-  const incomingExternalReplies = Array.isArray(comment.externalReplies) ? comment.externalReplies : [];
+  const incomingExternalReplies = Array.isArray(comment.externalReplies)
+    ? comment.externalReplies.map((reply) => ({ ...reply, publishedAt: normalizeCommentTimestamp(reply.publishedAt) }))
+    : [];
   const existingExternalReplies = Array.isArray(existing?.external_replies) ? existing.external_replies : [];
   const externalRepliesById = new Map(existingExternalReplies.map((reply: any) => [reply.id, reply]));
   for (const reply of incomingExternalReplies) externalRepliesById.set(reply.id, reply);
@@ -1718,11 +1755,14 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
   const status = shouldClearMisclassifiedInstagramResponse
     ? (existing?.status === "ignorado" ? "ignorado" : comment.status)
     : preserveCommentStatus(existing, comment);
+  const existingPublishedAt = normalizeCommentTimestamp(existing?.published_at);
+  const incomingPublishedAt = normalizeCommentTimestamp(comment.publishedAt);
+  const externalId = canonicalCommentExternalId(comment.source, comment.externalId);
   return {
     id: existing?.id ?? comment.id,
     organization_id: organizationId,
     source: comment.source,
-    external_id: comment.externalId ?? null,
+    external_id: externalId ?? null,
     import_signature: comment.importSignature ?? commentImportSignature(comment),
     video_id: comment.videoId ?? null,
     video_title: comment.videoTitle ?? existing?.video_title ?? null,
@@ -1741,7 +1781,7 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
     status,
     added_to_bank: addedToBank,
     bank_question_id: bankQuestionId,
-    published_at: comment.publishedAt ?? null,
+    published_at: existingPublishedAt ?? incomingPublishedAt ?? null,
     retention_until: existing?.retention_until ?? comment.retentionUntil ?? addDaysIso(createdAt, 90),
     processed_at: existing?.processed_at ?? comment.processedAt ?? null,
     is_relevant: isRelevant,
@@ -1773,6 +1813,8 @@ export async function insertComments(client: SupabaseClient, items: Comment[]) {
   const organizationId = await currentOrganizationId(client);
   const normalized = items.map((comment) => ({
     ...comment,
+    externalId: canonicalCommentExternalId(comment.source, comment.externalId),
+    publishedAt: normalizeCommentTimestamp(comment.publishedAt),
     importSignature: comment.importSignature ?? commentImportSignature(comment)
   }));
 
@@ -2104,6 +2146,22 @@ function mapVisitor(row: Record<string, unknown>): Visitor {
     firstTouchAt: String(row.first_touch_at ?? ""),
     lastSeenAt: String(row.last_seen_at ?? ""),
     sessionCount: Number(row.session_count ?? 1)
+  };
+}
+
+function mapTrackingSession(row: Record<string, unknown>): TrackingSession {
+  return {
+    id: String(row.id ?? ""),
+    organizationId: String(row.organization_id ?? ""),
+    visitorId: String(row.visitor_id ?? ""),
+    utmSource: (row.utm_source as string) ?? null,
+    utmMedium: (row.utm_medium as string) ?? null,
+    utmCampaign: (row.utm_campaign as string) ?? null,
+    referrer: (row.referrer as string) ?? null,
+    fbclid: (row.fbclid as string) ?? null,
+    gclid: (row.gclid as string) ?? null,
+    landingPage: (row.landing_page as string) ?? null,
+    startedAt: String(row.started_at ?? "")
   };
 }
 

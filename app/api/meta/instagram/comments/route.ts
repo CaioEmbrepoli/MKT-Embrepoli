@@ -33,6 +33,7 @@ export async function GET(request: Request) {
     const comments = [];
     let mediaWithComments = 0;
     let skippedWithoutComments = 0;
+    let commentsMissingTimestamp = 0;
 
     for (const item of media) {
       if (item.commentsCount <= 0) {
@@ -48,6 +49,7 @@ export async function GET(request: Request) {
         ownAccountId: connection.instagram_account_id
       }));
     }
+    commentsMissingTimestamp = comments.filter((comment) => !comment.publishedAt).length;
 
     return NextResponse.json({
       comments,
@@ -61,6 +63,7 @@ export async function GET(request: Request) {
         mediaChecked: media.length,
         mediaWithComments,
         skippedWithoutComments,
+        commentsMissingTimestamp,
         commentsFound: comments.length
       }
     });

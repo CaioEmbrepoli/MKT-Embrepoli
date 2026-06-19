@@ -92,13 +92,13 @@ export type InstagramCommentItem = {
   authorName: string;
   text: string;
   likes: number;
-  publishedAt: string;
+  publishedAt?: string;
   externalReplies?: {
     id: string;
     authorName: string;
     authorAvatarUrl?: string;
     text: string;
-    publishedAt: string;
+    publishedAt?: string;
     likes?: number;
     isOwnReply?: boolean;
   }[];
@@ -115,6 +115,7 @@ export type InstagramCommentImportSummary = {
   mediaChecked: number;
   mediaWithComments: number;
   skippedWithoutComments: number;
+  commentsMissingTimestamp?: number;
   commentsFound: number;
 };
 

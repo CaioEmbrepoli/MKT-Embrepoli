@@ -593,7 +593,7 @@ export type CommentExternalReply = {
   authorName: string;
   authorAvatarUrl?: string;
   text: string;
-  publishedAt: string;
+  publishedAt?: string;
   likes?: number;
   isOwnReply?: boolean;
 };

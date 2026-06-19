@@ -191,6 +191,15 @@ async function processPublication(publicationId: string) {
     return NextResponse.json({ ok: true, message: "Publicacao cancelada." });
   }
 
+  if ((publication.status === "scheduled" || publication.status === "processing") && !isDueTime(publication.scheduled_at)) {
+    return NextResponse.json({
+      ok: true,
+      status: "not_due",
+      message: "Publicacao reagendada para o futuro.",
+      scheduledAt: publication.scheduled_at
+    });
+  }
+
   const canProcess =
     publication.status === "scheduled" ||
     isDueAsyncProcessing(publication) ||
