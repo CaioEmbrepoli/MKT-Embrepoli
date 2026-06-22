@@ -1636,7 +1636,18 @@ export default function Home() {
     }
     realtimeReloading.current = true;
     setRealtimeSyncing(true);
-    const data = await loadAppData(supabase);
+    let data: Awaited<ReturnType<typeof loadAppData>>;
+    try {
+      data = await loadAppData(supabase);
+    } catch (error) {
+      // Falha transitória (rede, rate limit, etc.): mantém o estado atual em vez
+      // de aplicar dados parciais que derrubariam a pessoa para o painel sem motivo.
+      console.error("[reloadFromSupabase] falhou, mantendo estado atual:", error);
+      realtimeReloading.current = false;
+      setRealtimeSyncing(false);
+      scheduleRealtimeReload();
+      return;
+    }
     if (pendingSaveCount.current > 0) {
       realtimeReloading.current = false;
       setRealtimeSyncing(false);

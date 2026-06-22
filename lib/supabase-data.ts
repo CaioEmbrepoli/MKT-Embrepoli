@@ -344,6 +344,15 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(100000)
   ]);
 
+  // Uma falha silenciosa em qualquer consulta acima (timeout, rate limit, etc.)
+  // viraria um array vazio e zeraria permissões/áreas do usuário, derrubando-o
+  // para o painel sem motivo real. Por isso falhamos alto em vez de seguir com
+  // dados parciais — quem chama isso decide manter o estado anterior.
+  const failedQuery = [profiles, profileAreas, profileModulePermissions].find((result) => result.error);
+  if (failedQuery) {
+    throw new Error(`Falha ao recarregar dados do Supabase: ${failedQuery.error?.message ?? "erro desconhecido"}`);
+  }
+
   const [visitorsRaw, trackingSessionsRaw, metricsRaw] = await Promise.all([visitorsPromise, trackingSessionsPromise, metricsPromise]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
