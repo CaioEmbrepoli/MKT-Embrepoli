@@ -1867,6 +1867,7 @@ export default function Home() {
     const data = await loadInitialAppData(supabase, profile);
     const authenticatedProfile = data.profiles.find((item) => item.id === profile.id) ?? profile;
     const landing = defaultLandingForProfile(authenticatedProfile, data.profileAreas, data.profileModulePermissions);
+    const isNewAuthenticatedSession = initialLandingAppliedFor.current !== authenticatedProfile.id;
 
     setProfiles(data.profiles);
     setProfileAreas(data.profileAreas);
@@ -1882,9 +1883,11 @@ export default function Home() {
     setSalesFunnelStages(data.salesFunnelStages);
     setCallSchedules(data.callSchedules);
     setCurrentUserId(authenticatedProfile.id);
-    setActiveArea(landing.area);
-    setActiveSection(landing.sectionId);
-    initialLandingAppliedFor.current = authenticatedProfile.id;
+    if (isNewAuthenticatedSession) {
+      setActiveArea(landing.area);
+      setActiveSection(landing.sectionId);
+      initialLandingAppliedFor.current = authenticatedProfile.id;
+    }
     setAuthMode("login");
     setLoggedIn(true);
   }
@@ -2060,12 +2063,13 @@ export default function Home() {
         setAuthMessage("Digite sua nova senha para concluir a recuperação.");
       }
       if (event === "SIGNED_OUT") {
+        initialLandingAppliedFor.current = "";
         setSessionUserId("");
         setCurrentUserId("");
         setLoggedIn(false);
       }
       // Quando user volta da confirmação de email, dispara reload de sessão
-      if (event === "SIGNED_IN" && session?.user) {
+      if (event === "SIGNED_IN" && session?.user && initialLandingAppliedFor.current !== session.user.id) {
         void loadCurrentSession();
       }
     });
