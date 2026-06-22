@@ -1583,7 +1583,10 @@ export default function Home() {
   }, [currentNotifications, currentUser.notificationSound]);
 
   useEffect(() => {
-    if (!loggedIn || userHasNoTeam) return;
+    // reloadFromSupabase substitui perfil e permissões em etapas. Não valide a
+    // navegação nesse intervalo, pois uma permissão momentaneamente vazia não
+    // deve derrubar a pessoa da tela que ela está usando.
+    if (!loggedIn || userHasNoTeam || realtimeSyncing || !remoteReady.current || !currentUser.id) return;
     const nextArea = allowedAreas.includes(activeArea) ? activeArea : allowedAreas[0] ?? "marketing";
     if (nextArea !== activeArea) {
       setActiveArea(nextArea);
@@ -1595,7 +1598,7 @@ export default function Home() {
     if (!allowedItem) {
       setActiveSection(preferredSectionForArea(currentUser, activeArea, profileAreas, profileModulePermissions));
     }
-  }, [loggedIn, userHasNoTeam, allowedAreas, activeArea, activeSection, currentUser, profileAreas, profileModulePermissions, visibleMenu]);
+  }, [loggedIn, userHasNoTeam, realtimeSyncing, allowedAreas, activeArea, activeSection, currentUser, profileAreas, profileModulePermissions, visibleMenu]);
 
   function openSection(sectionId: string) {
     const item = menu.find((entry) => entry.sectionId === sectionId || entry.moduleId === sectionId);
