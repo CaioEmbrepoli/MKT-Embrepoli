@@ -203,12 +203,33 @@ async function fetchChunk(service: ReturnType<typeof createClient>, job: QueueJo
 }
 
 async function getGoogleDriveToken(service: ReturnType<typeof createClient>, organizationId: string) {
-  const { data, error } = await service.from("google_connections").select("access_token,refresh_token,expires_at").eq("organization_id", organizationId).eq("service", "drive").maybeSingle();
+  const { data, error } = await service.from("google_connections").select("id,access_token,refresh_token,expires_at").eq("organization_id", organizationId).eq("service", "drive").maybeSingle();
   if (error) throw error;
-  if (!data?.access_token || new Date(data.expires_at || 0).getTime() <= Date.now() + 60_000) {
-    throw new Error("Google Drive precisa estar conectado com token valido para a fila do TikTok.");
+  if (!data?.refresh_token) throw new Error("Google Drive precisa estar conectado para a fila do TikTok.");
+  if (data.access_token && new Date(data.expires_at || 0).getTime() > Date.now() + 60_000) {
+    return data.access_token as string;
   }
-  return data.access_token as string;
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env("GOOGLE_CLIENT_ID"),
+      client_secret: env("GOOGLE_CLIENT_SECRET"),
+      refresh_token: data.refresh_token,
+      grant_type: "refresh_token",
+    }),
+  });
+  const refreshed = await response.json().catch(() => ({}));
+  if (!response.ok || !refreshed.access_token) {
+    throw new Error(refreshed.error_description || refreshed.error || "Nao foi possivel renovar a conexao Google Drive.");
+  }
+  const accessToken = String(refreshed.access_token);
+  await service.from("google_connections").update({
+    access_token: accessToken,
+    expires_at: new Date(Date.now() + Number(refreshed.expires_in || 3600) * 1000).toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq("id", data.id);
+  return accessToken;
 }
 
 async function uploadChunk(uploadUrl: string, contentType: string, fileSize: number, start: number, chunk: ArrayBuffer) {
