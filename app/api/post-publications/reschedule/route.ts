@@ -154,6 +154,14 @@ export async function POST(request: Request) {
         .eq("post_id", postId)
         .in("post_publication_id", publicationIds);
       if (queueUpdateError) throw new Error(queueUpdateError.message);
+
+      const { error: tiktokQueueUpdateError } = await context.service
+        .from("tiktok_upload_queue")
+        .update({ scheduled_at: scheduledIso, updated_at: now })
+        .eq("organization_id", context.organizationId)
+        .eq("post_id", postId)
+        .in("post_publication_id", publicationIds);
+      if (tiktokQueueUpdateError) throw new Error(tiktokQueueUpdateError.message);
     }
 
     await syncPostStatusFromPublications(context.service, {

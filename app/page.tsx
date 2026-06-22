@@ -16434,7 +16434,7 @@ const publishPlatformLabels: Record<string, string> = {
 };
 
 function isPublishablePlatform(platform: string) {
-  return platform === "youtube" || platform === "instagram";
+  return platform === "youtube" || platform === "instagram" || platform === "tiktok";
 }
 
 function PublishModal({
@@ -16481,7 +16481,6 @@ function PublishModal({
   const [scheduledDate, setScheduledDate] = useState(post.publishAt?.slice(0, 10) ?? new Date().toISOString().slice(0, 10));
   const [scheduledTime, setScheduledTime] = useState(post.publishAt?.slice(11, 16) ?? "09:00");
   const [selectedAssetId, setSelectedAssetId] = useState(approvedAssets[0]?.id ?? "");
-  const [useYouTubeQueueBeta, setUseYouTubeQueueBeta] = useState(false);
 
   // Detecta se o horário de agendamento é inválido (passado ou < 2 min no futuro)
   const scheduledAtPreview = publishMode === "scheduled" ? buildSaoPauloDateTime(scheduledDate, scheduledTime) : null;
@@ -16603,49 +16602,26 @@ function PublishModal({
         const allowDuplicateForPlatform = confirmedDuplicatePlatforms.includes(platform);
         if (platform === "youtube") {
           try {
-            const endpoint = useYouTubeQueueBeta ? "/api/google/youtube/publish-queued" : "/api/google/youtube/publish";
-            const res = await fetch(endpoint, {
+            const res = await fetch("/api/google/youtube/publish-queued", {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
               body: JSON.stringify({ assetUrl: selectedAsset.url, title: config.title, description: config.description, format: config.format, scheduledAt: effectiveScheduledAt, thumbnailUrl: effectiveThumbnailUrl, postId: post.id, allowDuplicate: allowDuplicateForPlatform }),
             });
             if (res.ok) {
-              if (useYouTubeQueueBeta) {
-                const data = await res.json() as { queued: true; jobId: string; publicationId?: string; fileSize?: number; contentType?: string };
-                updateConfig(config.channelId, { status: "queued", queuedJobId: data.jobId });
-                if (data.publicationId) {
-                  const newPub: PostPublication = {
-                    id: data.publicationId,
-                    postId: post.id,
-                    platform: "youtube",
-                    status: "pending",
-                    format: config.format,
-                    assetUrl: selectedAsset.url,
-                    thumbnailUrl: effectiveThumbnailUrl ?? undefined,
-                    scheduledAt: effectiveScheduledAt ?? undefined,
-                    title: config.title ?? "",
-                    caption: config.description ?? "",
-                    attempts: 0,
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString()
-                  };
-                  setPostPublications?.((current) => [newPub, ...current]);
-                }
-                if (nextPostPublishAt) {
-                  setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishAt: nextPostPublishAt, status: "Agendado" } : p));
-                }
-                return;
+              const data = await res.json() as { queued: true; jobId: string; publicationId?: string };
+              updateConfig(config.channelId, { status: "queued", queuedJobId: data.jobId });
+              if (data.publicationId) {
+                const newPub: PostPublication = {
+                  id: data.publicationId, postId: post.id, platform: "youtube", status: "pending",
+                  format: config.format, assetUrl: selectedAsset.url, thumbnailUrl: effectiveThumbnailUrl ?? undefined,
+                  scheduledAt: effectiveScheduledAt ?? undefined, title: config.title ?? "", caption: config.description ?? "",
+                  attempts: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+                };
+                setPostPublications?.((current) => [newPub, ...current]);
               }
-              const { videoId, privacyStatus } = await res.json() as { videoId: string; privacyStatus?: string };
-              const newStatus = (privacyStatus === "private" && effectiveScheduledAt) ? "Agendado" : "Publicado";
-              updateConfig(config.channelId, { status: "success" });
-              setPosts((prev) => prev.map((p) => p.id === post.id ? {
-                ...p,
-                publishAt: nextPostPublishAt ?? p.publishAt,
-                publishedVideoId: videoId,
-                status: newStatus,
-                publishedAt: newStatus === "Publicado" ? new Date().toISOString() : p.publishedAt
-              } : p));
+              if (nextPostPublishAt) {
+                setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishAt: nextPostPublishAt, status: "Agendado" } : p));
+              }
             } else {
               const data = await res.json().catch(() => ({})) as ({ error?: string } & Partial<ApiErrorPayload>);
               const errorDetail = apiErrorForDisplay(data, data.error ?? "Erro ao publicar.");
@@ -16730,6 +16706,39 @@ function PublishModal({
             }
           } catch (error) {
             const errorDetail = apiErrorForDisplay(error, "Erro de conexão.");
+            updateConfig(config.channelId, { status: "error", errorMessage: errorDetail.userMessage, errorDetail });
+          }
+        } else if (platform === "tiktok") {
+          try {
+            const res = await fetch("/api/tiktok/publish", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                postId: post.id, assetUrl: selectedAsset.url, title: config.title || post.title,
+                description: config.description, format: config.format, scheduledAt: effectiveScheduledAt,
+                privacyLevel: config.privacyLevel, allowDuplicate: allowDuplicateForPlatform,
+              }),
+            });
+            const data = await res.json().catch(() => ({})) as { error?: string; jobId?: string; publicationId?: string } & Partial<ApiErrorPayload>;
+            if (!res.ok) {
+              const errorDetail = apiErrorForDisplay(data, data.error ?? "Erro ao enfileirar publicacao no TikTok.");
+              updateConfig(config.channelId, { status: "error", errorMessage: errorDetail.userMessage, errorDetail });
+              return;
+            }
+            updateConfig(config.channelId, { status: "queued", queuedJobId: data.jobId });
+            if (data.publicationId) {
+              setPostPublications?.((current) => [{
+                id: data.publicationId!, postId: post.id, platform: "tiktok", status: "pending",
+                format: config.format, assetUrl: selectedAsset.url, scheduledAt: effectiveScheduledAt ?? undefined,
+                title: config.title || post.title, caption: config.description ?? "", attempts: 0,
+                createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+              }, ...current]);
+            }
+            if (nextPostPublishAt) {
+              setPosts((prev) => prev.map((p) => p.id === post.id ? { ...p, publishAt: nextPostPublishAt, status: "Agendado" } : p));
+            }
+          } catch (error) {
+            const errorDetail = apiErrorForDisplay(error, "Erro de conexao.");
             updateConfig(config.channelId, { status: "error", errorMessage: errorDetail.userMessage, errorDetail });
           }
         } else {
@@ -16867,9 +16876,7 @@ function PublishModal({
                   {config.status === "queued"     && <span className="text-xs font-black text-blue-700">✓ Na fila</span>}
                   {config.status === "error"      && <span className="text-xs font-black text-rose-700">✕ Erro</span>}
                   {config.status === "publishing" && <span className="text-xs font-black text-blue-700">Publicando…</span>}
-                  {isTikTok ? (
-                    <span className="rounded-xl bg-amber-100 px-2 py-0.5 text-xs font-black text-amber-700">Falta integrar</span>
-                  ) : supported ? (
+                  {supported ? (
                     <span className="rounded-xl bg-emerald-100 px-2 py-0.5 text-xs font-black text-emerald-700">✓ API conectada</span>
                   ) : (
                     <span className="rounded-xl bg-slate-200 px-2 py-0.5 text-xs font-black text-slate-500">Em breve</span>
@@ -16878,17 +16885,9 @@ function PublishModal({
               </div>
               {isYoutube && (
                 <div className="mb-3 rounded-2xl border border-blue-100 bg-blue-50 px-3 py-2">
-                  <label className="flex cursor-pointer items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={useYouTubeQueueBeta}
-                      onChange={(event) => setUseYouTubeQueueBeta(event.target.checked)}
-                      className="accent-blue-700"
-                    />
-                    <span className="text-sm font-black text-blue-900">Usar upload em fila (beta)</span>
-                  </label>
+                  <span className="text-sm font-black text-blue-900">Upload automático em fila</span>
                   <p className="mt-1 text-xs font-bold text-blue-700">
-                    Beta paralelo: cria um job com progresso e mantém o publicador atual disponível quando desligado.
+                    O vídeo é enviado em segundo plano, com progresso e retomada automática.
                   </p>
                   {youtubeQueueItem && (
                     <div className="mt-2 rounded-2xl bg-white px-3 py-2">
@@ -16906,16 +16905,6 @@ function PublishModal({
                   )}
                 </div>
               )}
-              {isTikTok ? (
-                <div className="flex min-h-[220px] items-center justify-center rounded-3xl border border-dashed border-amber-200 bg-amber-50 px-6 py-10 text-center">
-                  <div>
-                    <p className="text-2xl font-black text-amber-800 sm:text-3xl">Publicação no TikTok ainda falta integrar</p>
-                    <p className="mt-3 text-sm font-bold text-amber-700">
-                      A conexão, importação e métricas do TikTok continuam disponíveis. Esta etapa bloqueia apenas publicar ou agendar pelo modal.
-                    </p>
-                  </div>
-                </div>
-              ) : (
               <>
               {/* Formato */}
               <div className="mb-3">
@@ -17030,20 +17019,10 @@ function PublishModal({
                 </div>
               )}
               </>
-              )}
             </div>
           );
         })}
       </div>
-      {channelConfigs.some((config) => {
-        const platform = publishPlatformKey(channelById.get(config.channelId)?.name ?? "");
-        return config.enabled && platform === "tiktok";
-      }) && enabledCount === 0 && (
-        <p className="rounded-2xl bg-amber-50 px-4 py-3 text-center text-sm font-black text-amber-700">
-          TikTok ainda não está integrado para publicação. Selecione YouTube ou Instagram para publicar agora.
-        </p>
-      )}
-
       {/* Botão de ação */}
       {!isDone ? (
         <button type="button" disabled={enabledCount === 0 || isPublishing || !selectedAsset || hasBlockedDuplicatePlatform} onClick={handlePublish} className="w-full rounded-3xl bg-blue-700 px-4 py-3 font-black text-white transition hover:bg-blue-800 disabled:opacity-50">

@@ -1,30 +1,53 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
-import { getTikTokAccessToken, tiktokRequestContext } from "@/lib/tiktok-server";
 import { getGoogleAccessToken } from "@/lib/google-server";
 import { syncPostStatusFromPublications } from "@/lib/post-status-server";
 import { recordDiagnostic } from "@/lib/api-errors";
+import { getTikTokAccessToken, tiktokRequestContext } from "@/lib/tiktok-server";
 
-/** Extrai o file ID de uma URL do Google Drive em qualquer formato comum. */
 function extractDriveFileId(url: string): string | null {
-  const m1 = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
-  if (m1) return m1[1];
-  const m2 = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  if (m2) return m2[1];
-  return null;
+  return url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/)?.[1]
+    ?? url.match(/[?&]id=([a-zA-Z0-9_-]+)/)?.[1]
+    ?? null;
 }
 
-export const maxDuration = 300; // 5 minutos
+async function inspectAsset(
+  context: Awaited<ReturnType<typeof tiktokRequestContext>>,
+  assetUrl: string,
+) {
+  const driveFileId = extractDriveFileId(assetUrl);
+  if (driveFileId) {
+    const driveToken = await getGoogleAccessToken(context, "drive");
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=size,mimeType`,
+      { headers: { Authorization: `Bearer ${driveToken}` } },
+    );
+    const data = await response.json().catch(() => ({})) as { size?: string; mimeType?: string; error?: { message?: string } };
+    const fileSize = Number(data.size ?? 0);
+    if (!response.ok || !Number.isFinite(fileSize) || fileSize <= 0) {
+      throw new Error(data.error?.message ?? "Nao foi possivel identificar o tamanho do video no Google Drive.");
+    }
+    return { fileSize, contentType: data.mimeType || "video/mp4" };
+  }
+
+  const response = await fetch(assetUrl, { method: "HEAD", redirect: "follow" });
+  const fileSize = Number(response.headers.get("content-length") ?? 0);
+  if (!response.ok || !Number.isFinite(fileSize) || fileSize <= 0) {
+    throw new Error("O TikTok precisa de uma URL de video com tamanho conhecido. Use um arquivo do Google Drive ou uma URL publica que informe Content-Length.");
+  }
+  return { fileSize, contentType: response.headers.get("content-type")?.split(";")[0] || "video/mp4" };
+}
 
 export async function POST(request: Request) {
   let context: Awaited<ReturnType<typeof tiktokRequestContext>> | null = null;
   let postId = "";
   try {
     context = await tiktokRequestContext(request);
-    const accessToken = await getTikTokAccessToken(context);
+    await getTikTokAccessToken(context);
 
     const body = await request.json() as {
-      assetUrl: string;
-      title: string;
+      assetUrl?: string;
+      title?: string;
       description?: string;
       format?: string;
       scheduledAt?: string | null;
@@ -32,172 +55,72 @@ export async function POST(request: Request) {
       postId?: string;
       allowDuplicate?: boolean;
     };
-    postId = body.postId ?? "";
-
-    const { assetUrl, title, privacyLevel } = body;
-
-    if (!assetUrl || !title) {
-      return NextResponse.json({ error: "assetUrl e title são obrigatórios." }, { status: 400 });
+    const assetUrl = body.assetUrl?.trim() ?? "";
+    const title = body.title?.trim() ?? "";
+    postId = body.postId?.trim() ?? "";
+    if (!assetUrl || !title || !postId) {
+      return NextResponse.json({ error: "assetUrl, title e postId sao obrigatorios." }, { status: 400 });
     }
 
-    // ── Download do arquivo ──────────────────────────────────────────────────
-    if (body.postId && !body.allowDuplicate) {
-      const { data: existingPublication } = await context.service
+    if (!body.allowDuplicate) {
+      const { data: existing } = await context.service
         .from("post_publications")
-        .select("id,status")
+        .select("id")
         .eq("organization_id", context.organizationId)
-        .eq("post_id", body.postId)
+        .eq("post_id", postId)
         .eq("platform", "tiktok")
         .in("status", ["pending", "processing", "published", "scheduled"])
-        .limit(1)
         .maybeSingle();
-
-      if (existingPublication) {
-        return NextResponse.json(
-          { error: "Este post já tem publicação registrada no TikTok. Desative o canal ou confirme republicação para continuar." },
-          { status: 409 }
-        );
+      if (existing) {
+        return NextResponse.json({ error: "Este post ja tem uma publicacao registrada no TikTok. Confirme a republicacao para continuar." }, { status: 409 });
       }
     }
 
-    let fileBuffer: ArrayBuffer;
-    let fileSize: number;
+    const metadata = await inspectAsset(context, assetUrl);
+    const scheduledAt = body.scheduledAt ? new Date(body.scheduledAt).toISOString() : null;
+    const now = new Date().toISOString();
+    const publicationId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
 
-    const driveFileId = extractDriveFileId(assetUrl);
-
-    if (driveFileId) {
-      // Arquivo do Google Drive — usa getGoogleAccessToken para refresh automático
-      let driveToken: string;
-      try {
-        driveToken = await getGoogleAccessToken(context, "drive");
-      } catch (e) {
-        return NextResponse.json({ error: e instanceof Error ? e.message : "Google Drive não conectado. Conecte o Google Drive nas configurações." }, { status: 400 });
-      }
-
-      const metaRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${driveFileId}?fields=size,mimeType`,
-        { headers: { Authorization: `Bearer ${driveToken}` } }
-      );
-      const meta = await metaRes.json() as { size?: string; mimeType?: string };
-      const knownSize = meta.size ? parseInt(meta.size) : 0;
-
-      const driveRes = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`,
-        { headers: { Authorization: `Bearer ${driveToken}` } }
-      );
-      if (!driveRes.ok) {
-        const errData = await driveRes.json() as { error?: { message?: string } };
-        return NextResponse.json({ error: errData?.error?.message ?? "Não foi possível baixar o arquivo do Google Drive." }, { status: 400 });
-      }
-
-      fileBuffer = await driveRes.arrayBuffer();
-      fileSize = knownSize > 0 ? knownSize : fileBuffer.byteLength;
-    } else {
-      // URL direta (Supabase Storage ou outro)
-      const fileRes = await fetch(assetUrl);
-      if (!fileRes.ok) {
-        return NextResponse.json({ error: "Não foi possível acessar o arquivo de mídia." }, { status: 400 });
-      }
-      fileBuffer = await fileRes.arrayBuffer();
-      fileSize = fileBuffer.byteLength;
-    }
-
-    // ── Passo 1: iniciar upload (init) ───────────────────────────────────────
-    const chunkSize = 64 * 1024 * 1024; // 64 MB (máximo TikTok)
-    const totalChunks = Math.ceil(fileSize / chunkSize);
-
-    const initRes = await fetch("https://open.tiktokapis.com/v2/post/publish/video/init/", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json; charset=UTF-8",
-      },
-      body: JSON.stringify({
-        post_info: {
-          title: title.slice(0, 150),
-          privacy_level: privacyLevel ?? "PUBLIC_TO_EVERYONE",
-          disable_duet: false,
-          disable_comment: false,
-          disable_stitch: false,
-          video_cover_timestamp_ms: 1000,
-        },
-        source_info: {
-          source: "FILE_UPLOAD",
-          video_size: fileSize,
-          chunk_size: Math.min(chunkSize, fileSize),
-          total_chunk_count: totalChunks,
-        },
-      }),
+    const { error: publicationError } = await context.service.from("post_publications").insert({
+      id: publicationId,
+      organization_id: context.organizationId,
+      post_id: postId,
+      platform: "tiktok",
+      status: "pending",
+      title,
+      caption: body.description ?? "",
+      format: body.format ?? "Video",
+      asset_url: assetUrl,
+      scheduled_at: scheduledAt,
+      created_by: context.userId,
+      created_at: now,
+      updated_at: now,
     });
+    if (publicationError) throw publicationError;
 
-    const initData = await initRes.json() as {
-      data?: { publish_id: string; upload_url: string };
-      error?: { code: string; message: string };
-    };
+    const { error: queueError } = await context.service.from("tiktok_upload_queue").insert({
+      id: jobId,
+      organization_id: context.organizationId,
+      post_id: postId,
+      post_publication_id: publicationId,
+      created_by: context.userId,
+      asset_url: assetUrl,
+      title,
+      description: body.description ?? "",
+      format: body.format ?? "Video",
+      privacy_level: body.privacyLevel ?? "PUBLIC_TO_EVERYONE",
+      scheduled_at: scheduledAt,
+      status: "pending",
+      file_size: metadata.fileSize,
+      content_type: metadata.contentType,
+      created_at: now,
+      updated_at: now,
+    });
+    if (queueError) throw queueError;
 
-    if (initData.error?.code && initData.error.code !== "ok") {
-      return NextResponse.json({ error: initData.error.message ?? "Erro ao iniciar upload no TikTok." }, { status: 400 });
-    }
-
-    if (!initData.data?.publish_id || !initData.data?.upload_url) {
-      return NextResponse.json({ error: "TikTok não retornou publish_id ou upload_url." }, { status: 500 });
-    }
-
-    const { publish_id, upload_url } = initData.data;
-
-    // ── Passo 2: upload por chunks ───────────────────────────────────────────
-    const buf = Buffer.from(fileBuffer);
-
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * chunkSize;
-      const end = Math.min(start + chunkSize, fileSize) - 1;
-      const chunk = buf.subarray(start, end + 1);
-
-      const uploadRes = await fetch(upload_url, {
-        method: "PUT",
-        headers: {
-          "Content-Type": "video/mp4",
-          "Content-Length": String(chunk.byteLength),
-          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-        },
-        body: chunk,
-      });
-
-      if (!uploadRes.ok && uploadRes.status !== 206) {
-        const errText = await uploadRes.text().catch(() => String(uploadRes.status));
-        return NextResponse.json(
-          { error: `Erro no chunk ${i + 1}/${totalChunks}: ${uploadRes.status} — ${errText}` },
-          { status: 500 }
-        );
-      }
-    }
-
-    // ── Registrar publicação em post_publications ────────────────────────────
-    if (body.postId) {
-      try {
-        await context.service.from("post_publications").insert({
-          id: crypto.randomUUID(),
-          organization_id: context.organizationId,
-          post_id: body.postId,
-          platform: "tiktok",
-          status: "processing",
-          title: body.title ?? "",
-          caption: body.description ?? "",
-          format: body.format ?? "video",
-          asset_url: body.assetUrl,
-          external_id: publish_id,
-          created_by: context.userId,
-        });
-        await syncPostStatusFromPublications(context.service, {
-          organizationId: context.organizationId,
-          postId: body.postId
-        });
-      } catch {
-        // Falha no registro não impede o retorno de sucesso
-      }
-    }
-
-    return NextResponse.json({ publishId: publish_id });
+    await syncPostStatusFromPublications(context.service, { organizationId: context.organizationId, postId });
+    return NextResponse.json({ queued: true, jobId, publicationId, fileSize: metadata.fileSize, contentType: metadata.contentType });
   } catch (error) {
     if (context) {
       await recordDiagnostic(context.service, {
@@ -205,19 +128,15 @@ export async function POST(request: Request) {
         provider: "tiktok",
         service: "tiktok",
         error,
-        category: "publicacao",
-        severity: "critico",
-        eventKey: `publicacao:tiktok:imediata:${postId || "sem-post"}`,
-        title: "Falha ao publicar no TikTok",
+        category: "fila",
+        severity: "erro",
+        eventKey: `fila:tiktok:criar:${postId || "sem-post"}`,
+        title: "Falha ao criar fila de upload do TikTok",
         profileId: context.userId,
         targetKind: "post",
         targetId: postId || undefined,
-        metadata: { mode: "imediata" }
       }).catch(() => undefined);
     }
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erro ao publicar no TikTok." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Erro ao enfileirar upload no TikTok." }, { status: 400 });
   }
 }

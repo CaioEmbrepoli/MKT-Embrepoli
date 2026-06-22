@@ -1,5 +1,14 @@
 # Decisões de Arquitetura e UX
 
+## 2026-06-22 - Fila automática de publicação TikTok
+
+- A publicação de vídeo no TikTok não faz mais download/upload completo na rota Next.js. `POST /api/tiktok/publish` apenas valida o ativo e cria `post_publications` + `tiktok_upload_queue`.
+- `supabase/functions/tiktok-upload-processor` envia o vídeo em blocos de 32 MB, persiste URL de upload, `publish_id` e bytes enviados para retomar em nova execução. Depois do upload, o cron `tiktok-publications` continua responsável por consultar a confirmação final da API TikTok.
+- A tabela `tiktok_upload_queue` usa RLS por organização e está em Realtime. É necessário manter um Database Webhook de INSERT e uma chamada de recuperação periódica para a Edge Function, como já ocorre para a fila do YouTube.
+- A Edge Function usa a conexão TikTok salva. Para renovar um token expirado, os segredos `TIKTOK_ENV`, `TIKTOK_CLIENT_KEY` e `TIKTOK_CLIENT_SECRET` (ou as variantes sandbox) também precisam estar configurados nos Secrets das Edge Functions do Supabase.
+
+---
+
 ## 2026-06-11 — Botão "Repensar sugestão" + integração Tray (preço em tempo real, opcional)
 
 **Botão "Repensar sugestão" (Comentários):** `app/page.tsx` (~linha 18078-18100), bloco de
