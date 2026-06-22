@@ -34,6 +34,15 @@ function safeText(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function errorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error && "message" in error) {
+    const message = String((error as { message: unknown }).message ?? "").trim();
+    if (message) return message;
+  }
+  return fallback;
+}
+
 function instagramExternalCommentId(commentId: string) {
   const cleanId = safeText(commentId).replace(/^(instagram:)+/i, "");
   return cleanId ? `instagram:${cleanId}` : "";
@@ -490,13 +499,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ received: true, storedEvents, processed });
   } catch (error) {
+    const message = errorMessage(error, "Erro ao processar webhook do Instagram.");
     await recordInstagramDiagnostic({
       eventType: "webhook_error",
-      error: error instanceof Error ? error.message : "Erro ao processar webhook do Instagram."
+      error: message
     });
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Erro ao processar webhook do Instagram." },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
