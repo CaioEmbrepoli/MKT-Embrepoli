@@ -121,6 +121,30 @@ function normalizeCommentText(value: string) {
   return sanitizeText(value).toLowerCase().replace(/\s+/g, " ").slice(0, 500);
 }
 
+// IDs de resposta podem chegar com ou sem o prefixo da plataforma (ex: import
+// manual grava o id "cru" da Graph API, webhook grava "instagram:<id>"). Sem
+// normalizar essa chave, a mesma resposta é salva duas vezes — uma com autor
+// genérico "Instagram", outra com o autor real — e a thread mostra duplicado.
+function replyMergeKey(id: string) {
+  return sanitizeText(id).replace(/^(instagram:|yt_comment:|tiktok:|facebook:)+/i, "");
+}
+
+function pickBetterReply(
+  current: CommentExternalReplyInput,
+  incoming: CommentExternalReplyInput
+): CommentExternalReplyInput {
+  const isGenericAuthor = (name?: string) => !name || normalizeCommentText(name) === "instagram";
+  return {
+    id: current.id.includes(":") ? current.id : incoming.id,
+    authorName: !isGenericAuthor(current.authorName) ? current.authorName : incoming.authorName,
+    authorAvatarUrl: current.authorAvatarUrl || incoming.authorAvatarUrl,
+    text: current.text || incoming.text,
+    publishedAt: current.publishedAt ?? incoming.publishedAt,
+    likes: Math.max(Number(current.likes ?? 0), Number(incoming.likes ?? 0)),
+    isOwnReply: current.isOwnReply || incoming.isOwnReply
+  };
+}
+
 function normalizeCommentTimestamp(value: unknown) {
   const raw = sanitizeText(value);
   if (!raw) return undefined;
@@ -152,14 +176,14 @@ function canonicalCommentExternalId(source: CommentSource, externalId?: string) 
 
 function normalizeExternalReplies(value: unknown): CommentExternalReplyInput[] {
   if (!Array.isArray(value)) return [];
-  const byId = new Map<string, CommentExternalReplyInput>();
+  const byKey = new Map<string, CommentExternalReplyInput>();
   for (const item of value) {
     if (!item || typeof item !== "object") continue;
     const row = item as Record<string, unknown>;
     const id = sanitizeText(row.id);
     const text = sanitizeText(row.text);
     if (!id || !text) continue;
-    byId.set(id, {
+    const reply: CommentExternalReplyInput = {
       id,
       authorName: sanitizeText(row.authorName) || "Instagram",
       authorAvatarUrl: sanitizeText(row.authorAvatarUrl) || undefined,
@@ -167,9 +191,12 @@ function normalizeExternalReplies(value: unknown): CommentExternalReplyInput[] {
       publishedAt: normalizeCommentTimestamp(row.publishedAt),
       likes: Number(row.likes ?? 0),
       isOwnReply: Boolean(row.isOwnReply)
-    });
+    };
+    const key = replyMergeKey(id) || id;
+    const current = byKey.get(key);
+    byKey.set(key, current ? pickBetterReply(current, reply) : reply);
   }
-  return Array.from(byId.values());
+  return Array.from(byKey.values());
 }
 
 function normalizeResponseHistory(value: unknown): CommentResponseHistoryInput[] {
@@ -262,9 +289,13 @@ function mapCommentForUpsert(organizationId: string, comment: ServerCommentInput
     : (existing?.response_history ?? []);
   const incomingExternalReplies = normalizeExternalReplies(comment.externalReplies);
   const existingExternalReplies = normalizeExternalReplies(existing?.external_replies);
-  const externalRepliesById = new Map(existingExternalReplies.map((reply) => [reply.id, reply]));
-  for (const reply of incomingExternalReplies) externalRepliesById.set(reply.id, reply);
-  const externalReplies = Array.from(externalRepliesById.values());
+  const externalRepliesByKey = new Map(existingExternalReplies.map((reply) => [replyMergeKey(reply.id) || reply.id, reply]));
+  for (const reply of incomingExternalReplies) {
+    const key = replyMergeKey(reply.id) || reply.id;
+    const current = externalRepliesByKey.get(key);
+    externalRepliesByKey.set(key, current ? pickBetterReply(reply, current) : reply);
+  }
+  const externalReplies = Array.from(externalRepliesByKey.values());
   const existingResponse = sanitizeText(existing?.response ?? "");
   const hasTrustedOwnResponse = Boolean(existing?.response_external_id || responseHistory.some((item) => item.kind === "primary" && item.externalReplyId));
   const incomingExternalTexts = new Set(incomingExternalReplies.map((reply) => normalizeCommentText(reply.text)).filter(Boolean));
@@ -570,9 +601,12 @@ export async function appendServerCommentExternalReply(
   if (!existing?.id) return null;
 
   const replies = normalizeExternalReplies(existing.external_replies);
+  const replyKey = replyMergeKey(normalizedReply.id) || normalizedReply.id;
+  const matching = replies.find((item) => (replyMergeKey(item.id) || item.id) === replyKey);
+  const mergedReply = matching ? pickBetterReply(normalizedReply, matching) : normalizedReply;
   const nextReplies = [
-    normalizedReply,
-    ...replies.filter((item) => item.id !== normalizedReply.id)
+    mergedReply,
+    ...replies.filter((item) => (replyMergeKey(item.id) || item.id) !== replyKey)
   ];
 
   const { data, error } = await service

@@ -512,7 +512,10 @@ export async function fetchInstagramCommentsForMedia(
       const mappedReplies: InstagramCommentReplyItem[] = replies.map((reply: any): InstagramCommentReplyItem => {
         const authorName = sanitizeText(String(reply.from?.username || reply.username || "Instagram"));
         const authorAvatarUrl = sanitizeText(String(reply.from?.profile_picture_url || reply.profile_picture_url || ""));
-        const replyId = String(reply.id || "");
+        // Prefixo "instagram:" igual ao usado pelo webhook (instagramExternalCommentId),
+        // senão a mesma resposta vira dois registros (um por caminho) na thread.
+        const rawReplyId = String(reply.id || "");
+        const replyId = rawReplyId ? `instagram:${rawReplyId}` : "";
         const actorId = sanitizeText(String(reply.from?.id || reply.owner?.id || ""));
         const actorUsername = normalizeInstagramUsername(reply.from?.username || reply.username);
         const replyPublishedAt = normalizeInstagramTimestamp(reply.timestamp) ?? publishedAt;

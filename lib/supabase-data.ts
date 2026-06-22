@@ -1804,6 +1804,25 @@ function normalizeCommentTimestamp(value: unknown) {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
+// Mesma chave usada no servidor (lib/comment-server.ts): IDs de resposta podem
+// chegar com ou sem o prefixo da plataforma ("instagram:123" vs "123"), e sem
+// normalizar essa chave a mesma resposta é salva duas vezes na thread.
+function replyMergeKey(id: string) {
+  return String(id ?? "").trim().replace(/^(instagram:|yt_comment:|tiktok:|facebook:)+/i, "");
+}
+
+function pickBetterReply(current: any, incoming: any) {
+  const isGenericAuthor = (name?: string) => !name || String(name).trim().toLowerCase() === "instagram";
+  return {
+    ...incoming,
+    id: String(current?.id ?? "").includes(":") ? current.id : incoming.id,
+    authorName: !isGenericAuthor(current?.authorName) ? current.authorName : incoming.authorName,
+    authorAvatarUrl: current?.authorAvatarUrl || incoming.authorAvatarUrl,
+    publishedAt: current?.publishedAt ?? incoming.publishedAt,
+    likes: Math.max(Number(current?.likes ?? 0), Number(incoming.likes ?? 0))
+  };
+}
+
 function canonicalCommentExternalId(source: Comment["source"], externalId?: string) {
   const raw = String(externalId ?? "").trim();
   if (!raw) return undefined;
@@ -1872,8 +1891,12 @@ function mapCommentForUpsert(comment: Comment, organizationId: string, existing?
     ? comment.externalReplies.map((reply) => ({ ...reply, publishedAt: normalizeCommentTimestamp(reply.publishedAt) }))
     : [];
   const existingExternalReplies = Array.isArray(existing?.external_replies) ? existing.external_replies : [];
-  const externalRepliesById = new Map(existingExternalReplies.map((reply: any) => [reply.id, reply]));
-  for (const reply of incomingExternalReplies) externalRepliesById.set(reply.id, reply);
+  const externalRepliesById = new Map(existingExternalReplies.map((reply: any) => [replyMergeKey(reply.id) || reply.id, reply]));
+  for (const reply of incomingExternalReplies) {
+    const key = replyMergeKey(reply.id) || reply.id;
+    const current = externalRepliesById.get(key);
+    externalRepliesById.set(key, current ? pickBetterReply(reply, current) : reply);
+  }
   const responseHistory: CommentResponseHistoryItem[] = mergeResponseHistory(existing, comment);
   const incomingExternalReplyTexts = new Set(incomingExternalReplies
     .filter((reply) => !reply.isOwnReply)
