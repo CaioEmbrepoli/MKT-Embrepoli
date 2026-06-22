@@ -1506,13 +1506,14 @@ export default function Home() {
       return;
     }
     if (userHasNoTeam || !currentUser.id || !currentUser.active) return;
-    const landingKey = `${currentUser.id}:${allowedAreas.join("|")}`;
-    if (initialLandingAppliedFor.current === landingKey) return;
+    // A tela inicial deve ser definida somente ao entrar no sistema. Permissões e
+    // dados podem ser atualizados em segundo plano sem interromper a navegação atual.
+    if (initialLandingAppliedFor.current === currentUser.id) return;
     const landing = defaultLandingForProfile(currentUser, profileAreas, profileModulePermissions);
     setActiveArea(landing.area);
     setActiveSection(landing.sectionId);
-    initialLandingAppliedFor.current = landingKey;
-  }, [loggedIn, userHasNoTeam, currentUser, allowedAreas, profileAreas, profileModulePermissions]);
+    initialLandingAppliedFor.current = currentUser.id;
+  }, [loggedIn, userHasNoTeam, currentUser, profileAreas, profileModulePermissions]);
 
   // Lê ?tiktok=connected|error após retorno do OAuth e navega para Configurações
   useEffect(() => {
@@ -1880,7 +1881,7 @@ export default function Home() {
     setCurrentUserId(authenticatedProfile.id);
     setActiveArea(landing.area);
     setActiveSection(landing.sectionId);
-    initialLandingAppliedFor.current = `${authenticatedProfile.id}:${allowedAreasForProfile(authenticatedProfile, data.profileAreas, data.profileModulePermissions).join("|")}`;
+    initialLandingAppliedFor.current = authenticatedProfile.id;
     setAuthMode("login");
     setLoggedIn(true);
   }
