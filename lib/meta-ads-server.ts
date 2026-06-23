@@ -305,7 +305,7 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
 
     const since = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
-    await context.service
+    const { error: deleteInsightsError } = await context.service
       .from("ad_insights_daily")
       .delete()
       .eq("organization_id", context.organizationId)
@@ -313,6 +313,7 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
       .eq("account_id", accountId)
       .gte("date", since)
       .lte("date", today);
+    if (deleteInsightsError) throw new Error(`ad_insights_daily delete: ${deleteInsightsError.message}`);
 
     const insights = await fetchPaged<MetaInsight>(token, `/${accountPath}/insights`, {
       level: "ad",
@@ -321,11 +322,12 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
       fields: "account_id,campaign_id,adset_id,ad_id,date_start,date_stop,spend,impressions,reach,frequency,cpm,clicks,inline_link_clicks,ctr,cpc,actions,action_values,video_play_actions",
       limit: "500"
     });
-    const insightRows = insights.map((insight) => {
+    const insightRowsByKey = new Map<string, Record<string, unknown>>();
+    for (const insight of insights) {
       const spend = num(insight.spend);
       const metrics = actionMetrics(insight);
       const engagements = metrics.engagements || metrics.leads + metrics.conversations + metrics.purchases + metrics.videoViews;
-      return {
+      const row = {
         id: crypto.randomUUID(),
         organization_id: context.organizationId,
         platform: "meta",
@@ -355,12 +357,33 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
         engagements: int(engagements),
         video_views: int(metrics.videoViews),
         cost_per_engagement: safeDivide(spend, engagements),
+        breakdown_placement: null,
+        breakdown_age: null,
+        breakdown_gender: null,
+        breakdown_region: null,
+        breakdown_device: null,
         updated_at: now
       };
-    });
+      const insightKey = [
+        row.organization_id,
+        row.platform,
+        row.account_id,
+        row.campaign_id ?? "",
+        row.ad_set_id ?? "",
+        row.ad_id ?? "",
+        row.date,
+        row.breakdown_placement ?? "",
+        row.breakdown_age ?? "",
+        row.breakdown_gender ?? "",
+        row.breakdown_region ?? "",
+        row.breakdown_device ?? ""
+      ].join("|");
+      insightRowsByKey.set(insightKey, row);
+    }
+    const insightRows = Array.from(insightRowsByKey.values());
     if (insightRows.length) {
-      const { error } = await context.service.from("ad_insights_daily").upsert(insightRows, { ignoreDuplicates: true });
-      if (error) throw new Error(`ad_insights_daily upsert: ${error.message}`);
+      const { error } = await context.service.from("ad_insights_daily").insert(insightRows);
+      if (error) throw new Error(`ad_insights_daily insert: ${error.message}`);
     }
     insightCount += insightRows.length;
   }

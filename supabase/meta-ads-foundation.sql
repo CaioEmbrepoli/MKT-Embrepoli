@@ -32,8 +32,7 @@ create table if not exists public.ad_campaigns (
 );
 
 create unique index if not exists ad_campaigns_org_account_external_idx
-on public.ad_campaigns (organization_id, account_id, external_id)
-where external_id is not null;
+on public.ad_campaigns (organization_id, account_id, external_id);
 
 create table if not exists public.ad_sets (
   id text primary key default gen_random_uuid()::text,
@@ -51,8 +50,7 @@ create table if not exists public.ad_sets (
 );
 
 create unique index if not exists ad_sets_org_campaign_external_idx
-on public.ad_sets (organization_id, campaign_id, external_id)
-where external_id is not null;
+on public.ad_sets (organization_id, campaign_id, external_id);
 
 create table if not exists public.ads (
   id text primary key default gen_random_uuid()::text,
@@ -71,8 +69,7 @@ create table if not exists public.ads (
 );
 
 create unique index if not exists ads_org_campaign_external_idx
-on public.ads (organization_id, campaign_id, external_id)
-where external_id is not null;
+on public.ads (organization_id, campaign_id, external_id);
 
 create table if not exists public.ad_insights_daily (
   id text primary key default gen_random_uuid()::text,
