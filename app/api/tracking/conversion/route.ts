@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { classifyDocument } from "@/lib/document";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
       saleValue?: number | string;
       productName?: string;
       email?: string | null;
+      document?: string | null;
     };
 
     const organizationId = body.organizationId?.trim();
@@ -57,6 +59,8 @@ export async function POST(request: Request) {
 
     const email = body.email?.trim().toLowerCase() || "";
     const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    const { cpf, cnpj } = classifyDocument(body.document ?? "");
+    const hasValidDocument = Boolean(cpf || cnpj);
 
     let personId: string | null = null;
     if (isValidEmail) {
@@ -64,6 +68,31 @@ export async function POST(request: Request) {
         p_org: organizationId,
         p_type: "email",
         p_value: email,
+        p_name: null,
+        p_channel: "site",
+        p_channel_detail: "tray_checkout",
+        p_visitor_id: resolvedVisitorId
+      });
+      personId = (data as string) ?? null;
+
+      // Documento nao foi o identificador primario (email foi) — grava como
+      // identifier adicional da mesma person, igual ja faz identify/route.ts.
+      if (personId && hasValidDocument) {
+        await service.from("person_identifiers").upsert(
+          {
+            organization_id: organizationId,
+            person_id: personId,
+            type: cpf ? "cpf" : "cnpj",
+            value: cpf || cnpj
+          },
+          { onConflict: "organization_id,type,value", ignoreDuplicates: true }
+        );
+      }
+    } else if (hasValidDocument) {
+      const { data } = await service.rpc("upsert_person_by_identifier", {
+        p_org: organizationId,
+        p_type: cpf ? "cpf" : "cnpj",
+        p_value: cpf || cnpj,
         p_name: null,
         p_channel: "site",
         p_channel_detail: "tray_checkout",
@@ -92,22 +121,35 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     // Uma conversão é uma compra concluída: a pessoa já é cliente, não só lead.
-    // Liga (ou cria) o registro em sales_clients por email, igual ao padrão já
-    // usado pelo webhook do Meta (autoLinkSalesClient), mas com status "cliente".
-    if (personId && isValidEmail && conversion) {
+    // Liga (ou cria) o registro em sales_clients por email ou cpf/cnpj, igual
+    // ao padrão já usado em identify/route.ts, mas com status "cliente".
+    if (personId && (isValidEmail || hasValidDocument) && conversion) {
+      const orFilters: string[] = [];
+      if (isValidEmail) orFilters.push(`email.eq.${email}`);
+      if (cpf) orFilters.push(`cpf.eq.${cpf}`);
+      if (cnpj) orFilters.push(`cnpj.eq.${cnpj}`);
+
       const { data: existingClients } = await service
         .from("sales_clients")
-        .select("id, email, person_id")
-        .eq("organization_id", organizationId);
-      const existingClient = (existingClients ?? []).find(
-        (c: { email: string }) => String(c.email ?? "").trim().toLowerCase() === email
-      );
+        .select("id, email, person_id, cpf, cnpj")
+        .eq("organization_id", organizationId)
+        .or(orFilters.join(","));
+
+      const clients = existingClients ?? [];
+      const existingClient =
+        (isValidEmail ? clients.find((c) => String(c.email ?? "").trim().toLowerCase() === email) : null) ??
+        (cpf ? clients.find((c) => c.cpf === cpf) : null) ??
+        (cnpj ? clients.find((c) => c.cnpj === cnpj) : null) ??
+        null;
 
       if (existingClient) {
         await service
           .from("sales_clients")
           .update({
             person_id: existingClient.person_id ?? personId,
+            email: existingClient.email || email || "",
+            cpf: existingClient.cpf || cpf || null,
+            cnpj: existingClient.cnpj || cnpj || null,
             status: "cliente",
             sales_funnel_stage: "fechado",
             last_purchase_at: conversion.sale_date,
@@ -121,9 +163,11 @@ export async function POST(request: Request) {
           id: newClientId,
           organization_id: organizationId,
           name: "Cliente Tray",
-          client_type: "PF",
-          email,
+          client_type: cnpj ? "PJ" : "PF",
+          email: email || "",
           phone: "",
+          cpf: cpf || null,
+          cnpj: cnpj || null,
           company: "",
           segment: "",
           state_uf: "",
