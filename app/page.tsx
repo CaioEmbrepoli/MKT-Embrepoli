@@ -14672,6 +14672,7 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
   const [phase, setPhase] = useState<"loading" | "idle" | "importing" | "done" | "error">("loading");
   const [summary, setSummary] = useState<MetaAdsImportSummary | null>(null);
   const [error, setError] = useState<DisplayIntegrationError>("");
+  const [lastRange, setLastRange] = useState<"last_30d" | "all">("last_30d");
 
   useEffect(() => {
     let cancelled = false;
@@ -14692,11 +14693,12 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
     };
   }, []);
 
-  async function runImport() {
+  async function runImport(range: "last_30d" | "all" = "last_30d") {
     setError("");
+    setLastRange(range);
     setPhase("importing");
     try {
-      const result = await importMetaAdsData();
+      const result = await importMetaAdsData(range);
       setSummary(result.summary);
       await reloadData?.();
       setPhase("done");
@@ -14736,7 +14738,7 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
           <div className="rounded-2xl bg-blue-50 p-4">
             <p className="text-sm font-black text-blue-950">Conexão Meta Ads</p>
             <p className="mt-1 text-sm font-bold text-blue-800/80">
-              O sistema vai importar contas, campanhas, conjuntos, anúncios e métricas dos últimos 30 dias.
+              O sistema vai importar contas, campanhas, conjuntos, anúncios e métricas do período escolhido.
             </p>
             <div className="mt-3 rounded-2xl border border-blue-100 bg-white px-3 py-2">
               <p className="text-xs font-black uppercase text-slate-400">Conta conectada</p>
@@ -14758,9 +14760,23 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
             )}
             {error && <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} compact />}
           </div>
-          <button type="button" disabled={!connected} onClick={runImport} className="w-full rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800 disabled:bg-slate-200 disabled:text-slate-400">
-            {connected ? "Importar últimos 30 dias" : "Meta Ads não conectado"}
-          </button>
+          {connected ? (
+            <div className="space-y-2">
+              <button type="button" onClick={() => runImport("last_30d")} className="w-full rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
+                Importar últimos 30 dias
+              </button>
+              <button type="button" onClick={() => runImport("all")} className="w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
+                Importar últimos 12 meses
+              </button>
+              <p className="text-center text-xs font-bold text-slate-400">
+                Últimos 12 meses pode demorar mais (até alguns minutos) e trazer um volume bem maior de dados.
+              </p>
+            </div>
+          ) : (
+            <button type="button" disabled className="w-full rounded-2xl bg-slate-200 px-4 py-3 text-sm font-black text-slate-400">
+              Meta Ads não conectado
+            </button>
+          )}
         </div>
       )}
 
@@ -14803,10 +14819,10 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
 
       {phase === "error" && (
         <div className="space-y-4">
-          <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={connected ? runImport : undefined} />
+          <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={connected ? () => runImport(lastRange) : undefined} />
           <div className="flex gap-2">
             {connected && (
-              <button type="button" onClick={runImport} className="flex-1 rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
+              <button type="button" onClick={() => runImport(lastRange)} className="flex-1 rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
                 Tentar novamente
               </button>
             )}

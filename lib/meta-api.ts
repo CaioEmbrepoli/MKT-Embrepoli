@@ -182,6 +182,13 @@ export async function disconnectMetaAdsConnection(): Promise<void> {
   await fetchJson<{ ok: true }>("/api/meta/ads/disconnect", { method: "POST" });
 }
 
-export async function importMetaAdsData(): Promise<{ summary: MetaAdsImportSummary }> {
-  return fetchJson<{ summary: MetaAdsImportSummary }>("/api/meta/ads/import", { method: "POST" }, 180000);
+export async function importMetaAdsData(range: "last_30d" | "all" = "last_30d"): Promise<{ summary: MetaAdsImportSummary }> {
+  // "all" busca 12 meses em lotes mensais por conta — pode passar de 3 minutos
+  // com contas com bastante historico, por isso usa um timeout bem maior.
+  const timeoutMs = range === "all" ? 290000 : 60000;
+  return fetchJson<{ summary: MetaAdsImportSummary }>(
+    "/api/meta/ads/import",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ range }) },
+    timeoutMs
+  );
 }

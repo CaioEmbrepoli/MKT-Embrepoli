@@ -302,7 +302,16 @@ export async function getMetaAdsConnection(context: MetaRequestContext) {
   return connection;
 }
 
-export async function graphGet<T>(pathOrUrl: string, accessToken: string, params: Record<string, string> = {}): Promise<T> {
+// Erros transitorios da Meta (sobrecarga momentanea, code 2, ou rate limit
+// codes 4/17/32/613) merecem retry com backoff em vez de falhar a importacao
+// inteira — comuns ao buscar muitos lotes de insights em sequencia ("all").
+function isTransientMetaError(status: number, err: { code?: number; error_subcode?: number } | undefined) {
+  if (status >= 500) return true;
+  const code = err?.code;
+  return code === 2 || code === 4 || code === 17 || code === 32 || code === 613;
+}
+
+export async function graphGet<T>(pathOrUrl: string, accessToken: string, params: Record<string, string> = {}, retries = 3): Promise<T> {
   const url = pathOrUrl.startsWith("http")
     ? new URL(pathOrUrl)
     : new URL(`${metaGraphBase()}${pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`}`);
@@ -310,12 +319,24 @@ export async function graphGet<T>(pathOrUrl: string, accessToken: string, params
     if (value) url.searchParams.set(key, value);
   }
   url.searchParams.set("access_token", accessToken);
-  const response = await fetch(url);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok || data?.error) {
-    throw new Error(data?.error?.message || "Erro ao consultar a API da Meta.");
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const response = await fetch(url);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.error) {
+      const err = data?.error ?? {};
+      if (attempt < retries && isTransientMetaError(response.status, err)) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** attempt));
+        continue;
+      }
+      const detail = [err.message, err.error_user_msg, err.error_subcode ? `subcode ${err.error_subcode}` : null]
+        .filter(Boolean)
+        .join(" | ");
+      throw new Error(detail || "Erro ao consultar a API da Meta.");
+    }
+    return data as T;
   }
-  return data as T;
+  throw new Error("Erro ao consultar a API da Meta.");
 }
 
 export async function graphPost<T>(pathOrUrl: string, accessToken: string, body: Record<string, string> = {}): Promise<T> {

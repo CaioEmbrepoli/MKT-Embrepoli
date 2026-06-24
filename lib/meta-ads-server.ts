@@ -135,6 +135,23 @@ function safeDivide(numerator: number, denominator: number) {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
+function monthlyChunks(monthsBack: number) {
+  const chunks: Array<{ since: string; until: string }> = [];
+  const today = new Date();
+  let chunkUntil = new Date(today);
+  for (let i = 0; i < monthsBack; i++) {
+    const chunkSince = new Date(chunkUntil);
+    chunkSince.setDate(chunkSince.getDate() - 30);
+    chunks.push({
+      since: chunkSince.toISOString().slice(0, 10),
+      until: chunkUntil.toISOString().slice(0, 10)
+    });
+    chunkUntil = new Date(chunkSince);
+    chunkUntil.setDate(chunkUntil.getDate() - 1);
+  }
+  return chunks;
+}
+
 async function fetchPaged<T>(accessToken: string, path: string, params: Record<string, string>, maxPages = 50) {
   const items: T[] = [];
   let nextUrl = path;
@@ -193,7 +210,10 @@ function actionMetrics(insight: MetaInsight) {
   return { leads, landingPageViews, conversations, purchases, purchaseValue, engagements, videoViews };
 }
 
-export async function importMetaAdsData(context: MetaRequestContext): Promise<MetaAdsImportSummary> {
+export async function importMetaAdsData(
+  context: MetaRequestContext,
+  range: "last_30d" | "all" = "last_30d"
+): Promise<MetaAdsImportSummary> {
   const connection = await getMetaAdsConnection(context);
   const token = connection.access_token;
   const now = new Date().toISOString();
@@ -220,6 +240,7 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
   let adSetCount = 0;
   let adCount = 0;
   let insightCount = 0;
+  const datePreset = range === "all" ? "last_12_months" : "last_30d";
 
   for (const account of accounts) {
     const accountExternalId = String(account.id || account.account_id);
@@ -303,25 +324,59 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
     const adMap = await mergeRows(context.service, "ads", context.organizationId, adRows, undefined, "organization_id,campaign_id,external_id");
     adCount += adRows.length;
 
-    const since = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const today = new Date().toISOString().slice(0, 10);
-    const { error: deleteInsightsError } = await context.service
+    let deleteQuery = context.service
       .from("ad_insights_daily")
       .delete()
       .eq("organization_id", context.organizationId)
       .eq("platform", "meta")
-      .eq("account_id", accountId)
-      .gte("date", since)
-      .lte("date", today);
+      .eq("account_id", accountId);
+    if (range !== "all") {
+      const since = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      deleteQuery = deleteQuery.gte("date", since).lte("date", today);
+    }
+    const { error: deleteInsightsError } = await deleteQuery;
     if (deleteInsightsError) throw new Error(`ad_insights_daily delete: ${deleteInsightsError.message}`);
 
-    const insights = await fetchPaged<MetaInsight>(token, `/${accountPath}/insights`, {
-      level: "ad",
-      time_increment: "1",
-      date_preset: "last_30d",
-      fields: "account_id,campaign_id,adset_id,ad_id,date_start,date_stop,spend,impressions,reach,frequency,cpm,clicks,inline_link_clicks,ctr,cpc,actions,action_values,video_play_actions",
-      limit: "500"
-    });
+    const insightFields = "account_id,campaign_id,adset_id,ad_id,date_start,date_stop,spend,impressions,reach,frequency,cpm,clicks,inline_link_clicks,ctr,cpc,actions,action_values,video_play_actions";
+    let insights: MetaInsight[];
+    if (range === "all") {
+      // A Meta rejeita pedir granularidade diaria por anuncio (level: "ad",
+      // time_increment: "1") num periodo longo de uma vez ("Please reduce the
+      // amount of data you're asking for") — divide em janelas mensais.
+      // Limitado a 12 meses (em vez do maximo de 37 permitido pela Meta) para
+      // manter a importacao dentro do timeout do cliente/funcao (290s/300s).
+      insights = [];
+      for (const { since: chunkSince, until: chunkUntil } of monthlyChunks(12)) {
+        const chunk = await fetchPaged<MetaInsight>(
+          token,
+          `/${accountPath}/insights`,
+          {
+            level: "ad",
+            time_increment: "1",
+            time_range: JSON.stringify({ since: chunkSince, until: chunkUntil }),
+            fields: insightFields,
+            limit: "500"
+          },
+          20
+        );
+        insights.push(...chunk);
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    } else {
+      insights = await fetchPaged<MetaInsight>(
+        token,
+        `/${accountPath}/insights`,
+        {
+          level: "ad",
+          time_increment: "1",
+          date_preset: datePreset,
+          fields: insightFields,
+          limit: "500"
+        },
+        50
+      );
+    }
     const insightRowsByKey = new Map<string, Record<string, unknown>>();
     for (const insight of insights) {
       const spend = num(insight.spend);
@@ -394,6 +449,6 @@ export async function importMetaAdsData(context: MetaRequestContext): Promise<Me
     adSets: adSetCount,
     ads: adCount,
     insights: insightCount,
-    datePreset: "last_30d"
+    datePreset
   };
 }
