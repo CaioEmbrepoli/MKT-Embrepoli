@@ -2,7 +2,7 @@ import { Buffer } from "buffer";
 import { randomUUID } from "crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { metaGraphVersion, type MetaRequestContext } from "./meta-server";
-import { getGoogleAccessToken } from "./google-server";
+import { getGoogleAccessToken, signDriveProxyToken } from "./google-server";
 
 export const INSTAGRAM_CONTENT_PUBLISH_SCOPE = "instagram_content_publish";
 
@@ -149,18 +149,6 @@ async function fetchDirectFile(assetUrl: string) {
   };
 }
 
-async function ensureDrivePublicPermission(driveToken: string, fileId: string) {
-  try {
-    await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${driveToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ role: "reader", type: "anyone" })
-    });
-  } catch (e) {
-    console.warn("[instagram-publish] drive permission:", e instanceof Error ? e.message : e);
-  }
-}
-
 async function ensurePublicBucket(service: SupabaseClient) {
   const { error } = await service.storage.createBucket(PUBLICATION_BUCKET, { public: true });
   if (error && !/already exists/i.test(error.message)) {
@@ -215,60 +203,22 @@ async function preparePublicAsset(context: MetaRequestContext, payload: Instagra
       throw new Error("O Instagram aceita apenas imagem ou vídeo neste fluxo.");
     }
 
-    await ensurePublicBucket(context.service);
-    const ext = extensionForContentType(contentType);
-    const filePath = `${context.organizationId}/${Date.now()}-${randomUUID()}.${ext}`;
-
     if (contentType.startsWith("video/")) {
-      // Vídeos do Drive: streaming direto para o Supabase via HTTP para evitar OOM
-      const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
-        headers: { Authorization: `Bearer ${driveToken}` }
-      });
-      if (!fileRes.ok) throw new Error("Erro ao baixar arquivo do Drive.");
-
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-      const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-      const uploadEndpoint = `${supabaseUrl}/storage/v1/object/${PUBLICATION_BUCKET}/${filePath}`;
-
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore — duplex necessário para streaming de request body no Node.js
-      const uploadRes = await fetch(uploadEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": contentType, Authorization: `Bearer ${serviceKey}`, apikey: serviceKey },
-        body: fileRes.body,
-        duplex: "half",
-      } as RequestInit);
-
-      if (!uploadRes.ok) {
-        const errData = await uploadRes.json().catch(() => ({})) as { message?: string; error?: string; statusCode?: string };
-        const isTooBig = errData.message?.toLowerCase().includes("maximum allowed size") || errData.statusCode === "413";
-
-        if (isTooBig) {
-          // Fallback: garante que o arquivo está acessível via "Qualquer pessoa com o link"
-          // e tenta usar a URL pública do Drive diretamente.
-          await ensureDrivePublicPermission(driveToken, fileId);
-          const publicDriveUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=download&authuser=0`;
-          const testRes = await fetch(publicDriveUrl, { method: "HEAD" }).catch(() => null);
-          const ct = (testRes?.headers.get("content-type") || "").split(";")[0];
-          if (testRes?.ok && ct.startsWith("video/")) {
-            return { publicUrl: publicDriveUrl, contentType: ct || contentType, buffer: Buffer.alloc(0) };
-          }
-          throw new Error(
-            "O vídeo do Drive excede o limite de 50MB do Supabase. " +
-            "Solução: compartilhe o arquivo no Drive como 'Qualquer pessoa com o link pode visualizar', " +
-            "ou envie o vídeo diretamente na revisão (sem usar link do Drive)."
-          );
-        }
-
-        throw new Error(`Erro ao preparar arquivo publico: ${errData.message || errData.error || `HTTP ${uploadRes.status}`}`);
-      }
-
-      const publicUrl = context.service.storage.from(PUBLICATION_BUCKET).getPublicUrl(filePath).data.publicUrl;
-      if (!publicUrl) throw new Error("Não foi possível gerar URL pública para a Meta.");
+      // Vídeos do Drive: a Meta busca o video_url ela mesma, de forma
+      // assincrona — em vez de baixar e reenviar pra um storage, só damos a
+      // ela uma URL assinada que repassa os bytes do Drive na hora (ver
+      // app/api/meta/instagram/drive-proxy/route.ts). Sem limite de tamanho,
+      // sem depender de storage nenhum.
+      const token = signDriveProxyToken(fileId, context.organizationId);
+      const proxyBase = (process.env.NEXT_PUBLIC_SITE_URL || "https://mkt-embrepoli.vercel.app").replace(/\/$/, "");
+      const publicUrl = `${proxyBase}/api/meta/instagram/drive-proxy?token=${encodeURIComponent(token)}`;
       return { publicUrl, contentType, buffer: Buffer.alloc(0) };
     }
 
     // Imagens do Drive: download completo necessário para validar dimensões de Story
+    await ensurePublicBucket(context.service);
+    const ext = extensionForContentType(contentType);
+    const filePath = `${context.organizationId}/${Date.now()}-${randomUUID()}.${ext}`;
     const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
       headers: { Authorization: `Bearer ${driveToken}` }
     });

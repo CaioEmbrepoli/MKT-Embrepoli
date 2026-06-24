@@ -127,6 +127,35 @@ export function verifyGoogleState<T extends Record<string, unknown>>(state: stri
   return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as T;
 }
 
+function driveProxySecret() {
+  return process.env.DRIVE_PROXY_SIGNING_SECRET || stateSecret();
+}
+
+export type DriveProxyTokenPayload = { fileId: string; organizationId: string; exp: number };
+
+// Token assinado e com expiracao para a Meta buscar um arquivo do Drive via
+// /api/meta/instagram/drive-proxy sem precisar de sessao de usuario.
+export function signDriveProxyToken(fileId: string, organizationId: string, ttlMs = 6 * 60 * 60 * 1000) {
+  const payload: DriveProxyTokenPayload = { fileId, organizationId, exp: Date.now() + ttlMs };
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = crypto.createHmac("sha256", driveProxySecret()).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+export function verifyDriveProxyToken(token: string): DriveProxyTokenPayload {
+  const [body, signature] = token.split(".");
+  if (!body || !signature) throw new Error("Token invalido.");
+  const expected = crypto.createHmac("sha256", driveProxySecret()).update(body).digest("base64url");
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
+    throw new Error("Assinatura invalida.");
+  }
+  const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as DriveProxyTokenPayload;
+  if (!payload.exp || Date.now() > payload.exp) throw new Error("Token expirado.");
+  return payload;
+}
+
 export async function exchangeRefreshToken(refreshToken: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
