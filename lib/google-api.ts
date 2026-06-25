@@ -318,8 +318,11 @@ export type AnalyticsOverview = {
   topPages: AnalyticsPageRow[];
 };
 
-export async function getAnalyticsOverview(days = 30): Promise<AnalyticsOverview> {
-  return fetchJson<AnalyticsOverview>(`/api/google/analytics/overview?days=${days}`);
+export async function getAnalyticsOverview(daysOrRange: number | { startDate: string; endDate: string } = 30): Promise<AnalyticsOverview> {
+  if (typeof daysOrRange === "object") {
+    return fetchJson<AnalyticsOverview>(`/api/google/analytics/overview?startDate=${encodeURIComponent(daysOrRange.startDate)}&endDate=${encodeURIComponent(daysOrRange.endDate)}`);
+  }
+  return fetchJson<AnalyticsOverview>(`/api/google/analytics/overview?days=${daysOrRange}`);
 }
 
 export type VideoTimelineRow = { date: string; views: number };

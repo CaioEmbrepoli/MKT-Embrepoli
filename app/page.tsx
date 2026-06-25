@@ -124,8 +124,10 @@ import {
   deleteTrackableLink,
   deleteVehicleType,
   ensureCurrentProfile,
+  fetchVisitorsAndSessionsBefore,
   loadAppData,
   loadInitialAppData,
+  VISITORS_DEFAULT_WINDOW_DAYS,
   saveCampaign,
   saveCampaignAudience,
   saveCalendarDate,
@@ -540,7 +542,20 @@ function addSaoPauloDays(date: { year: number; month: number; day: number }, day
   return saoPauloLocalDate(new Date(Date.UTC(date.year, date.month - 1, date.day + days, 12)));
 }
 
-function saoPauloPeriodRange(period: string, from = new Date()) {
+type CustomDateRange = { start: string; end: string };
+
+function saoPauloPeriodRange(period: string, from = new Date(), custom?: CustomDateRange | null) {
+  if (period === "custom") {
+    if (!custom?.start || !custom?.end) return null;
+    const [sy, sm, sd] = custom.start.split("-").map(Number);
+    const [ey, em, ed] = custom.end.split("-").map(Number);
+    if (!sy || !sm || !sd || !ey || !em || !ed) return null;
+    const endNext = addSaoPauloDays({ year: ey, month: em, day: ed }, 1);
+    return {
+      start: new Date(localSaoPauloToUtcIso(sy, sm, sd, "00:00")),
+      end: new Date(localSaoPauloToUtcIso(endNext.year, endNext.month, endNext.day, "00:00"))
+    };
+  }
   if (period === "all") return null;
   const days = Math.max(1, Number(period) || 1);
   const today = saoPauloLocalDate(from);
@@ -550,6 +565,13 @@ function saoPauloPeriodRange(period: string, from = new Date()) {
     start: new Date(localSaoPauloToUtcIso(startLocal.year, startLocal.month, startLocal.day, "00:00")),
     end: new Date(localSaoPauloToUtcIso(nextLocal.year, nextLocal.month, nextLocal.day, "00:00"))
   };
+}
+
+function mergeById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
+  if (!incoming.length) return existing;
+  const map = new Map(existing.map((item) => [item.id, item]));
+  for (const item of incoming) map.set(item.id, item);
+  return Array.from(map.values());
 }
 
 function isInDateRange(value: string, range: { start: Date; end: Date } | null) {
@@ -2911,7 +2933,9 @@ export default function Home() {
               trackableLinks={trackableLinks}
               setTrackableLinks={syncTrackableLinks}
               visitors={visitors}
+              setVisitors={setVisitors}
               trackingSessions={trackingSessions}
+              setTrackingSessions={setTrackingSessions}
               persons={persons}
               conversions={conversions}
               salesClients={salesClients}
@@ -9665,7 +9689,9 @@ function Metrics({
   trackableLinks,
   setTrackableLinks,
   visitors,
+  setVisitors,
   trackingSessions,
+  setTrackingSessions,
   persons,
   conversions,
   salesClients,
@@ -9700,7 +9726,9 @@ function Metrics({
   trackableLinks: TrackableLink[];
   setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
   visitors: Visitor[];
+  setVisitors: Dispatch<SetStateAction<Visitor[]>>;
   trackingSessions: TrackingSession[];
+  setTrackingSessions: Dispatch<SetStateAction<TrackingSession[]>>;
   persons: Person[];
   conversions: Conversion[];
   salesClients: SalesClient[];
@@ -9727,7 +9755,14 @@ function Metrics({
   setModal: Dispatch<SetStateAction<ModalState>>;
   reloadData?: () => Promise<void>;
 }) {
-  const [period, setPeriod] = useState("all");
+  const [period, setPeriod] = useState("1");
+  const [customRange, setCustomRange] = useState<CustomDateRange>({ start: "", end: "" });
+  const [visitorsFullyLoaded, setVisitorsFullyLoaded] = useState(false);
+  const [loadingOlderVisitors, setLoadingOlderVisitors] = useState(false);
+  const visitorsWindowStartIso = useMemo(
+    () => new Date(Date.now() - VISITORS_DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+    []
+  );
   const [metricsMode, setMetricsMode] = useState<"overview" | "organic" | "ads" | "links">("overview");
   const [origemSubTab, setOrigemSubTab] = useState<"links" | "visitantes" | "leads">("links");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
@@ -9937,7 +9972,35 @@ function Metrics({
   }, [resolvedMetrics]);
   const activeChannelName = activeChannel === "all" ? "Geral" : (channelById.get(activeChannel)?.name ?? activeChannel);
 
-  const periodRange = useMemo(() => saoPauloPeriodRange(period, today), [period, todayMs]);
+  const periodRange = useMemo(() => saoPauloPeriodRange(period, today, customRange), [period, todayMs, customRange]);
+
+  // Carregamento inicial so traz visitors/tracking_sessions dos ultimos
+  // VISITORS_DEFAULT_WINDOW_DAYS dias (ver loadAppData). Se o periodo
+  // selecionado pedir dado mais antigo que essa janela, busca sob demanda
+  // e mescla no estado em vez de recarregar tudo de novo.
+  useEffect(() => {
+    if (visitorsFullyLoaded || !supabase) return;
+    const needsOlderData = period === "all" || (periodRange && periodRange.start < new Date(visitorsWindowStartIso));
+    if (!needsOlderData) return;
+    let cancelled = false;
+    setLoadingOlderVisitors(true);
+    fetchVisitorsAndSessionsBefore(supabase, currentUser.organizationId, visitorsWindowStartIso)
+      .then(({ visitors: olderVisitors, trackingSessions: olderSessions }) => {
+        if (cancelled) return;
+        setVisitors((prev) => mergeById(prev, olderVisitors));
+        setTrackingSessions((prev) => mergeById(prev, olderSessions));
+        setVisitorsFullyLoaded(true);
+      })
+      .catch((err) => {
+        console.error("[Metrics] fetchVisitorsAndSessionsBefore", err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingOlderVisitors(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period, periodRange, visitorsFullyLoaded, visitorsWindowStartIso, currentUser.organizationId, setVisitors, setTrackingSessions]);
 
   const overviewMetrics = useMemo(() => resolvedMetrics.filter((m) => {
     return isInDateRange(`${m.date || todayIso()}T12:00:00-03:00`, periodRange);
@@ -10148,8 +10211,9 @@ function Metrics({
       {metricsMode === "overview" ? (
         <div className="space-y-6">
           {/* período */}
-          <div className="flex items-center gap-3">
-            <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["1", "Hoje"], ["7", "Esta semana"], ["30", "Este mês"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
+          <div className="flex flex-wrap items-end gap-3">
+            <PeriodFilterWithCustomRange value={period} onChange={setPeriod} customRange={customRange} onApplyCustomRange={setCustomRange} />
+            {loadingOlderVisitors && <span className="text-xs font-bold text-slate-400">Carregando período mais antigo...</span>}
           </div>
 
           {/* Bloco 1 — KPIs cross-channel */}
@@ -10373,7 +10437,8 @@ function Metrics({
       <>
 
       <div className="mb-5 flex flex-wrap items-end gap-3">
-        <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["30", "Últimos 30 dias"], ["7", "Últimos 7 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
+        <PeriodFilterWithCustomRange value={period} onChange={setPeriod} customRange={customRange} onApplyCustomRange={setCustomRange} />
+        {loadingOlderVisitors && <span className="text-xs font-bold text-slate-400">Carregando período mais antigo...</span>}
         <div ref={filtersRef} className="relative">
           <button type="button" onClick={() => setFiltersOpen((v) => !v)}
             className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-700 hover:border-blue-400 hover:bg-slate-50"
@@ -10874,7 +10939,8 @@ function AdsMetricsDashboard({
   adInsightsDaily: AdInsightDaily[];
   adAlerts: AdAlert[];
 }) {
-  const [period, setPeriod] = useState("30");
+  const [period, setPeriod] = useState("1");
+  const [customRange, setCustomRange] = useState<CustomDateRange>({ start: "", end: "" });
   const [platformFilter, setPlatformFilter] = useState("all");
   const [accountFilter, setAccountFilter] = useState("all");
   const [campaignFilter, setCampaignFilter] = useState("all");
@@ -10885,13 +10951,17 @@ function AdsMetricsDashboard({
 
   const filteredInsights = useMemo(() => {
     const now = new Date();
-    const days = period === "all" ? null : Number(period);
+    const days = period === "all" || period === "custom" ? null : Number(period);
+    const customStart = period === "custom" && customRange.start ? new Date(`${customRange.start}T00:00:00`) : null;
+    const customEnd = period === "custom" && customRange.end ? new Date(`${customRange.end}T23:59:59`) : null;
     return adInsightsDaily.filter((insight) => {
+      const date = new Date(`${insight.date}T12:00:00`);
       if (days !== null) {
-        const date = new Date(`${insight.date}T12:00:00`);
         const diffDays = Math.floor((now.getTime() - date.getTime()) / 86400000);
         if (diffDays > days) return false;
       }
+      if (customStart && date < customStart) return false;
+      if (customEnd && date > customEnd) return false;
       if (platformFilter !== "all" && insight.platform !== platformFilter) return false;
       if (accountFilter !== "all" && insight.accountId !== accountFilter) return false;
       if (campaignFilter !== "all" && insight.campaignId !== campaignFilter) return false;
@@ -10899,7 +10969,7 @@ function AdsMetricsDashboard({
       if (statusFilter !== "all" && (campaign?.status ?? "unknown") !== statusFilter) return false;
       return true;
     });
-  }, [adInsightsDaily, period, platformFilter, accountFilter, campaignFilter, statusFilter, campaignById]);
+  }, [adInsightsDaily, period, customRange, platformFilter, accountFilter, campaignFilter, statusFilter, campaignById]);
 
   const campaignRows = useMemo(() => {
     const grouped = new Map<string, {
@@ -11105,7 +11175,7 @@ function AdsMetricsDashboard({
       ) : null}
 
       <div className="flex flex-wrap items-end gap-3 rounded-[28px] border border-slate-100 bg-white p-4 shadow-sm">
-        <FilterSelect label="Período" value={period} onChange={setPeriod} options={[["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["90", "Últimos 90 dias"], ["all", "Todo período"]]} />
+        <PeriodFilterWithCustomRange value={period} onChange={setPeriod} customRange={customRange} onApplyCustomRange={setCustomRange} />
         <FilterSelect label="Plataforma" value={platformFilter} onChange={setPlatformFilter} options={platformOptions} />
         <FilterSelect label="Conta" value={accountFilter} onChange={setAccountFilter} options={[["all", "Todas"], ...adAccounts.map((account) => [account.id, account.name])]} />
         <FilterSelect label="Campanha" value={campaignFilter} onChange={setCampaignFilter} options={[["all", "Todas"], ...adCampaigns.map((campaign) => [campaign.id, campaign.name])]} />
@@ -11274,6 +11344,61 @@ function FilterSelect({ label, value, options, onChange }: { label: string; valu
         {options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}
       </select>
     </label>
+  );
+}
+
+const PERIOD_FILTER_OPTIONS: string[][] = [
+  ["1", "Hoje"],
+  ["7", "Últimos 7 dias"],
+  ["30", "Últimos 30 dias"],
+  ["90", "Últimos 90 dias"],
+  ["all", "Todo período"],
+  ["custom", "Período personalizado"]
+];
+
+// Seletor de período padronizado (Hoje/7/30/90/Tudo/personalizado) usado nos
+// painéis de Métricas. Quando "custom" é escolhido, mostra dois campos de
+// data + botão "Aplicar" — só dispara onApplyCustomRange ao clicar, evitando
+// refiltrar a cada tecla digitada.
+function PeriodFilterWithCustomRange({
+  value,
+  onChange,
+  customRange,
+  onApplyCustomRange,
+  options = PERIOD_FILTER_OPTIONS
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  customRange: CustomDateRange;
+  onApplyCustomRange: (range: CustomDateRange) => void;
+  options?: string[][];
+}) {
+  const [draft, setDraft] = useState<CustomDateRange>(customRange);
+
+  return (
+    <div className="flex flex-wrap items-end gap-2">
+      <FilterSelect label="Período" value={value} onChange={onChange} options={options} />
+      {value === "custom" && (
+        <>
+          <label className="text-xs font-black uppercase text-slate-500">
+            Início
+            <input type="date" value={draft.start} onChange={(event) => setDraft((prev) => ({ ...prev, start: event.target.value }))} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold normal-case text-slate-700 outline-none focus:border-blue-500" />
+          </label>
+          <label className="text-xs font-black uppercase text-slate-500">
+            Fim
+            <input type="date" value={draft.end} onChange={(event) => setDraft((prev) => ({ ...prev, end: event.target.value }))} className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold normal-case text-slate-700 outline-none focus:border-blue-500" />
+          </label>
+          <button
+            type="button"
+            onClick={() => onApplyCustomRange(draft)}
+            disabled={!draft.start || !draft.end}
+            className="rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+          >
+            Aplicar
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -11900,18 +12025,23 @@ function GoogleAnalyticsPanel() {
   const [data, setData] = useState<AnalyticsOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [days, setDays] = useState("30");
+  const [days, setDays] = useState("1");
+  const [customRange, setCustomRange] = useState<CustomDateRange>({ start: "", end: "" });
 
   useEffect(() => {
+    if (days === "custom" && (!customRange.start || !customRange.end)) return;
     let active = true;
     setLoading(true);
     setError("");
-    getAnalyticsOverview(Number(days))
+    const request = days === "custom"
+      ? getAnalyticsOverview({ startDate: customRange.start, endDate: customRange.end })
+      : getAnalyticsOverview(Number(days));
+    request
       .then((result) => { if (active) setData(result); })
       .catch((err) => { if (active) setError(err instanceof Error ? err.message : "Erro ao carregar Google Analytics."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [days]);
+  }, [days, customRange]);
 
   const deviceLabels: Record<string, string> = {
     mobile: "Celular",
@@ -11935,7 +12065,13 @@ function GoogleAnalyticsPanel() {
           <p className="font-black">Tráfego do site (Google Analytics)</p>
           {data && <p className="text-xs font-bold text-slate-400">{data.startDate} – {data.endDate}</p>}
         </div>
-        <FilterSelect label="Período" value={days} onChange={setDays} options={[["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["90", "Últimos 90 dias"]]} />
+        <PeriodFilterWithCustomRange
+          value={days}
+          onChange={setDays}
+          customRange={customRange}
+          onApplyCustomRange={setCustomRange}
+          options={[["1", "Hoje"], ["7", "Últimos 7 dias"], ["30", "Últimos 30 dias"], ["90", "Últimos 90 dias"], ["custom", "Período personalizado"]]}
+        />
       </div>
 
       {loading && (

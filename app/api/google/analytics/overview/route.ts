@@ -17,8 +17,13 @@ export async function GET(request: Request) {
 
     const accessToken = await getGoogleAccessToken(context, "analytics");
 
-    const days = Number(new URL(request.url).searchParams.get("days") ?? "30") || 30;
-    const dateRanges = [{ startDate: `${days}daysAgo`, endDate: "today" }];
+    const url = new URL(request.url);
+    const days = Number(url.searchParams.get("days") ?? "30") || 30;
+    const explicitStart = url.searchParams.get("startDate");
+    const explicitEnd = url.searchParams.get("endDate");
+    const dateRanges = explicitStart && explicitEnd
+      ? [{ startDate: explicitStart, endDate: explicitEnd }]
+      : [{ startDate: `${days}daysAgo`, endDate: "today" }];
 
     const response = await fetch(`https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:batchRunReports`, {
       method: "POST",
@@ -95,15 +100,15 @@ export async function GET(request: Request) {
     const totalSessions = rows.reduce((sum: number, row: any) => sum + row.sessions, 0);
     const totalUsers = rows.reduce((sum: number, row: any) => sum + row.users, 0);
 
-    const endDate = new Date();
-    const startDate = new Date(endDate.getTime() - days * 24 * 60 * 60 * 1000);
+    const resolvedEndDate = explicitEnd ?? new Date().toISOString().slice(0, 10);
+    const resolvedStartDate = explicitStart ?? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     return NextResponse.json({
       rows,
       totalSessions,
       totalUsers,
-      startDate: startDate.toISOString().slice(0, 10),
-      endDate: endDate.toISOString().slice(0, 10),
+      startDate: resolvedStartDate,
+      endDate: resolvedEndDate,
       daily,
       devices,
       topPages

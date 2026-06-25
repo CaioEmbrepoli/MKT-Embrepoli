@@ -234,15 +234,26 @@ export async function loadInitialAppData(client: SupabaseClient, currentProfile?
   };
 }
 
+// Janela padrao de carregamento inicial de visitors/tracking_sessions — essas
+// tabelas só crescem (tráfego do site) e a maioria das visualizações usa
+// período de até 90 dias; histórico mais antigo é buscado sob demanda via
+// fetchVisitorsAndSessionsBefore quando o usuário pedir um período maior.
+export const VISITORS_DEFAULT_WINDOW_DAYS = 90;
+
+function defaultVisitorsWindowStartIso(): string {
+  return new Date(Date.now() - VISITORS_DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+}
+
 export async function loadAppData(client: SupabaseClient): Promise<AppData> {
   const profile = await ensureCurrentProfile(client);
   const organizationId = profile?.id ? await getOrganizationId(client, profile.id) : EMBREPOLI_ORG_ID;
+  const visitorsWindowStartIso = defaultVisitorsWindowStartIso();
 
   const visitorsPromise = fetchAllRows<Record<string, unknown>>(
-    () => client.from("visitors").select("*").eq("organization_id", organizationId).order("last_seen_at", { ascending: false })
+    () => client.from("visitors").select("*").eq("organization_id", organizationId).gte("last_seen_at", visitorsWindowStartIso).order("last_seen_at", { ascending: false })
   );
   const trackingSessionsPromise = fetchAllRows<Record<string, unknown>>(
-    () => client.from("tracking_sessions").select("*").eq("organization_id", organizationId).order("started_at", { ascending: false })
+    () => client.from("tracking_sessions").select("*").eq("organization_id", organizationId).gte("started_at", visitorsWindowStartIso).order("started_at", { ascending: false })
   );
   const metricsPromise = fetchAllRows<Record<string, unknown>>(
     () => client.from("post_metrics").select("*").eq("organization_id", organizationId)
@@ -406,6 +417,29 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     trackingSessions: trackingSessionsRaw.map(mapTrackingSession),
     persons: (personsData.data ?? []).map(mapPerson),
     conversions: (conversionsData.data ?? []).map(mapConversion)
+  };
+}
+
+// Busca visitors/tracking_sessions fora da janela ja carregada por loadAppData
+// (mais antigos que beforeIso) — usada quando o usuario seleciona um periodo
+// maior que VISITORS_DEFAULT_WINDOW_DAYS (ex: "Todo periodo" ou um inicio de
+// periodo personalizado anterior a janela), em vez de recarregar tudo de novo.
+export async function fetchVisitorsAndSessionsBefore(
+  client: SupabaseClient,
+  organizationId: string,
+  beforeIso: string
+): Promise<{ visitors: Visitor[]; trackingSessions: TrackingSession[] }> {
+  const [visitorsRaw, trackingSessionsRaw] = await Promise.all([
+    fetchAllRows<Record<string, unknown>>(
+      () => client.from("visitors").select("*").eq("organization_id", organizationId).lt("last_seen_at", beforeIso).order("last_seen_at", { ascending: false })
+    ),
+    fetchAllRows<Record<string, unknown>>(
+      () => client.from("tracking_sessions").select("*").eq("organization_id", organizationId).lt("started_at", beforeIso).order("started_at", { ascending: false })
+    )
+  ]);
+  return {
+    visitors: visitorsRaw.map(mapVisitor),
+    trackingSessions: trackingSessionsRaw.map(mapTrackingSession)
   };
 }
 
