@@ -134,15 +134,6 @@ export type MetaAdsConnectionStatus = {
   canManage: boolean;
 };
 
-export type MetaAdsImportSummary = {
-  accounts: number;
-  campaigns: number;
-  adSets: number;
-  ads: number;
-  insights: number;
-  datePreset: string;
-};
-
 export async function getInstagramStatus(): Promise<InstagramConnectionStatus> {
   return fetchJson<InstagramConnectionStatus>("/api/meta/instagram/status");
 }
@@ -180,17 +171,6 @@ export async function startMetaAdsOAuth(): Promise<void> {
 
 export async function disconnectMetaAdsConnection(): Promise<void> {
   await fetchJson<{ ok: true }>("/api/meta/ads/disconnect", { method: "POST" });
-}
-
-export async function importMetaAdsData(range: "last_30d" | "all" = "last_30d"): Promise<{ summary: MetaAdsImportSummary }> {
-  // "all" busca 12 meses em lotes mensais por conta — pode passar de 3 minutos
-  // com contas com bastante historico, por isso usa um timeout bem maior.
-  const timeoutMs = range === "all" ? 290000 : 60000;
-  return fetchJson<{ summary: MetaAdsImportSummary }>(
-    "/api/meta/ads/import",
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ range }) },
-    timeoutMs
-  );
 }
 
 export type MetaAdsImportRangeType = "last_30d" | "last_12m" | "all_time";
