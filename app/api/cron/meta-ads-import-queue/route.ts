@@ -11,6 +11,20 @@ export const maxDuration = 280;
 // maxDuration — o resto fica pendente para a proxima chamada do cron externo.
 const TIME_BUDGET_MS = 250000;
 
+// Pausa entre chunks para nao martelar a API da Meta — sem isso, varios
+// chunks seguidos da mesma conta de anuncio batem em rate limit (subcode
+// 2446079 "User request limit reached") mesmo com o retry interno do graphGet.
+const DELAY_BETWEEN_CHUNKS_MS = 2000;
+
+// Erros transitorios da Meta (rate limit) merecem voltar pra "pending" e
+// tentar de novo depois, em vez de falhar permanentemente — limitado a um
+// numero de tentativas, pra nao ficar girando pra sempre num chunk quebrado.
+const MAX_ATTEMPTS = 5;
+
+function isRetryableMetaError(message: string) {
+  return /rate limit|excessivo de liga|subcode 2446079|request limit reached/i.test(message);
+}
+
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET;
   const isVercelCron = request.headers.get("x-vercel-cron") === "1";
@@ -76,31 +90,34 @@ export async function GET(request: Request) {
       const message = err instanceof Error ? err.message : "Erro desconhecido no import Meta Ads.";
       const failedAt = new Date().toISOString();
       const attempts = (job.attempts ?? 0) + 1;
+      const willRetry = isRetryableMetaError(message) && attempts < MAX_ATTEMPTS;
       await service
         .from("meta_ads_import_jobs")
-        .update({
-          status: "failed",
-          error_message: message,
-          attempts,
-          completed_at: failedAt,
-          updated_at: failedAt
-        })
+        .update(
+          willRetry
+            ? { status: "pending", error_message: message, attempts, updated_at: failedAt }
+            : { status: "failed", error_message: message, attempts, completed_at: failedAt, updated_at: failedAt }
+        )
         .eq("id", job.id);
-      await recordDiagnostic(service, {
-        organizationId: job.organization_id,
-        provider: "meta_ads",
-        service: "meta_ads",
-        error: message,
-        category: "fila",
-        severity: "erro",
-        eventKey: `fila:meta_ads_import:${job.id}`,
-        title: "Falha ao importar lote de Meta Ads",
-        targetKind: "meta_ads_import_job",
-        targetId: job.id,
-        metadata: { batchId: job.batch_id, sinceDate: job.since_date, untilDate: job.until_date }
-      }).catch(() => undefined);
-      results.push({ id: job.id, status: "failed", error: message });
+      if (!willRetry) {
+        await recordDiagnostic(service, {
+          organizationId: job.organization_id,
+          provider: "meta_ads",
+          service: "meta_ads",
+          error: message,
+          category: "fila",
+          severity: "erro",
+          eventKey: `fila:meta_ads_import:${job.id}`,
+          title: "Falha ao importar lote de Meta Ads",
+          targetKind: "meta_ads_import_job",
+          targetId: job.id,
+          metadata: { batchId: job.batch_id, sinceDate: job.since_date, untilDate: job.until_date }
+        }).catch(() => undefined);
+      }
+      results.push({ id: job.id, status: willRetry ? "retrying" : "failed", error: message });
     }
+
+    await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_CHUNKS_MS));
   }
 
   return NextResponse.json({ ok: true, processed: results.length, results });
