@@ -222,6 +222,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
+  const receivedAt = new Date().toISOString();
   if (!verifySignature(rawBody, request.headers.get("x-hub-signature-256"))) {
     await recordInstagramDiagnostic({
       eventType: "webhook_signature_invalid",
@@ -238,7 +239,7 @@ export async function POST(request: Request) {
     const payload = JSON.parse(rawBody || "{}");
     await recordInstagramDiagnostic({
       eventType: "webhook_post_received",
-      processedAt: new Date().toISOString(),
+      processedAt: receivedAt,
       payload: {
         object: safeText(payload.object),
         entryCount: Array.isArray(payload.entry) ? payload.entry.length : 0
@@ -341,7 +342,7 @@ export async function POST(request: Request) {
                 authorName: event.authorName,
                 authorAvatarUrl: event.authorAvatarUrl || undefined,
                 text: event.text,
-                publishedAt: event.publishedAt,
+                publishedAt: event.publishedAt ?? receivedAt,
                 likes: Number(event.value.like_count || 0),
                 isOwnReply: false
               }
@@ -391,20 +392,61 @@ export async function POST(request: Request) {
 
         let comment: ServerCommentInput | null = null;
         if (event.commentId && event.text) {
-          const media = event.mediaId ? await fetchInstagramMediaById(connection.access_token, event.mediaId) : null;
+          let fetchedComment: Awaited<ReturnType<typeof fetchInstagramCommentById>> | null = null;
+          if (!event.publishedAt) {
+            fetchedComment = await fetchInstagramCommentById(connection.access_token, event.commentId, event.mediaId).catch(async (error) => {
+              await recordCommentWebhookEvent(service, {
+                organizationId: connection.organization_id,
+                source: "instagram",
+                eventId: `${event.eventId}:timestamp_fetch_failed`,
+                externalCommentId: instagramExternalCommentId(event.commentId),
+                externalMediaId: event.mediaId,
+                eventType: "comment_timestamp_fetch_failed",
+                payload: {
+                  hasCommentId: true,
+                  hasText: true,
+                  field: safeText(change?.field || "comment")
+                },
+                processedAt: null,
+                error: error instanceof Error ? error.message : "Erro ao buscar horario do comentario do Instagram."
+              });
+              storedEvents += 1;
+              return null;
+            });
+            await recordCommentWebhookEvent(service, {
+              organizationId: connection.organization_id,
+              source: "instagram",
+              eventId: `${event.eventId}:timestamp_resolution`,
+              externalCommentId: instagramExternalCommentId(event.commentId),
+              externalMediaId: fetchedComment?.videoId || event.mediaId,
+              eventType: fetchedComment?.publishedAt ? "comment_timestamp_recovered" : "comment_timestamp_received_at_fallback",
+              payload: {
+                hasCreatedTime: Boolean(event.value?.created_time),
+                hasTimestamp: Boolean(event.value?.timestamp),
+                fetchedTimestamp: Boolean(fetchedComment?.publishedAt),
+                fallback: fetchedComment?.publishedAt ? null : "webhook_received_at"
+              },
+              processedAt: fetchedComment?.publishedAt ? new Date().toISOString() : null,
+              error: fetchedComment?.publishedAt ? null : "Meta nao retornou timestamp do comentario; usando horario de recebimento do webhook."
+            });
+            storedEvents += 1;
+          }
+          const media = fetchedComment
+            ? null
+            : event.mediaId ? await fetchInstagramMediaById(connection.access_token, event.mediaId) : null;
           comment = {
             source: "instagram" as const,
-            externalId: instagramExternalCommentId(event.commentId),
-            videoId: event.mediaId,
-            videoTitle: "Post Instagram",
-            mediaThumbnailUrl: media?.thumbnailUrl || media?.mediaUrl || undefined,
-            mediaUrl: media?.mediaUrl || undefined,
-            mediaPermalink: media?.permalink || undefined,
-            authorName: event.authorName,
-            authorAvatarUrl: event.authorAvatarUrl || undefined,
-            text: event.text,
-            likes: Number(event.value.like_count || 0),
-            publishedAt: event.publishedAt
+            externalId: fetchedComment?.commentId || instagramExternalCommentId(event.commentId),
+            videoId: fetchedComment?.videoId || event.mediaId,
+            videoTitle: fetchedComment?.videoTitle || "Post Instagram",
+            mediaThumbnailUrl: fetchedComment?.mediaThumbnailUrl || media?.thumbnailUrl || media?.mediaUrl || undefined,
+            mediaUrl: fetchedComment?.mediaUrl || media?.mediaUrl || undefined,
+            mediaPermalink: fetchedComment?.mediaPermalink || media?.permalink || undefined,
+            authorName: fetchedComment?.authorName || event.authorName,
+            authorAvatarUrl: fetchedComment?.authorAvatarUrl || event.authorAvatarUrl || undefined,
+            text: fetchedComment?.text || event.text,
+            likes: Number(fetchedComment?.likes ?? event.value.like_count ?? 0),
+            publishedAt: event.publishedAt ?? fetchedComment?.publishedAt ?? receivedAt
           };
         } else if (event.commentId) {
           const fetched = await fetchInstagramCommentById(connection.access_token, event.commentId, event.mediaId).catch(async (error) => {
