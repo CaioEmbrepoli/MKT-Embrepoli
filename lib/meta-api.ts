@@ -192,3 +192,25 @@ export async function importMetaAdsData(range: "last_30d" | "all" = "last_30d"):
     timeoutMs
   );
 }
+
+export type MetaAdsImportRangeType = "last_30d" | "last_12m" | "all_time";
+
+export async function enqueueMetaAdsImport(rangeType: MetaAdsImportRangeType): Promise<{ batchId: string; totalJobs: number }> {
+  return fetchJson<{ batchId: string; totalJobs: number }>(
+    "/api/meta/ads/import/enqueue",
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rangeType }) },
+    30000
+  );
+}
+
+export type MetaAdsImportBatchStatus = {
+  total: number;
+  counts: { pending: number; processing: number; done: number; failed: number; canceled: number };
+  done: boolean;
+  aggregate: { accounts: number; campaigns: number; adSets: number; ads: number; insights: number };
+  errors: string[];
+};
+
+export async function getMetaAdsImportBatchStatus(batchId: string): Promise<MetaAdsImportBatchStatus> {
+  return fetchJson<MetaAdsImportBatchStatus>(`/api/meta/ads/import/status?batchId=${encodeURIComponent(batchId)}`, undefined, 15000);
+}

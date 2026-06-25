@@ -135,7 +135,20 @@ function safeDivide(numerator: number, denominator: number) {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
-function monthlyChunks(monthsBack: number) {
+// Limite historico de insights da Graph API da Meta (~37 meses).
+export const META_ADS_MAX_HISTORY_MONTHS = 37;
+
+// CA EMBREPOLI — unica das 3 contas conectadas com veiculacao ativa.
+// As outras duas (CA EMBREPOLI2, Cladio Dariel Embrepoli) sempre retornam 0
+// insights (sem veiculacao), por isso a importacao trava nessa conta.
+const PINNED_AD_ACCOUNT_EXTERNAL_ID = "act_630200967752379";
+
+function normalizeAccountExternalId(value: string) {
+  const raw = String(value || "").trim();
+  return raw.startsWith("act_") ? raw : `act_${raw}`;
+}
+
+export function monthlyChunks(monthsBack: number) {
   const chunks: Array<{ since: string; until: string }> = [];
   const today = new Date();
   let chunkUntil = new Date(today);
@@ -210,10 +223,21 @@ function actionMetrics(insight: MetaInsight) {
   return { leads, landingPageViews, conversations, purchases, purchaseValue, engagements, videoViews };
 }
 
-export async function importMetaAdsData(
+export type MetaAdsChunkResult = {
+  accounts: number;
+  campaigns: number;
+  adSets: number;
+  ads: number;
+  insights: number;
+};
+
+// Processa um unico periodo (since/until) para a conta de anuncio travada
+// (PINNED_AD_ACCOUNT_EXTERNAL_ID). Usado tanto pela importacao sincrona
+// (importMetaAdsData) quanto pelo processador da fila de importacao em lote.
+export async function importMetaAdsChunk(
   context: MetaRequestContext,
-  range: "last_30d" | "all" = "last_30d"
-): Promise<MetaAdsImportSummary> {
+  range: { since: string; until: string }
+): Promise<MetaAdsChunkResult> {
   const connection = await getMetaAdsConnection(context);
   const token = connection.access_token;
   const now = new Date().toISOString();
@@ -223,7 +247,9 @@ export async function importMetaAdsData(
     limit: "100"
   });
 
-  const accounts = metaAccounts.filter((account) => account.id || account.account_id);
+  const accounts = metaAccounts
+    .filter((account) => account.id || account.account_id)
+    .filter((account) => normalizeAccountExternalId(String(account.id || account.account_id)) === PINNED_AD_ACCOUNT_EXTERNAL_ID);
   const accountRows: TableRow[] = accounts.map((account) => ({
     id: crypto.randomUUID(),
     organization_id: context.organizationId,
@@ -240,7 +266,6 @@ export async function importMetaAdsData(
   let adSetCount = 0;
   let adCount = 0;
   let insightCount = 0;
-  const datePreset = range === "all" ? "last_12_months" : "last_30d";
 
   for (const account of accounts) {
     const accountExternalId = String(account.id || account.account_id);
@@ -325,58 +350,19 @@ export async function importMetaAdsData(
     adCount += adRows.length;
 
     const today = new Date().toISOString().slice(0, 10);
-    let deleteQuery = context.service
-      .from("ad_insights_daily")
-      .delete()
-      .eq("organization_id", context.organizationId)
-      .eq("platform", "meta")
-      .eq("account_id", accountId);
-    if (range !== "all") {
-      const since = new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      deleteQuery = deleteQuery.gte("date", since).lte("date", today);
-    }
-    const { error: deleteInsightsError } = await deleteQuery;
-    if (deleteInsightsError) throw new Error(`ad_insights_daily delete: ${deleteInsightsError.message}`);
-
     const insightFields = "account_id,campaign_id,adset_id,ad_id,date_start,date_stop,spend,impressions,reach,frequency,cpm,clicks,inline_link_clicks,ctr,cpc,actions,action_values,video_play_actions";
-    let insights: MetaInsight[];
-    if (range === "all") {
-      // A Meta rejeita pedir granularidade diaria por anuncio (level: "ad",
-      // time_increment: "1") num periodo longo de uma vez ("Please reduce the
-      // amount of data you're asking for") — divide em janelas mensais.
-      // Limitado a 12 meses (em vez do maximo de 37 permitido pela Meta) para
-      // manter a importacao dentro do timeout do cliente/funcao (290s/300s).
-      insights = [];
-      for (const { since: chunkSince, until: chunkUntil } of monthlyChunks(12)) {
-        const chunk = await fetchPaged<MetaInsight>(
-          token,
-          `/${accountPath}/insights`,
-          {
-            level: "ad",
-            time_increment: "1",
-            time_range: JSON.stringify({ since: chunkSince, until: chunkUntil }),
-            fields: insightFields,
-            limit: "500"
-          },
-          20
-        );
-        insights.push(...chunk);
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    } else {
-      insights = await fetchPaged<MetaInsight>(
-        token,
-        `/${accountPath}/insights`,
-        {
-          level: "ad",
-          time_increment: "1",
-          date_preset: datePreset,
-          fields: insightFields,
-          limit: "500"
-        },
-        50
-      );
-    }
+    const insights = await fetchPaged<MetaInsight>(
+      token,
+      `/${accountPath}/insights`,
+      {
+        level: "ad",
+        time_increment: "1",
+        time_range: JSON.stringify({ since: range.since, until: range.until }),
+        fields: insightFields,
+        limit: "500"
+      },
+      50
+    );
     const insightRowsByKey = new Map<string, Record<string, unknown>>();
     for (const insight of insights) {
       const spend = num(insight.spend);
@@ -433,12 +419,19 @@ export async function importMetaAdsData(
         row.breakdown_region ?? "",
         row.breakdown_device ?? ""
       ].join("|");
-      insightRowsByKey.set(insightKey, row);
+      insightRowsByKey.set(insightKey, { ...row, dedup_key: insightKey });
     }
     const insightRows = Array.from(insightRowsByKey.values());
     if (insightRows.length) {
-      const { error } = await context.service.from("ad_insights_daily").insert(insightRows);
-      if (error) throw new Error(`ad_insights_daily insert: ${error.message}`);
+      // Upsert (nao delete+insert) via dedup_key — coluna unica gerada a partir
+      // da mesma chave logica do ad_insights_daily_unique_idx (que usa coalesce()
+      // em colunas nullable, o que o onConflict do PostgREST nao consegue casar
+      // diretamente). Nunca apaga dados ja importados: se a busca na Meta falhar
+      // num chunk, os chunks ja importados continuam intactos.
+      const { error } = await context.service
+        .from("ad_insights_daily")
+        .upsert(insightRows, { onConflict: "dedup_key" });
+      if (error) throw new Error(`ad_insights_daily upsert: ${error.message}`);
     }
     insightCount += insightRows.length;
   }
@@ -448,7 +441,38 @@ export async function importMetaAdsData(
     campaigns: campaignCount,
     adSets: adSetCount,
     ads: adCount,
-    insights: insightCount,
-    datePreset
+    insights: insightCount
   };
+}
+
+// Wrapper sincrono mantido para compatibilidade com o cron automatico de 30 dias
+// (runMetaAds em app/api/cron/metrics-update) e com a rota antiga de importacao
+// manual ate ela ser removida em favor da fila (app/api/meta/ads/import/enqueue).
+export async function importMetaAdsData(
+  context: MetaRequestContext,
+  range: "last_30d" | "all" = "last_30d"
+): Promise<MetaAdsImportSummary> {
+  if (range === "last_30d") {
+    const until = new Date();
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const result = await importMetaAdsChunk(context, {
+      since: since.toISOString().slice(0, 10),
+      until: until.toISOString().slice(0, 10)
+    });
+    return { ...result, datePreset: "last_30d" };
+  }
+
+  let aggregate: MetaAdsChunkResult = { accounts: 0, campaigns: 0, adSets: 0, ads: 0, insights: 0 };
+  for (const chunk of monthlyChunks(12)) {
+    const result = await importMetaAdsChunk(context, chunk);
+    aggregate = {
+      accounts: Math.max(aggregate.accounts, result.accounts),
+      campaigns: Math.max(aggregate.campaigns, result.campaigns),
+      adSets: Math.max(aggregate.adSets, result.adSets),
+      ads: Math.max(aggregate.ads, result.ads),
+      insights: aggregate.insights + result.insights
+    };
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return { ...aggregate, datePreset: "last_12_months" };
 }

@@ -96,7 +96,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getAnalyticsOverview, getGoogleStatus, getVideoRetention, getVideoTimeline, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type AnalyticsOverview, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type VideoRetentionRow, type VideoTimelineRow, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
-import { disconnectInstagramConnection, disconnectMetaAdsConnection, getInstagramStatus, getMetaAdsStatus, importMetaAdsData, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportSummary } from "@/lib/meta-api";
+import { disconnectInstagramConnection, disconnectMetaAdsConnection, enqueueMetaAdsImport, getInstagramStatus, getMetaAdsImportBatchStatus, getMetaAdsStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportBatchStatus, type MetaAdsImportRangeType } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
 import { IntegrationApiError, serviceLabel, type ApiErrorPayload } from "@/lib/api-errors";
 import { derivePostStatusFromPublications, derivedPostStatus, publicationsForPost } from "@/lib/post-publication-status";
@@ -14663,6 +14663,12 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData,
   );
 }
 
+const META_ADS_RANGE_LABELS: Record<MetaAdsImportRangeType, string> = {
+  last_30d: "últimos 30 dias",
+  last_12m: "últimos 12 meses",
+  all_time: "todo o histórico"
+};
+
 function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
   onClose: () => void;
   reloadData?: () => Promise<void>;
@@ -14670,9 +14676,10 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
 }) {
   const [status, setStatus] = useState<MetaAdsConnectionStatus | null>(null);
   const [phase, setPhase] = useState<"loading" | "idle" | "importing" | "done" | "error">("loading");
-  const [summary, setSummary] = useState<MetaAdsImportSummary | null>(null);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchStatus, setBatchStatus] = useState<MetaAdsImportBatchStatus | null>(null);
   const [error, setError] = useState<DisplayIntegrationError>("");
-  const [lastRange, setLastRange] = useState<"last_30d" | "all">("last_30d");
+  const [lastRangeType, setLastRangeType] = useState<MetaAdsImportRangeType>("last_30d");
 
   useEffect(() => {
     let cancelled = false;
@@ -14693,35 +14700,66 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
     };
   }, []);
 
-  async function runImport(range: "last_30d" | "all" = "last_30d") {
+  async function runImport(rangeType: MetaAdsImportRangeType) {
     setError("");
-    setLastRange(range);
+    setLastRangeType(rangeType);
+    setBatchStatus(null);
     setPhase("importing");
     try {
-      const result = await importMetaAdsData(range);
-      setSummary(result.summary);
-      await reloadData?.();
-      setPhase("done");
+      const { batchId: newBatchId } = await enqueueMetaAdsImport(rangeType);
+      setBatchId(newBatchId);
     } catch (err) {
-      setError(apiErrorForDisplay(err, "Erro desconhecido ao importar Meta Ads."));
+      setError(apiErrorForDisplay(err, "Erro ao agendar importação Meta Ads."));
       setPhase("error");
     }
   }
 
+  useEffect(() => {
+    if (!batchId || phase !== "importing") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const nextStatus = await getMetaAdsImportBatchStatus(batchId);
+        if (cancelled) return;
+        setBatchStatus(nextStatus);
+        if (nextStatus.done) {
+          if (nextStatus.counts.done > 0) {
+            await reloadData?.();
+            setPhase("done");
+          } else {
+            setError(apiErrorForDisplay(new Error(nextStatus.errors[0] || "Falha ao importar Meta Ads."), "Erro ao importar Meta Ads."));
+            setPhase("error");
+          }
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(apiErrorForDisplay(err, "Erro ao consultar progresso da importação."));
+        setPhase("error");
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 4000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [batchId, phase, reloadData]);
+
   const connected = Boolean(status?.connected);
+  const importProgressPercent = batchStatus && batchStatus.total > 0
+    ? Math.round(((batchStatus.counts.done + batchStatus.counts.failed) / batchStatus.total) * 100)
+    : 0;
 
   return (
-    <CenteredModal close={onClose} closeOnOverlay={phase !== "importing"} zClass="z-[120]" variant="compact" className="bg-slate-950/75" panelClassName="max-w-3xl rounded-[28px] border-0">
+    <CenteredModal close={onClose} closeOnOverlay zClass="z-[120]" variant="compact" className="bg-slate-950/75" panelClassName="max-w-3xl rounded-[28px] border-0">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Megaphone size={22} className="text-blue-700" />
           <h2 className="font-black">Importar Meta Ads</h2>
         </div>
-        {phase !== "importing" && (
-          <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200">
-            <X size={18} />
-          </button>
-        )}
+        <button type="button" onClick={onClose} className="rounded-2xl bg-slate-100 p-2 hover:bg-slate-200">
+          <X size={18} />
+        </button>
       </div>
 
       {phase === "loading" && (
@@ -14738,7 +14776,7 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
           <div className="rounded-2xl bg-blue-50 p-4">
             <p className="text-sm font-black text-blue-950">Conexão Meta Ads</p>
             <p className="mt-1 text-sm font-bold text-blue-800/80">
-              O sistema vai importar contas, campanhas, conjuntos, anúncios e métricas do período escolhido.
+              O sistema vai importar campanhas, conjuntos, anúncios e métricas do período escolhido, em segundo plano.
             </p>
             <div className="mt-3 rounded-2xl border border-blue-100 bg-white px-3 py-2">
               <p className="text-xs font-black uppercase text-slate-400">Conta conectada</p>
@@ -14765,11 +14803,14 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
               <button type="button" onClick={() => runImport("last_30d")} className="w-full rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
                 Importar últimos 30 dias
               </button>
-              <button type="button" onClick={() => runImport("all")} className="w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
+              <button type="button" onClick={() => runImport("last_12m")} className="w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
                 Importar últimos 12 meses
               </button>
+              <button type="button" onClick={() => runImport("all_time")} className="w-full rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 hover:bg-slate-200">
+                Importar todo o histórico
+              </button>
               <p className="text-center text-xs font-bold text-slate-400">
-                Últimos 12 meses pode demorar mais (até alguns minutos) e trazer um volume bem maior de dados.
+                A importação roda em segundo plano — pode fechar esta janela e acompanhar o progresso depois.
               </p>
             </div>
           ) : (
@@ -14782,28 +14823,42 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
 
       {phase === "importing" && (
         <div className="space-y-3">
-          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full animate-pulse rounded-full bg-blue-700" style={{ width: "100%" }} />
+          <div className="flex items-center justify-between text-xs font-black">
+            <span className="text-blue-800">
+              {batchStatus
+                ? `${batchStatus.counts.done + batchStatus.counts.failed} de ${batchStatus.total} períodos importados`
+                : "Agendando importação..."}
+            </span>
+            <span className="text-slate-500">{batchStatus && batchStatus.total > 0 ? `${importProgressPercent}%` : ""}</span>
           </div>
-          <p className="text-sm font-bold text-slate-600">Buscando e salvando dados do Meta Ads...</p>
+          <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div
+              className="h-full rounded-full bg-blue-700 transition-all"
+              style={{ width: batchStatus && batchStatus.total > 0 ? `${importProgressPercent}%` : "10%" }}
+            />
+          </div>
+          <p className="text-sm font-bold text-slate-600">
+            Importando {META_ADS_RANGE_LABELS[lastRangeType]} em segundo plano. Pode fechar esta janela — o progresso continua sozinho.
+          </p>
         </div>
       )}
 
-      {phase === "done" && summary && (
+      {phase === "done" && batchStatus && (
         <div className="space-y-4">
           <div className="rounded-2xl bg-green-50 p-4">
             <p className="text-sm font-black text-green-800">Importação concluída!</p>
             <p className="mt-1 text-sm font-bold text-green-700">
-              Período {summary.datePreset} · {summary.insights} linhas de métricas
+              {META_ADS_RANGE_LABELS[lastRangeType]} · {batchStatus.aggregate.insights} linhas de métricas
+              {batchStatus.counts.failed > 0 ? ` · ${batchStatus.counts.failed} período(s) com falha` : ""}
             </p>
           </div>
           <div className="grid gap-2 sm:grid-cols-5">
             {[
-              ["Contas", summary.accounts],
-              ["Campanhas", summary.campaigns],
-              ["Conjuntos", summary.adSets],
-              ["Anúncios", summary.ads],
-              ["Métricas", summary.insights]
+              ["Contas", batchStatus.aggregate.accounts],
+              ["Campanhas", batchStatus.aggregate.campaigns],
+              ["Conjuntos", batchStatus.aggregate.adSets],
+              ["Anúncios", batchStatus.aggregate.ads],
+              ["Métricas", batchStatus.aggregate.insights]
             ].map(([label, value]) => (
               <div key={String(label)} className="rounded-2xl bg-slate-50 p-3">
                 <p className="text-xs font-black uppercase text-slate-400">{label}</p>
@@ -14819,10 +14874,10 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
 
       {phase === "error" && (
         <div className="space-y-4">
-          <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={connected ? () => runImport(lastRange) : undefined} />
+          <IntegrationErrorNotice error={error} canManageIntegrations={canManageIntegrations} onRetry={connected ? () => runImport(lastRangeType) : undefined} />
           <div className="flex gap-2">
             {connected && (
-              <button type="button" onClick={() => runImport(lastRange)} className="flex-1 rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
+              <button type="button" onClick={() => runImport(lastRangeType)} className="flex-1 rounded-2xl bg-blue-700 px-4 py-3 text-sm font-black text-white hover:bg-blue-800">
                 Tentar novamente
               </button>
             )}
