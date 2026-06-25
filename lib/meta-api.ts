@@ -184,6 +184,7 @@ export async function enqueueMetaAdsImport(rangeType: MetaAdsImportRangeType): P
 }
 
 export type MetaAdsImportBatchStatus = {
+  batchId: string | null;
   total: number;
   counts: { pending: number; processing: number; done: number; failed: number; canceled: number };
   done: boolean;
@@ -193,4 +194,11 @@ export type MetaAdsImportBatchStatus = {
 
 export async function getMetaAdsImportBatchStatus(batchId: string): Promise<MetaAdsImportBatchStatus> {
   return fetchJson<MetaAdsImportBatchStatus>(`/api/meta/ads/import/status?batchId=${encodeURIComponent(batchId)}`, undefined, 15000);
+}
+
+// Sem batchId: devolve o ultimo lote de importacao da organizacao (ou
+// batchId null se nunca rodou nenhum) — usado pelo indicador de progresso
+// fora do modal e para retomar o acompanhamento ao reabrir o modal.
+export async function getLatestMetaAdsImportBatchStatus(): Promise<MetaAdsImportBatchStatus> {
+  return fetchJson<MetaAdsImportBatchStatus>("/api/meta/ads/import/status", undefined, 15000);
 }

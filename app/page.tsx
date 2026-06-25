@@ -96,7 +96,7 @@ import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { classifyLocal } from "@/lib/classify";
 import { disconnectGoogleConnection, fetchDriveThumbnailObjectUrl, getAnalyticsOverview, getGoogleStatus, getVideoRetention, getVideoTimeline, listDriveFolder, listMyYouTubeChannelVideos, listVideoComments, listYouTubeVideoComments, searchYouTube, startGoogleConnection, type AnalyticsOverview, type DriveFile, type DriveItem, type GoogleConnectionStatus, type GoogleService, type VideoRetentionRow, type VideoTimelineRow, type YouTubeChannelVideo, type YouTubeCommentItem, type YouTubeCommentResult, type YouTubeImportProgress, type YouTubeVideo } from "@/lib/google-api";
 import { disconnectTikTokConnection, getTikTokStatus, listTikTokComments, listTikTokVideos, startTikTokConnection, type TikTokCommentItem, type TikTokConnectionStatus } from "@/lib/tiktok-api";
-import { disconnectInstagramConnection, disconnectMetaAdsConnection, enqueueMetaAdsImport, getInstagramStatus, getMetaAdsImportBatchStatus, getMetaAdsStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportBatchStatus, type MetaAdsImportRangeType } from "@/lib/meta-api";
+import { disconnectInstagramConnection, disconnectMetaAdsConnection, enqueueMetaAdsImport, getInstagramStatus, getLatestMetaAdsImportBatchStatus, getMetaAdsImportBatchStatus, getMetaAdsStatus, listInstagramComments, listInstagramMetrics, startInstagramOAuth, startMetaAdsOAuth, type InstagramCommentItem, type InstagramConnectionStatus, type MetaAdsConnectionStatus, type MetaAdsImportBatchStatus, type MetaAdsImportRangeType } from "@/lib/meta-api";
 import { buildSaoPauloDateTime, formatSaoPauloSchedule, parseSaoPauloDateTime } from "@/lib/app-time";
 import { IntegrationApiError, serviceLabel, type ApiErrorPayload } from "@/lib/api-errors";
 import { derivePostStatusFromPublications, derivedPostStatus, publicationsForPost } from "@/lib/post-publication-status";
@@ -10117,9 +10117,12 @@ function Metrics({
           <RoundAdd onClick={() => setModal({ kind: "metric" })} label="Adicionar métrica" />
         </div>
       ) : metricsMode === "ads" ? (
-        <button type="button" onClick={() => setMetaAdsImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white shadow-sm transition hover:bg-blue-800">
-          <Megaphone size={16} /> Importar Meta Ads
-        </button>
+        <div className="flex items-center gap-2">
+          <MetaAdsImportStatusBadge onClick={() => setMetaAdsImportOpen(true)} />
+          <button type="button" onClick={() => setMetaAdsImportOpen(true)} className="flex items-center gap-2 rounded-2xl bg-blue-700 px-4 py-2 text-sm font-black text-white shadow-sm transition hover:bg-blue-800">
+            <Megaphone size={16} /> Importar Meta Ads
+          </button>
+        </div>
       ) : null
     }>
       <div className="mb-5 flex w-fit rounded-2xl bg-slate-100 p-1">
@@ -14663,6 +14666,58 @@ function TikTokImportModal({ metrics, setMetrics, channels, onClose, reloadData,
   );
 }
 
+function MetaAdsImportStatusBadge({ onClick }: { onClick: () => void }) {
+  const [status, setStatus] = useState<MetaAdsImportBatchStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const next = await getLatestMetaAdsImportBatchStatus();
+        if (!cancelled) setStatus(next);
+      } catch {
+        // Indicador silencioso — erro de leitura aqui nao deve incomodar o usuario.
+      }
+    };
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
+  if (!status?.batchId) return null;
+
+  const processedCount = status.counts.done + status.counts.failed + status.counts.canceled;
+  const percent = status.total > 0 ? Math.round((processedCount / status.total) * 100) : 0;
+
+  if (!status.done) {
+    return (
+      <button type="button" onClick={onClick} className="flex items-center gap-2 rounded-2xl bg-blue-50 px-3 py-2 text-xs font-black text-blue-800 hover:bg-blue-100">
+        <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
+        Importando {processedCount}/{status.total} ({percent}%)
+      </button>
+    );
+  }
+
+  if (status.counts.failed > 0) {
+    return (
+      <button type="button" onClick={onClick} className="flex items-center gap-2 rounded-2xl bg-rose-50 px-3 py-2 text-xs font-black text-rose-700 hover:bg-rose-100" title="Detalhes em Configurações → Diagnóstico">
+        <span className="h-2 w-2 rounded-full bg-rose-600" />
+        {status.counts.failed} período(s) com erro na última importação
+      </button>
+    );
+  }
+
+  return (
+    <button type="button" onClick={onClick} className="flex items-center gap-2 rounded-2xl bg-emerald-50 px-3 py-2 text-xs font-black text-emerald-700 hover:bg-emerald-100">
+      <span className="h-2 w-2 rounded-full bg-emerald-600" />
+      Última importação concluída
+    </button>
+  );
+}
+
 const META_ADS_RANGE_LABELS: Record<MetaAdsImportRangeType, string> = {
   last_30d: "últimos 30 dias",
   last_12m: "últimos 12 meses",
@@ -14684,11 +14739,20 @@ function MetaAdsImportModal({ onClose, reloadData, canManageIntegrations }: {
   useEffect(() => {
     let cancelled = false;
     setPhase("loading");
-    getMetaAdsStatus()
-      .then((nextStatus) => {
+    Promise.all([getMetaAdsStatus(), getLatestMetaAdsImportBatchStatus().catch(() => null)])
+      .then(([nextStatus, latestBatch]) => {
         if (cancelled) return;
         setStatus(nextStatus);
-        setPhase("idle");
+        // Retoma o lote mais recente se ele ainda estiver rodando, em vez de
+        // sempre abrir na tela de "escolher período" — permite sair do modal
+        // e voltar depois sem perder o acompanhamento do progresso.
+        if (latestBatch?.batchId && !latestBatch.done) {
+          setBatchId(latestBatch.batchId);
+          setBatchStatus(latestBatch);
+          setPhase("importing");
+        } else {
+          setPhase("idle");
+        }
       })
       .catch((err) => {
         if (cancelled) return;
