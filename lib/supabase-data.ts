@@ -48,6 +48,7 @@ import type {
   YouTubeUploadQueueItem,
   Visitor,
   TrackingSession,
+  TrackingTouchpoint,
   Person,
   PersonIdentifier,
   Conversion
@@ -93,6 +94,7 @@ export type AppData = {
   trackableLinks: TrackableLink[];
   visitors: Visitor[];
   trackingSessions: TrackingSession[];
+  trackingTouchpoints: TrackingTouchpoint[];
   persons: Person[];
   conversions: Conversion[];
 };
@@ -304,6 +306,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     integrationHealthData,
     errorLogsData,
     trackableLinksData,
+    trackingTouchpointsData,
     personsData,
     conversionsData
   ] = await Promise.all([
@@ -351,6 +354,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("integration_health").select("*").eq("organization_id", organizationId).order("updated_at", { ascending: false }).limit(100000),
     client.from("error_logs").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(200),
     client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
+    client.from("tracking_touchpoints").select("*").eq("organization_id", organizationId).order("occurred_at", { ascending: false }).limit(100000),
     client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
     client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(100000)
   ]);
@@ -415,6 +419,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink),
     visitors: visitorsRaw.map(mapVisitor),
     trackingSessions: trackingSessionsRaw.map(mapTrackingSession),
+    trackingTouchpoints: (trackingTouchpointsData.data ?? []).map(mapTrackingTouchpoint),
     persons: (personsData.data ?? []).map(mapPerson),
     conversions: (conversionsData.data ?? []).map(mapConversion)
   };
@@ -2360,6 +2365,20 @@ function mapTrackingSession(row: Record<string, unknown>): TrackingSession {
     gclid: (row.gclid as string) ?? null,
     landingPage: (row.landing_page as string) ?? null,
     startedAt: String(row.started_at ?? "")
+  };
+}
+
+function mapTrackingTouchpoint(row: Record<string, unknown>): TrackingTouchpoint {
+  return {
+    id: Number(row.id ?? 0),
+    organizationId: String(row.organization_id ?? ""),
+    visitorId: String(row.visitor_id ?? ""),
+    sessionId: (row.session_id as string) ?? null,
+    eventType: String(row.event_type ?? ""),
+    eventData: row.event_data && typeof row.event_data === "object" && !Array.isArray(row.event_data)
+      ? row.event_data as Record<string, unknown>
+      : {},
+    occurredAt: String(row.occurred_at ?? "")
   };
 }
 

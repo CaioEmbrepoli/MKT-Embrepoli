@@ -856,6 +856,16 @@ export type TrackingSession = {
   startedAt: string;
 };
 
+export type TrackingTouchpoint = {
+  id: number;
+  organizationId: string;
+  visitorId: string;
+  sessionId: string | null;
+  eventType: string;
+  eventData: Record<string, unknown>;
+  occurredAt: string;
+};
+
 export type PersonIdentifier = {
   id: number;
   organizationId: string;

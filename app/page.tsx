@@ -240,6 +240,7 @@ import type {
   YouTubeUploadQueueItem,
   Visitor,
   TrackingSession,
+  TrackingTouchpoint,
   Person,
   Conversion
 } from "@/lib/types";
@@ -1275,6 +1276,7 @@ export default function Home() {
   const [trackableLinks, setTrackableLinks] = useState<TrackableLink[]>([]);
   const [visitors, setVisitors] = useState<Visitor[]>([]);
   const [trackingSessions, setTrackingSessions] = useState<TrackingSession[]>([]);
+  const [trackingTouchpoints, setTrackingTouchpoints] = useState<TrackingTouchpoint[]>([]);
   const [persons, setPersons] = useState<Person[]>([]);
   const [conversions, setConversions] = useState<Conversion[]>([]);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
@@ -1714,6 +1716,7 @@ export default function Home() {
     setYoutubeUploadQueue(data.youtubeUploadQueue);
     setVisitors(data.visitors);
     setTrackingSessions(data.trackingSessions);
+    setTrackingTouchpoints(data.trackingTouchpoints);
     setPersons(data.persons);
     setConversions(data.conversions);
     setNotifications(data.notifications);
@@ -1782,6 +1785,7 @@ export default function Home() {
       "auto_filters",
       "visitors",
       "tracking_sessions",
+      "tracking_touchpoints",
       "persons",
       "conversions"
     ];
@@ -2936,6 +2940,7 @@ export default function Home() {
               setVisitors={setVisitors}
               trackingSessions={trackingSessions}
               setTrackingSessions={setTrackingSessions}
+              trackingTouchpoints={trackingTouchpoints}
               persons={persons}
               conversions={conversions}
               salesClients={salesClients}
@@ -9692,6 +9697,7 @@ function Metrics({
   setVisitors,
   trackingSessions,
   setTrackingSessions,
+  trackingTouchpoints,
   persons,
   conversions,
   salesClients,
@@ -9729,6 +9735,7 @@ function Metrics({
   setVisitors: Dispatch<SetStateAction<Visitor[]>>;
   trackingSessions: TrackingSession[];
   setTrackingSessions: Dispatch<SetStateAction<TrackingSession[]>>;
+  trackingTouchpoints: TrackingTouchpoint[];
   persons: Person[];
   conversions: Conversion[];
   salesClients: SalesClient[];
@@ -9764,7 +9771,7 @@ function Metrics({
     []
   );
   const [metricsMode, setMetricsMode] = useState<"overview" | "organic" | "ads" | "links">("overview");
-  const [origemSubTab, setOrigemSubTab] = useState<"links" | "visitantes" | "leads">("links");
+  const [origemSubTab, setOrigemSubTab] = useState<"links" | "eventos" | "visitantes" | "leads">("links");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
   const [metaAdsImportOpen, setMetaAdsImportOpen] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string>("all");
@@ -10404,9 +10411,13 @@ function Metrics({
           trackableLinks={trackableLinks}
           setTrackableLinks={setTrackableLinks}
           visitors={visitors}
+          trackingSessions={trackingSessions}
+          trackingTouchpoints={trackingTouchpoints}
           persons={persons}
+          conversions={conversions}
           salesClients={salesClients}
           profiles={profiles}
+          periodRange={periodRange}
           subTab={origemSubTab}
           setSubTab={setOrigemSubTab}
         />
@@ -12175,20 +12186,28 @@ function OrigemSection({
   trackableLinks,
   setTrackableLinks,
   visitors,
+  trackingSessions,
+  trackingTouchpoints,
   persons,
+  conversions,
   salesClients,
   profiles,
+  periodRange,
   subTab,
   setSubTab
 }: {
   trackableLinks: TrackableLink[];
   setTrackableLinks: Dispatch<SetStateAction<TrackableLink[]>>;
   visitors: Visitor[];
+  trackingSessions: TrackingSession[];
+  trackingTouchpoints: TrackingTouchpoint[];
   persons: Person[];
+  conversions: Conversion[];
   salesClients: SalesClient[];
   profiles: Profile[];
-  subTab: "links" | "visitantes" | "leads";
-  setSubTab: Dispatch<SetStateAction<"links" | "visitantes" | "leads">>;
+  periodRange: { start: Date; end: Date } | null;
+  subTab: "links" | "eventos" | "visitantes" | "leads";
+  setSubTab: Dispatch<SetStateAction<"links" | "eventos" | "visitantes" | "leads">>;
 }) {
   const sourceEntries = useMemo(() => {
     const map: Record<string, { source: string | null; medium: string | null; count: number }> = {};
@@ -12214,6 +12233,17 @@ function OrigemSection({
   const [leadChannel, setLeadChannel] = useState<string>("todos");
 
   const visitorById = useMemo(() => new Map(visitors.map((v) => [v.id, v])), [visitors]);
+  const trackingSessionById = useMemo(() => new Map(trackingSessions.map((session) => [session.id, session])), [trackingSessions]);
+  const latestSessionByVisitorId = useMemo(() => {
+    const map = new Map<string, TrackingSession>();
+    for (const session of trackingSessions) {
+      const current = map.get(session.visitorId);
+      if (!current || new Date(session.startedAt).getTime() > new Date(current.startedAt).getTime()) {
+        map.set(session.visitorId, session);
+      }
+    }
+    return map;
+  }, [trackingSessions]);
   const salesClientByPersonId = useMemo(() => {
     const map = new Map<string, SalesClient>();
     for (const c of salesClients) { if (c.personId) map.set(c.personId, c); }
@@ -12230,12 +12260,121 @@ function OrigemSection({
     .filter((p) => leadChannel === "todos" || p.channel === leadChannel),
   [persons, leadFilter, leadChannel]);
 
+  const touchpointEventTypes = useMemo(() => new Set(["buy_button_click", "whatsapp_click", "checkout_start"]), []);
+  const eventTouchpoints = useMemo(() =>
+    trackingTouchpoints.filter((touchpoint) =>
+      touchpointEventTypes.has(touchpoint.eventType) && isInDateRange(touchpoint.occurredAt, periodRange)
+    ),
+  [trackingTouchpoints, touchpointEventTypes, periodRange]);
+
+  const normalizeEventPage = (value: unknown) => {
+    const raw = typeof value === "string" ? value.trim() : "";
+    if (!raw) return "Página não informada";
+    try {
+      const url = new URL(raw, window.location.origin);
+      return `${url.pathname}${url.search}` || "/";
+    } catch {
+      return raw;
+    }
+  };
+
+  const touchpointSource = (touchpoint: TrackingTouchpoint) => {
+    const session = touchpoint.sessionId ? trackingSessionById.get(touchpoint.sessionId) : latestSessionByVisitorId.get(touchpoint.visitorId);
+    const visitor = visitorById.get(touchpoint.visitorId);
+    return {
+      source: session?.utmSource ?? visitor?.firstTouchSource ?? null,
+      medium: session?.utmMedium ?? visitor?.firstTouchMedium ?? null
+    };
+  };
+
+  const eventsByType = useMemo(() => {
+    const counts = { buy_button_click: 0, whatsapp_click: 0, checkout_start: 0 };
+    const visitorsWithEvent = new Set<string>();
+    for (const event of eventTouchpoints) {
+      if (event.eventType in counts) counts[event.eventType as keyof typeof counts]++;
+      if (event.visitorId) visitorsWithEvent.add(event.visitorId);
+    }
+    return { ...counts, visitorsWithEvent: visitorsWithEvent.size };
+  }, [eventTouchpoints]);
+
+  const periodVisitors = useMemo(() => {
+    if (!periodRange) return visitors;
+    const ids = new Set(
+      trackingSessions
+        .filter((session) => isInDateRange(session.startedAt, periodRange))
+        .map((session) => session.visitorId)
+    );
+    return visitors.filter((visitor) => ids.has(visitor.id));
+  }, [visitors, trackingSessions, periodRange]);
+
+  const periodPersons = useMemo(() => persons.filter((person) => isInDateRange(person.createdAt, periodRange)), [persons, periodRange]);
+  const periodConversions = useMemo(() => conversions.filter((conversion) => isInDateRange(`${conversion.saleDate}T12:00:00-03:00`, periodRange)), [conversions, periodRange]);
+
+  const eventFunnel = useMemo(() => {
+    const buyVisitors = new Set<string>();
+    const checkoutVisitors = new Set<string>();
+    for (const event of eventTouchpoints) {
+      if (event.eventType === "buy_button_click" && event.visitorId) buyVisitors.add(event.visitorId);
+      if (event.eventType === "checkout_start" && event.visitorId) checkoutVisitors.add(event.visitorId);
+    }
+    const steps = [
+      { label: "Visitantes", value: periodVisitors.length },
+      { label: "Comprar", value: buyVisitors.size },
+      { label: "Checkout", value: checkoutVisitors.size },
+      { label: "Leads", value: periodPersons.length },
+      { label: "Conversões", value: periodConversions.length }
+    ];
+    return steps.map((step, index) => {
+      const previous = index === 0 ? null : steps[index - 1].value;
+      return {
+        ...step,
+        rate: previous === null ? 100 : previous > 0 ? Math.round((step.value / previous) * 100) : 0
+      };
+    });
+  }, [eventTouchpoints, periodVisitors.length, periodPersons.length, periodConversions.length]);
+
+  const eventsByPage = useMemo(() => {
+    const map = new Map<string, { page: string; buy: number; whatsapp: number; checkout: number; visitors: Set<string> }>();
+    for (const event of eventTouchpoints) {
+      const page = normalizeEventPage(event.eventData.page ?? event.eventData.url ?? event.eventData.location ?? event.eventData.path);
+      const row = map.get(page) ?? { page, buy: 0, whatsapp: 0, checkout: 0, visitors: new Set<string>() };
+      if (event.eventType === "buy_button_click") row.buy++;
+      if (event.eventType === "whatsapp_click") row.whatsapp++;
+      if (event.eventType === "checkout_start") row.checkout++;
+      if (event.visitorId) row.visitors.add(event.visitorId);
+      map.set(page, row);
+    }
+    return Array.from(map.values())
+      .map((row) => ({ ...row, uniqueVisitors: row.visitors.size, total: row.buy + row.whatsapp + row.checkout }))
+      .sort((a, b) => b.total - a.total || b.uniqueVisitors - a.uniqueVisitors)
+      .slice(0, 20);
+  }, [eventTouchpoints]);
+
+  const eventsByOrigin = useMemo(() => {
+    const map = new Map<string, { source: string | null; medium: string | null; buy: number; whatsapp: number; checkout: number; visitors: Set<string> }>();
+    for (const event of eventTouchpoints) {
+      const { source, medium } = touchpointSource(event);
+      const key = `${source ?? ""}|${medium ?? ""}`;
+      const row = map.get(key) ?? { source, medium, buy: 0, whatsapp: 0, checkout: 0, visitors: new Set<string>() };
+      if (event.eventType === "buy_button_click") row.buy++;
+      if (event.eventType === "whatsapp_click") row.whatsapp++;
+      if (event.eventType === "checkout_start") row.checkout++;
+      if (event.visitorId) row.visitors.add(event.visitorId);
+      map.set(key, row);
+    }
+    return Array.from(map.values())
+      .map((row) => ({ ...row, uniqueVisitors: row.visitors.size, total: row.buy + row.whatsapp + row.checkout }))
+      .sort((a, b) => b.total - a.total || b.uniqueVisitors - a.uniqueVisitors)
+      .slice(0, 20);
+  }, [eventTouchpoints, trackingSessionById, latestSessionByVisitorId, visitorById]);
+
   return (
     <div>
       <div className="mb-5 flex w-fit rounded-2xl bg-slate-100 p-1">
         {(
           [
             ["links", "Links"],
+            ["eventos", "Eventos"],
             ["visitantes", "Visitantes"],
             ["leads", "Leads"]
           ] as const
@@ -12253,6 +12392,116 @@ function OrigemSection({
 
       {subTab === "links" && (
         <TrackableLinksSettings trackableLinks={trackableLinks} setTrackableLinks={setTrackableLinks} />
+      )}
+
+      {subTab === "eventos" && (
+        <div>
+          {eventTouchpoints.length > 0 ? (
+            <div className="space-y-5">
+              <div className="grid gap-3 md:grid-cols-4">
+                {[
+                  { label: "Comprar", value: eventsByType.buy_button_click, tone: "blue" as const },
+                  { label: "WhatsApp", value: eventsByType.whatsapp_click, tone: "green" as const },
+                  { label: "Checkout", value: eventsByType.checkout_start, tone: "amber" as const },
+                  { label: "Visitantes com evento", value: eventsByType.visitorsWithEvent, tone: "slate" as const }
+                ].map((card) => (
+                  <div key={card.label} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+                    <p className="text-xs font-black uppercase text-slate-400">{card.label}</p>
+                    <div className="mt-2 flex items-end justify-between gap-3">
+                      <span className="text-3xl font-black text-slate-950">{formatNumber(card.value)}</span>
+                      <Badge tone={card.tone}>eventos</Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-2xl border border-slate-100 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-black text-slate-800">Funil de intenção</h3>
+                  <span className="text-xs font-bold text-slate-400">Baseado nos eventos recebidos</span>
+                </div>
+                <div className="grid gap-2 md:grid-cols-5">
+                  {eventFunnel.map((step, index) => (
+                    <div key={step.label} className="rounded-2xl bg-slate-50 p-3">
+                      <p className="text-xs font-black uppercase text-slate-400">{step.label}</p>
+                      <p className="mt-1 text-2xl font-black text-slate-950">{formatNumber(step.value)}</p>
+                      {index > 0 && <p className="mt-1 text-xs font-bold text-blue-700">{step.rate}% da etapa anterior</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-2">
+                <div className="rounded-2xl border border-slate-100 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-black text-slate-800">Eventos por página/produto</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[560px] text-left text-sm">
+                      <thead className="text-xs font-black uppercase text-slate-400">
+                        <tr>
+                          <th className="pb-2">Página</th>
+                          <th className="pb-2 text-right">Comprar</th>
+                          <th className="pb-2 text-right">WhatsApp</th>
+                          <th className="pb-2 text-right">Checkout</th>
+                          <th className="pb-2 text-right">Visitantes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {eventsByPage.map((row) => (
+                          <tr key={row.page}>
+                            <td className="max-w-[260px] truncate py-2 font-bold text-slate-700" title={row.page}>{row.page}</td>
+                            <td className="py-2 text-right font-black text-blue-700">{formatNumber(row.buy)}</td>
+                            <td className="py-2 text-right font-black text-green-700">{formatNumber(row.whatsapp)}</td>
+                            <td className="py-2 text-right font-black text-amber-700">{formatNumber(row.checkout)}</td>
+                            <td className="py-2 text-right font-black text-slate-700">{formatNumber(row.uniqueVisitors)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-100 bg-white p-4">
+                  <h3 className="mb-3 text-sm font-black text-slate-800">Eventos por origem</h3>
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[560px] text-left text-sm">
+                      <thead className="text-xs font-black uppercase text-slate-400">
+                        <tr>
+                          <th className="pb-2">Origem</th>
+                          <th className="pb-2 text-right">Comprar</th>
+                          <th className="pb-2 text-right">WhatsApp</th>
+                          <th className="pb-2 text-right">Checkout</th>
+                          <th className="pb-2 text-right">Visitantes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {eventsByOrigin.map((row) => {
+                          const { label, description } = labelVisitorSource(row.source, row.medium);
+                          return (
+                            <tr key={`${row.source ?? ""}|${row.medium ?? ""}`}>
+                              <td className="max-w-[260px] py-2">
+                                <p className="truncate font-black text-slate-700" title={label}>{label}</p>
+                                <p className="truncate text-xs font-bold text-slate-400" title={description}>{description}</p>
+                              </td>
+                              <td className="py-2 text-right font-black text-blue-700">{formatNumber(row.buy)}</td>
+                              <td className="py-2 text-right font-black text-green-700">{formatNumber(row.whatsapp)}</td>
+                              <td className="py-2 text-right font-black text-amber-700">{formatNumber(row.checkout)}</td>
+                              <td className="py-2 text-right font-black text-slate-700">{formatNumber(row.uniqueVisitors)}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl bg-slate-50 p-8 text-center">
+              <p className="text-sm font-black text-slate-400">Nenhum evento registrado nesse período.</p>
+              <p className="mt-1 text-xs font-bold text-slate-400">Quando o GTM enviar cliques de comprar, WhatsApp ou checkout, eles aparecem aqui.</p>
+            </div>
+          )}
+        </div>
       )}
 
       {subTab === "visitantes" && (
