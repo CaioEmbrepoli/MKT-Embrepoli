@@ -236,11 +236,10 @@ export async function loadInitialAppData(client: SupabaseClient, currentProfile?
   };
 }
 
-// Janela padrao de carregamento inicial de visitors/tracking_sessions — essas
-// tabelas só crescem (tráfego do site) e a maioria das visualizações usa
-// período de até 90 dias; histórico mais antigo é buscado sob demanda via
-// fetchVisitorsAndSessionsBefore quando o usuário pedir um período maior.
-export const VISITORS_DEFAULT_WINDOW_DAYS = 90;
+// Janela padrao de carregamento inicial de visitors/tracking_sessions — so
+// "hoje". Periodo maior (7/30/90/Tudo/personalizado) busca a diferenca sob
+// demanda via fetchVisitorsAndSessionsInRange, de forma incremental.
+export const VISITORS_DEFAULT_WINDOW_DAYS = 1;
 
 function defaultVisitorsWindowStartIso(): string {
   return new Date(Date.now() - VISITORS_DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -425,22 +424,28 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
   };
 }
 
-// Busca visitors/tracking_sessions fora da janela ja carregada por loadAppData
-// (mais antigos que beforeIso) — usada quando o usuario seleciona um periodo
-// maior que VISITORS_DEFAULT_WINDOW_DAYS (ex: "Todo periodo" ou um inicio de
-// periodo personalizado anterior a janela), em vez de recarregar tudo de novo.
-export async function fetchVisitorsAndSessionsBefore(
+// Busca visitors/tracking_sessions no intervalo [sinceIso, beforeIso) que
+// ainda nao foi carregado — usada quando o usuario seleciona um periodo que
+// exige dado mais antigo que o ja carregado. Sem sinceIso busca tudo antes de
+// beforeIso (caso "Todo periodo"). Permite carregar incrementalmente: cada
+// troca de filtro busca so o pedaco que falta, nao tudo de novo.
+export async function fetchVisitorsAndSessionsInRange(
   client: SupabaseClient,
   organizationId: string,
-  beforeIso: string
+  beforeIso: string,
+  sinceIso?: string
 ): Promise<{ visitors: Visitor[]; trackingSessions: TrackingSession[] }> {
   const [visitorsRaw, trackingSessionsRaw] = await Promise.all([
-    fetchAllRows<Record<string, unknown>>(
-      () => client.from("visitors").select("*").eq("organization_id", organizationId).lt("last_seen_at", beforeIso).order("last_seen_at", { ascending: false })
-    ),
-    fetchAllRows<Record<string, unknown>>(
-      () => client.from("tracking_sessions").select("*").eq("organization_id", organizationId).lt("started_at", beforeIso).order("started_at", { ascending: false })
-    )
+    fetchAllRows<Record<string, unknown>>(() => {
+      let query = client.from("visitors").select("*").eq("organization_id", organizationId).lt("last_seen_at", beforeIso);
+      if (sinceIso) query = query.gte("last_seen_at", sinceIso);
+      return query.order("last_seen_at", { ascending: false });
+    }),
+    fetchAllRows<Record<string, unknown>>(() => {
+      let query = client.from("tracking_sessions").select("*").eq("organization_id", organizationId).lt("started_at", beforeIso);
+      if (sinceIso) query = query.gte("started_at", sinceIso);
+      return query.order("started_at", { ascending: false });
+    })
   ]);
   return {
     visitors: visitorsRaw.map(mapVisitor),

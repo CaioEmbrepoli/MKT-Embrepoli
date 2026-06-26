@@ -124,7 +124,7 @@ import {
   deleteTrackableLink,
   deleteVehicleType,
   ensureCurrentProfile,
-  fetchVisitorsAndSessionsBefore,
+  fetchVisitorsAndSessionsInRange,
   loadAppData,
   loadInitialAppData,
   VISITORS_DEFAULT_WINDOW_DAYS,
@@ -9764,12 +9764,15 @@ function Metrics({
 }) {
   const [period, setPeriod] = useState("1");
   const [customRange, setCustomRange] = useState<CustomDateRange>({ start: "", end: "" });
-  const [visitorsFullyLoaded, setVisitorsFullyLoaded] = useState(false);
   const [loadingOlderVisitors, setLoadingOlderVisitors] = useState(false);
   const visitorsWindowStartIso = useMemo(
     () => new Date(Date.now() - VISITORS_DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString(),
     []
   );
+  // null = ja carregou tudo, sem piso (equivalente ao antigo "fully loaded").
+  // Enquanto nao for null, marca o limite inferior ja coberto em memoria —
+  // cada busca sob demanda so traz o intervalo que falta antes desse limite.
+  const [loadedSinceIso, setLoadedSinceIso] = useState<string | null>(visitorsWindowStartIso);
   const [metricsMode, setMetricsMode] = useState<"overview" | "organic" | "ads" | "links">("overview");
   const [origemSubTab, setOrigemSubTab] = useState<"links" | "eventos" | "visitantes" | "leads">("links");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
@@ -9981,25 +9984,27 @@ function Metrics({
 
   const periodRange = useMemo(() => saoPauloPeriodRange(period, today, customRange), [period, todayMs, customRange]);
 
-  // Carregamento inicial so traz visitors/tracking_sessions dos ultimos
-  // VISITORS_DEFAULT_WINDOW_DAYS dias (ver loadAppData). Se o periodo
-  // selecionado pedir dado mais antigo que essa janela, busca sob demanda
-  // e mescla no estado em vez de recarregar tudo de novo.
+  // Carregamento inicial so traz visitors/tracking_sessions de hoje (ver
+  // loadAppData). Se o periodo selecionado pedir dado mais antigo que o ja
+  // carregado, busca sob demanda so o intervalo que falta (entre o que tem e
+  // o que precisa) e mescla no estado — cada troca de filtro carrega so o
+  // pedaco novo, nao tudo de novo.
   useEffect(() => {
-    if (visitorsFullyLoaded || !supabase) return;
-    const needsOlderData = period === "all" || (periodRange && periodRange.start < new Date(visitorsWindowStartIso));
+    if (loadedSinceIso === null || !supabase) return;
+    const neededStart = period === "all" ? null : periodRange?.start ?? null;
+    const needsOlderData = neededStart === null || neededStart < new Date(loadedSinceIso);
     if (!needsOlderData) return;
     let cancelled = false;
     setLoadingOlderVisitors(true);
-    fetchVisitorsAndSessionsBefore(supabase, currentUser.organizationId, visitorsWindowStartIso)
+    fetchVisitorsAndSessionsInRange(supabase, currentUser.organizationId, loadedSinceIso, neededStart?.toISOString())
       .then(({ visitors: olderVisitors, trackingSessions: olderSessions }) => {
         if (cancelled) return;
         setVisitors((prev) => mergeById(prev, olderVisitors));
         setTrackingSessions((prev) => mergeById(prev, olderSessions));
-        setVisitorsFullyLoaded(true);
+        setLoadedSinceIso(neededStart === null ? null : neededStart.toISOString());
       })
       .catch((err) => {
-        console.error("[Metrics] fetchVisitorsAndSessionsBefore", err);
+        console.error("[Metrics] fetchVisitorsAndSessionsInRange", err);
       })
       .finally(() => {
         if (!cancelled) setLoadingOlderVisitors(false);
@@ -10007,7 +10012,7 @@ function Metrics({
     return () => {
       cancelled = true;
     };
-  }, [period, periodRange, visitorsFullyLoaded, visitorsWindowStartIso, currentUser.organizationId, setVisitors, setTrackingSessions]);
+  }, [period, periodRange, loadedSinceIso, currentUser.organizationId, setVisitors, setTrackingSessions]);
 
   const overviewMetrics = useMemo(() => resolvedMetrics.filter((m) => {
     return isInDateRange(`${m.date || todayIso()}T12:00:00-03:00`, periodRange);
