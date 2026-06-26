@@ -61,6 +61,7 @@ import {
   X,
   Youtube,
   Wand2,
+  Loader2,
   RefreshCw,
   Phone,
   Target,
@@ -9828,16 +9829,15 @@ function Metrics({
     } as PostMetric;
   }), [metrics, postById]);
 
-  const channelMetrics = useMemo(() =>
-    activeChannel === "all"
-      ? resolvedMetrics
-      : resolvedMetrics.filter((m) => m.channelId === activeChannel),
-  [resolvedMetrics, activeChannel]);
+  const periodRange = useMemo(() => saoPauloPeriodRange(period, today, customRange), [period, todayMs, customRange]);
 
-  const filteredMetrics = useMemo(() => resolvedMetrics.filter((metric) => {
-    const date = new Date(`${metric.date || todayIso()}T12:00:00`);
-    const diffDays = Math.floor((todayMs - date.getTime()) / 86400000);
-    if (period !== "all" && diffDays > Number(period)) return false;
+  const metricContentKey = (metric: PostMetric) => {
+    if (metric.externalId) return `external:${metric.externalId}`;
+    if (metric.postId) return `post:${metric.postId}`;
+    return `title:${metric.channelId}:${metric.postTitle.trim().toLowerCase()}`;
+  };
+
+  const structurallyFilteredMetrics = useMemo(() => resolvedMetrics.filter((metric) => {
     if (activeChannel !== "all" && metric.channelId !== activeChannel) return false;
     if (!metricMatchesFilter(metric.productLineId, lineFilter)) return false;
     if (!metricMatchesFilter(metric.vehicleTypeId, vehicleFilter)) return false;
@@ -9847,17 +9847,91 @@ function Metrics({
     if (videoTypeFilter !== "all" && metric.videoType !== videoTypeFilter) return false;
     if (privacyFilter !== "all" && (metric.privacyStatus ?? "public") !== privacyFilter) return false;
     return true;
-  }), [resolvedMetrics, period, activeChannel, lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, privacyFilter, todayMs]);
+  }), [resolvedMetrics, activeChannel, lineFilter, vehicleFilter, contentFilter, campaignFilter, funnelFilter, videoTypeFilter, privacyFilter]);
+
+  const baseChannelMetrics = useMemo(() => {
+    const map = new Map<string, PostMetric>();
+    for (const metric of structurallyFilteredMetrics) {
+      const key = metricContentKey(metric);
+      const current = map.get(key);
+      if (!current || (metric.date || "").localeCompare(current.date || "") > 0) {
+        map.set(key, metric);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [structurallyFilteredMetrics]);
+
+  const filteredMetrics = useMemo(() =>
+    structurallyFilteredMetrics.filter((metric) => isInDateRange(`${metric.date || todayIso()}T12:00:00-03:00`, periodRange)),
+  [structurallyFilteredMetrics, periodRange]);
+
+  const displayMetrics = useMemo(() => {
+    const periodByContent = new Map<string, PostMetric[]>();
+    for (const metric of filteredMetrics) {
+      const key = metricContentKey(metric);
+      const group = periodByContent.get(key) ?? [];
+      group.push(metric);
+      periodByContent.set(key, group);
+    }
+
+    return baseChannelMetrics.map((base) => {
+      const periodItems = periodByContent.get(metricContentKey(base)) ?? [];
+      const latestPeriodItem = periodItems.slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""))[0];
+      if (!periodItems.length) {
+        return {
+          ...base,
+          reach: 0,
+          likes: 0,
+          comments: 0,
+          shares: 0,
+          clicks: 0,
+          leads: 0,
+          watchTimeMinutes: undefined,
+          averageViewDurationSeconds: undefined,
+          averageViewPercentage: undefined,
+          subscribersGained: 0,
+          subscribersLost: 0,
+          impressions: undefined,
+          impressionClickThroughRate: undefined,
+          hasMetricInPeriod: false
+        };
+      }
+
+      const totalsForContent = computeMetricTotals(periodItems);
+      return {
+        ...base,
+        id: latestPeriodItem?.id ?? base.id,
+        date: latestPeriodItem?.date ?? base.date,
+        reach: totalsForContent.reach,
+        likes: totalsForContent.likes,
+        comments: totalsForContent.comments,
+        shares: totalsForContent.shares,
+        clicks: totalsForContent.clicks,
+        leads: totalsForContent.leads,
+        watchTimeMinutes: totalsForContent.watchTimeMinutes || undefined,
+        averageViewDurationSeconds: totalsForContent.analyticsCount ? totalsForContent.averageViewDurationSeconds / totalsForContent.analyticsCount : undefined,
+        averageViewPercentage: totalsForContent.analyticsCount ? totalsForContent.averageViewPercentage / totalsForContent.analyticsCount : undefined,
+        subscribersGained: totalsForContent.subscribersGained,
+        subscribersLost: totalsForContent.subscribersLost,
+        impressions: totalsForContent.impressions || undefined,
+        impressionClickThroughRate: totalsForContent.impressionCount ? totalsForContent.impressionClickThroughRate / totalsForContent.impressionCount : undefined,
+        hasMetricInPeriod: true
+      };
+    });
+  }, [baseChannelMetrics, filteredMetrics]);
+
+  const channelMetrics = displayMetrics;
 
   const totals = useMemo(() => computeMetricTotals(filteredMetrics), [filteredMetrics]);
-  const kpis = useMemo(() => channelKpiConfig(activeChannel, totals, filteredMetrics.length), [activeChannel, totals, filteredMetrics.length]);
+  const kpis = useMemo(() => channelKpiConfig(activeChannel, totals, baseChannelMetrics.length), [activeChannel, totals, baseChannelMetrics.length]);
   const averageReach = filteredMetrics.length ? totals.reach / filteredMetrics.length : 0;
 
-  const top20 = useMemo(() => filteredMetrics.slice().sort((a, b) => b.reach - a.reach).slice(0, 20), [filteredMetrics]);
-  const top10Chart = useMemo(() => top20.slice(0, 10).map((metric) => ({
+  const periodTop20 = useMemo(() => filteredMetrics.slice().sort((a, b) => b.reach - a.reach).slice(0, 20), [filteredMetrics]);
+  const top20 = useMemo(() => displayMetrics.slice().sort((a, b) => b.reach - a.reach || Number(Boolean(b.hasMetricInPeriod)) - Number(Boolean(a.hasMetricInPeriod)) || (b.date || "").localeCompare(a.date || "")).slice(0, 20), [displayMetrics]);
+  const top10Chart = useMemo(() => periodTop20.slice(0, 10).map((metric) => ({
     name: metric.postTitle.length > 32 ? metric.postTitle.slice(0, 32) + "…" : metric.postTitle,
     alcance: metric.reach
-  })), [top20]);
+  })), [periodTop20]);
   const dailyData = useMemo(() => Object.values(filteredMetrics.reduce<Record<string, { date: string; alcance: number; leads: number }>>((acc, metric) => {
     const key = metric.date || todayIso();
     acc[key] = acc[key] ?? { date: key.slice(5), alcance: 0, leads: 0 };
@@ -9920,7 +9994,7 @@ function Metrics({
   const showTikTokDesign = isTikTokChannel;
 
   const tiktokEngagementRate = totals.reach ? (totals.engagement / totals.reach) * 100 : 0;
-  const tiktokAverageViews = filteredMetrics.length ? Math.round(totals.reach / filteredMetrics.length) : 0;
+  const tiktokAverageViews = baseChannelMetrics.length ? Math.round(totals.reach / baseChannelMetrics.length) : 0;
 
   const tiktokDailyData = useMemo(() => Object.values(
     filteredMetrics.reduce<Record<string, { date: string; views: number; engagement: number; likes: number; comments: number; shares: number }>>((acc, metric) => {
@@ -9975,14 +10049,16 @@ function Metrics({
 
   const channelCounts = useMemo(() => {
     const map = new Map<string, number>();
+    const seen = new Set<string>();
     for (const m of resolvedMetrics) {
+      const key = `${m.channelId}:${metricContentKey(m)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       map.set(m.channelId, (map.get(m.channelId) ?? 0) + 1);
     }
     return map;
   }, [resolvedMetrics]);
   const activeChannelName = activeChannel === "all" ? "Geral" : (channelById.get(activeChannel)?.name ?? activeChannel);
-
-  const periodRange = useMemo(() => saoPauloPeriodRange(period, today, customRange), [period, todayMs, customRange]);
 
   // Carregamento inicial so traz visitors/tracking_sessions de hoje (ver
   // loadAppData). Se o periodo selecionado pedir dado mais antigo que o ja
@@ -10231,21 +10307,23 @@ function Metrics({
           {/* Bloco 1 — KPIs cross-channel */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {[
-              { label: "Visitantes únicos", value: overviewVisitors.length, fmt: "num" },
+              { label: "Visitantes únicos", value: overviewVisitors.length, fmt: "num", loading: loadingOlderVisitors },
               { label: "Leads capturados", value: overviewPersons.length, fmt: "num" },
               { label: "Conversões", value: overviewConversions.length, fmt: "num", helper: `R$ ${overviewConversionValue.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
               { label: "Taxa de atribuição", value: overviewPersons.length > 0 ? Math.round(overviewPersons.filter((p) => p.visitorId).length / overviewPersons.length * 100) : 0, fmt: "pct" },
               { label: "Alcance orgânico", value: overviewMetrics.reduce((s, m) => s + m.reach, 0), fmt: "num" },
               { label: "Gasto em anúncios", value: overviewAdsTotals.spend, fmt: "brl" }
-            ].map(({ label, value, fmt, helper }) => (
+            ].map(({ label, value, fmt, helper, loading }) => (
               <div key={label} className="rounded-2xl border border-slate-200 bg-white p-4">
                 <p className="text-xs font-bold text-slate-500">{label}</p>
                 <p className="mt-1 text-2xl font-black text-slate-900">
-                  {fmt === "brl"
-                    ? `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
-                    : fmt === "pct"
-                    ? `${value}%`
-                    : value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)}
+                  <MetricValue loading={Boolean(loading)}>
+                    {fmt === "brl"
+                      ? `R$ ${value.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+                      : fmt === "pct"
+                      ? `${value}%`
+                      : value >= 1000 ? `${(value / 1000).toFixed(1)}k` : String(value)}
+                  </MetricValue>
                 </p>
                 {helper && <p className="mt-1 text-xs font-bold text-slate-400">{helper}</p>}
               </div>
@@ -10258,14 +10336,16 @@ function Metrics({
               <h3 className="mb-4 text-sm font-black text-slate-800">Funil de atribuição</h3>
               <div className="grid gap-3 sm:grid-cols-3">
                 {[
-                  { label: "Visitantes", value: overviewVisitors.length },
+                  { label: "Visitantes", value: overviewVisitors.length, loading: loadingOlderVisitors },
                   { label: "Leads", value: overviewPersons.length },
                   { label: "Conversões", value: overviewConversions.length }
                 ].map((item, index) => (
                   <div key={item.label} className="flex items-center gap-3">
                     <div className="flex-1 rounded-2xl bg-slate-50 px-4 py-3">
                       <p className="text-xs font-bold text-slate-500">{item.label}</p>
-                      <p className="text-2xl font-black text-slate-900">{item.value.toLocaleString("pt-BR")}</p>
+                      <p className="text-2xl font-black text-slate-900">
+                        <MetricValue loading={Boolean(item.loading)}>{item.value.toLocaleString("pt-BR")}</MetricValue>
+                      </p>
                     </div>
                     {index < 2 && <ChevronRight className="hidden text-slate-300 sm:block" size={18} />}
                   </div>
@@ -10277,7 +10357,9 @@ function Metrics({
               {/* Origem dos visitantes */}
               <div className="rounded-2xl border border-slate-200 bg-white p-5">
                 <h3 className="mb-4 text-sm font-black text-slate-800">Origem dos visitantes</h3>
-                {overviewVisitorsBySource.length === 0 ? (
+                {loadingOlderVisitors ? (
+                  <div className="flex justify-center py-4"><MetricLoadingDots /></div>
+                ) : overviewVisitorsBySource.length === 0 ? (
                   <p className="text-sm text-slate-400">Nenhum dado ainda</p>
                 ) : (
                   <div className="space-y-3">
@@ -10423,6 +10505,7 @@ function Metrics({
           salesClients={salesClients}
           profiles={profiles}
           periodRange={periodRange}
+          loadingOlderVisitors={loadingOlderVisitors}
           subTab={origemSubTab}
           setSubTab={setOrigemSubTab}
         />
@@ -10501,11 +10584,11 @@ function Metrics({
               <MetricKpiCard label="Visualizações" value={formatNumber(totals.reach)} delta={period !== "all" ? deltaPercent(totals.reach, prevTotals.reach) : undefined} />
               <MetricKpiCard label="Impressões" value={totals.impressions ? formatNumber(totals.impressions) : "—"} delta={period !== "all" && totals.impressions > 0 ? deltaPercent(totals.impressions, prevTotals.impressions) : undefined} />
               <MetricKpiCard label="CTR" value={totals.impressionCount ? formatPercent(totals.impressionClickThroughRate / totals.impressionCount) : "—"} delta={period !== "all" && totals.impressionCount > 0 && prevTotals.impressionCount > 0 ? deltaPercent(totals.impressionClickThroughRate / totals.impressionCount, prevTotals.impressionClickThroughRate / prevTotals.impressionCount) : undefined} />
-              <MetricKpiCard label="Vídeos" value={formatNumber(filteredMetrics.length)} delta={period !== "all" ? deltaPercent(filteredMetrics.length, prevFilteredMetrics.length) : undefined} />
+              <MetricKpiCard label="Vídeos" value={formatNumber(baseChannelMetrics.length)} />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
               <MetricKpiCard label="Inscritos líquidos" value={formatNumber(totals.subscribersGained - totals.subscribersLost)} delta={period !== "all" ? deltaPercent(totals.subscribersGained - totals.subscribersLost, prevTotals.subscribersGained - prevTotals.subscribersLost) : undefined} />
-              <MetricKpiCard label="Média views/vídeo" value={filteredMetrics.length ? formatNumber(Math.round(totals.reach / filteredMetrics.length)) : "—"} delta={period !== "all" && filteredMetrics.length > 0 && prevFilteredMetrics.length > 0 ? deltaPercent(totals.reach / filteredMetrics.length, prevTotals.reach / prevFilteredMetrics.length) : undefined} />
+              <MetricKpiCard label="Média views/vídeo" value={baseChannelMetrics.length ? formatNumber(Math.round(totals.reach / baseChannelMetrics.length)) : "—"} />
               <MetricKpiCard label="Retenção média" value={totals.analyticsCount ? formatPercent(totals.averageViewPercentage / totals.analyticsCount) : "—"} delta={period !== "all" && totals.analyticsCount > 0 && prevTotals.analyticsCount > 0 ? deltaPercent(totals.averageViewPercentage / totals.analyticsCount, prevTotals.averageViewPercentage / prevTotals.analyticsCount) : undefined} />
               <MetricKpiCard label="Taxa curtidas" value={totals.reach ? formatPercent((totals.likes / totals.reach) * 100) : "—"} delta={period !== "all" && totals.reach > 0 && prevTotals.reach > 0 ? deltaPercent((totals.likes / totals.reach) * 100, (prevTotals.likes / prevTotals.reach) * 100) : undefined} />
             </div>
@@ -10600,7 +10683,7 @@ function Metrics({
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="font-black">Top vídeos · {activeChannelName}</h3>
               <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
-                Ver todos os {channelMetrics.length} →
+                Ver todos os {baseChannelMetrics.length} →
               </button>
             </div>
             {top20.length > 0 ? (
@@ -10616,7 +10699,10 @@ function Metrics({
                       </div>
                       <div className="p-3">
                         <p className="line-clamp-2 text-sm font-black text-slate-800 leading-snug">{metric.postTitle}</p>
-                        {metric.date && <p className="mt-0.5 text-[10px] font-bold text-slate-400">{new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR")}</p>}
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          {metric.date && <p className="text-[10px] font-bold text-slate-400">{new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR")}</p>}
+                          {metric.hasMetricInPeriod === false && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-500">Sem métrica no período</span>}
+                        </div>
                         <div className="mt-2 grid grid-cols-3 divide-x divide-slate-100 rounded-2xl border border-slate-100 bg-slate-50 text-center">
                           <div className="py-2">
                             <p className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Views</p>
@@ -10637,7 +10723,7 @@ function Metrics({
                 })}
               </div>
             ) : (
-              <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>
+              <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhum vídeo encontrado com os filtros atuais.</p>
             )}
           </section>
         </div>
@@ -10658,11 +10744,11 @@ function Metrics({
               <MetricKpiCard label="Visualizações" value={formatNumber(totals.reach)} delta={period !== "all" ? deltaPercent(totals.reach, prevTotals.reach) : undefined} />
               <MetricKpiCard label="Engajamento" value={formatNumber(totals.engagement)} delta={period !== "all" ? deltaPercent(totals.engagement, prevTotals.engagement) : undefined} />
               <MetricKpiCard label="Taxa engaj." value={formatPercent(tiktokEngagementRate)} delta={period !== "all" && prevTotals.reach > 0 ? deltaPercent(tiktokEngagementRate, (prevTotals.engagement / prevTotals.reach) * 100) : undefined} />
-              <MetricKpiCard label="Vídeos" value={formatNumber(filteredMetrics.length)} delta={period !== "all" ? deltaPercent(filteredMetrics.length, prevFilteredMetrics.length) : undefined} />
+              <MetricKpiCard label="Vídeos" value={formatNumber(baseChannelMetrics.length)} />
               <MetricKpiCard label="Curtidas" value={formatNumber(totals.likes)} delta={period !== "all" ? deltaPercent(totals.likes, prevTotals.likes) : undefined} />
               <MetricKpiCard label="Comentários" value={formatNumber(totals.comments)} delta={period !== "all" ? deltaPercent(totals.comments, prevTotals.comments) : undefined} />
               <MetricKpiCard label="Compartilhamentos" value={formatNumber(totals.shares)} delta={period !== "all" ? deltaPercent(totals.shares, prevTotals.shares) : undefined} />
-              <MetricKpiCard label="Média views/vídeo" value={tiktokAverageViews ? formatNumber(tiktokAverageViews) : "—"} delta={period !== "all" && prevFilteredMetrics.length > 0 ? deltaPercent(tiktokAverageViews, Math.round(prevTotals.reach / prevFilteredMetrics.length)) : undefined} />
+              <MetricKpiCard label="Média views/vídeo" value={baseChannelMetrics.length ? formatNumber(tiktokAverageViews) : "—"} />
             </div>
             <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
               <MetricKpiCard label="Tempo assistido" value={totals.watchTimeMinutes ? `${formatNumber(Math.round(totals.watchTimeMinutes))} min` : "—"} />
@@ -10766,7 +10852,7 @@ function Metrics({
                 <p className="text-xs font-bold text-slate-400">Ordenado por visualizações</p>
               </div>
               <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
-                Ver todos os {channelMetrics.length} →
+                Ver todos os {baseChannelMetrics.length} →
               </button>
             </div>
             {top20.length > 0 ? (
@@ -10781,7 +10867,10 @@ function Metrics({
                       </div>
                       <div className="p-3">
                         <p className="line-clamp-2 text-sm font-black leading-snug text-slate-800">{metric.postTitle}</p>
-                        {metric.date && <p className="mt-0.5 text-[10px] font-bold text-slate-400">{new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR")}</p>}
+                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                          {metric.date && <p className="text-[10px] font-bold text-slate-400">{new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR")}</p>}
+                          {metric.hasMetricInPeriod === false && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-500">Sem métrica no período</span>}
+                        </div>
                         <div className="mt-2 grid grid-cols-2 gap-2 text-xs font-black">
                           <span className="rounded-2xl bg-slate-50 px-2 py-1 text-slate-700">{formatNumber(metric.reach)} views</span>
                           <span className="rounded-2xl bg-pink-50 px-2 py-1 text-pink-700">{formatNumber(metricEngagement(metric))} engaj.</span>
@@ -10794,7 +10883,7 @@ function Metrics({
                 })}
               </div>
             ) : (
-              <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica do TikTok encontrada com os filtros atuais.</p>
+              <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhum vídeo do TikTok encontrado com os filtros atuais.</p>
             )}
           </section>
         </div>
@@ -10881,7 +10970,7 @@ function Metrics({
             <div className="mb-3 flex items-center justify-between gap-3">
               <h3 className="font-black">Top 10 · {activeChannelName}</h3>
               <button type="button" onClick={() => setAllVideosOpen(true)} className="rounded-2xl bg-slate-900 px-4 py-2 text-xs font-black text-white hover:bg-slate-700">
-                Ver todos os {channelMetrics.length} vídeos →
+                Ver todos os {baseChannelMetrics.length} vídeos →
               </button>
             </div>
             <div className="grid gap-2">
@@ -10892,13 +10981,16 @@ function Metrics({
                     <MetricThumbnail src={thumb} className="h-14 w-24 shrink-0 rounded-lg object-cover" fallbackClassName="h-14 w-24 shrink-0 rounded-lg" />
                     <div className="min-w-0 flex-1">
                       <p className="line-clamp-1 font-black">{metric.postTitle}</p>
-                      <p className="text-xs font-bold text-slate-500">{metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}{metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}</p>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <p className="text-xs font-bold text-slate-500">{metric.date ? new Date(`${metric.date}T12:00:00`).toLocaleDateString("pt-BR") : "Sem data"}{metric.channelId && ` · ${channelById.get(metric.channelId)?.name ?? metric.channelId}`}</p>
+                        {metric.hasMetricInPeriod === false && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-500">Sem métrica no período</span>}
+                      </div>
                       <p className="mt-0.5 text-xs font-bold text-slate-700">{formatNumber(metric.reach)} alcance · {formatNumber(metric.likes)} curtidas · {formatNumber(metric.comments)} coment.</p>
                     </div>
                   </button>
                 );
               })}
-              {!previewMetrics.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhuma métrica encontrada com os filtros atuais.</p>}
+              {!previewMetrics.length && <p className="rounded-3xl bg-slate-50 p-5 text-sm font-bold text-slate-500">Nenhum post encontrado com os filtros atuais.</p>}
             </div>
           </section>
         </div>
@@ -11416,6 +11508,20 @@ function PeriodFilterWithCustomRange({
       )}
     </div>
   );
+}
+
+// Espaco reservado pro valor de um card enquanto o dado do periodo ainda nao
+// chegou (busca incremental de visitors/tracking_sessions em andamento).
+// O valor real entra com fade+scale quando troca de loading -> pronto,
+// porque a key muda (loading vs valor) e o React remonta o elemento.
+function MetricLoadingDots() {
+  return <Loader2 size={20} className="animate-spin text-slate-300" />;
+}
+
+function MetricValue({ loading, children }: { loading: boolean; children: React.ReactNode }) {
+  return loading
+    ? <MetricLoadingDots />
+    : <span key="ready" className="inline-block animate-soft-pop">{children}</span>;
 }
 
 function MetricSummaryCard({ label, value }: { label: string; value: string }) {
@@ -12198,6 +12304,7 @@ function OrigemSection({
   salesClients,
   profiles,
   periodRange,
+  loadingOlderVisitors,
   subTab,
   setSubTab
 }: {
@@ -12211,6 +12318,7 @@ function OrigemSection({
   salesClients: SalesClient[];
   profiles: Profile[];
   periodRange: { start: Date; end: Date } | null;
+  loadingOlderVisitors?: boolean;
   subTab: "links" | "eventos" | "visitantes" | "leads";
   setSubTab: Dispatch<SetStateAction<"links" | "eventos" | "visitantes" | "leads">>;
 }) {
@@ -12513,9 +12621,11 @@ function OrigemSection({
         <div>
           <div className="mb-3 flex items-center gap-3">
             <p className="text-sm font-black text-slate-700">Total de visitantes únicos</p>
-            <Badge tone="blue">{visitors.length}</Badge>
+            <Badge tone="blue"><MetricValue loading={Boolean(loadingOlderVisitors)}>{visitors.length}</MetricValue></Badge>
           </div>
-          {sourceEntries.length > 0 ? (
+          {loadingOlderVisitors ? (
+            <div className="flex justify-center py-8"><MetricLoadingDots /></div>
+          ) : sourceEntries.length > 0 ? (
             <div className="space-y-2">
               {sourceEntries.map(({ source, medium, count }) => {
                 const { label, description } = labelVisitorSource(source, medium);
@@ -14132,6 +14242,8 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
   const [sortBy, setSortBy] = useState<AllVideosSort>("views");
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 30;
+  const hasMetricInSelectedPeriod = (metric: PostMetric) =>
+    (metric as PostMetric & { hasMetricInPeriod?: boolean }).hasMetricInPeriod !== false;
 
   const searched = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -14221,6 +14333,9 @@ function AllVideosModal({ metrics, channelLabel, channelById, onClose, onPick }:
                         )}
                         {(metric.privacyStatus === "public" || metric.privacyStatus == null) && metric.externalId?.startsWith("yt:") && (
                           <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">🌐 Público</span>
+                        )}
+                        {!hasMetricInSelectedPeriod(metric) && (
+                          <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-black text-slate-500">Sem métrica no período</span>
                         )}
                       </div>
                       <p className="text-xs font-bold text-slate-500">
