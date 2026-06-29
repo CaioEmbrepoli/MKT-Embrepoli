@@ -453,6 +453,49 @@ export async function fetchVisitorsAndSessionsInRange(
   };
 }
 
+// Conta visitantes unicos no periodo calculada no Postgres (RPC) em vez de
+// baixar as linhas cruas pro navegador so pra contar. since/until null =
+// "todo periodo" (conta visitors inteiro, igual ao comportamento de
+// periodRange === null hoje no front).
+export async function fetchVisitorCountInRange(
+  client: SupabaseClient,
+  organizationId: string,
+  since: string | null,
+  until: string | null
+): Promise<number> {
+  const { data, error } = await client.rpc("count_visitors_in_range", {
+    p_org_id: organizationId,
+    p_since: since,
+    p_until: until
+  });
+  if (error) throw new Error(`count_visitors_in_range: ${error.message}`);
+  return data ?? 0;
+}
+
+// Quebra de visitantes por origem/midia calculada no Postgres (RPC) — mesma
+// regra de negocio do front (sessao tem prioridade sobre first-touch do
+// visitor quando ha periodo definido), so que sem trazer cada visitante.
+export async function fetchVisitorSourcesInRange(
+  client: SupabaseClient,
+  organizationId: string,
+  since: string | null,
+  until: string | null,
+  limit = 5
+): Promise<{ source: string | null; medium: string | null; count: number }[]> {
+  const { data, error } = await client.rpc("visitor_sources_in_range", {
+    p_org_id: organizationId,
+    p_since: since,
+    p_until: until,
+    p_limit: limit
+  });
+  if (error) throw new Error(`visitor_sources_in_range: ${error.message}`);
+  return (data ?? []).map((row: { source: string | null; medium: string | null; visitor_count: number }) => ({
+    source: row.source,
+    medium: row.medium,
+    count: row.visitor_count
+  }));
+}
+
 export async function replaceProfiles(client: SupabaseClient, profiles: Profile[], previous: Profile[] = []) {
   const organizationId = await currentOrganizationId(client);
   await deleteRemovedRows(client, "profiles", organizationId, previous, profiles);

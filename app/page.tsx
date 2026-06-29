@@ -125,6 +125,8 @@ import {
   deleteTrackableLink,
   deleteVehicleType,
   ensureCurrentProfile,
+  fetchVisitorCountInRange,
+  fetchVisitorSourcesInRange,
   fetchVisitorsAndSessionsInRange,
   loadAppData,
   loadInitialAppData,
@@ -9774,6 +9776,12 @@ function Metrics({
   // Enquanto nao for null, marca o limite inferior ja coberto em memoria —
   // cada busca sob demanda so traz o intervalo que falta antes desse limite.
   const [loadedSinceIso, setLoadedSinceIso] = useState<string | null>(visitorsWindowStartIso);
+  // Visitantes unicos + quebra por origem calculados no Postgres (RPC) em vez
+  // de baixar visitors/tracking_sessions inteiro so pra contar — nao depende
+  // da janela incremental acima, funciona pra qualquer periodo (inclusive
+  // "Todo periodo") sem trazer linha crua nenhuma.
+  const [visitorAggregate, setVisitorAggregate] = useState<{ count: number; sources: { source: string | null; medium: string | null; count: number }[] } | null>(null);
+  const [loadingVisitorAggregate, setLoadingVisitorAggregate] = useState(true);
   const [metricsMode, setMetricsMode] = useState<"overview" | "organic" | "ads" | "links">("overview");
   const [origemSubTab, setOrigemSubTab] = useState<"links" | "eventos" | "visitantes" | "leads">("links");
   const [metricImportOpen, setMetricImportOpen] = useState(false);
@@ -9791,7 +9799,11 @@ function Metrics({
   const filtersRef = useRef<HTMLDivElement>(null);
   const canManageIntegrations = currentUser.role === "admin" || currentUser.role === "gestor";
   const postById = useMemo(() => new Map(posts.map((post) => [post.id, post])), [posts]);
-  const today = new Date();
+  // Memoizado (so calcula uma vez por montagem) — sem isso, "today" mudava de
+  // identidade a cada render (new Date() sempre retorna um objeto novo), o que
+  // fazia periodRange (useMemo abaixo) tambem mudar de identidade sempre,
+  // disparando em loop qualquer efeito que dependesse de periodRange.
+  const today = useMemo(() => new Date(), []);
   const todayMs = today.getTime();
 
   useEffect(() => {
@@ -10090,22 +10102,38 @@ function Metrics({
     };
   }, [period, periodRange, loadedSinceIso, currentUser.organizationId, setVisitors, setTrackingSessions]);
 
+  // Visitantes unicos + origem do periodo selecionado — busca agregada via
+  // RPC (count_visitors_in_range/visitor_sources_in_range), independente do
+  // carregamento incremental de cima. Funciona pra qualquer periodo,
+  // inclusive "Todo periodo", sem nunca baixar visitor/sessao crua.
+  useEffect(() => {
+    if (!supabase) return;
+    let cancelled = false;
+    setLoadingVisitorAggregate(true);
+    const sinceIso = periodRange ? periodRange.start.toISOString() : null;
+    const untilIso = periodRange ? periodRange.end.toISOString() : null;
+    Promise.all([
+      fetchVisitorCountInRange(supabase, currentUser.organizationId, sinceIso, untilIso),
+      fetchVisitorSourcesInRange(supabase, currentUser.organizationId, sinceIso, untilIso)
+    ])
+      .then(([count, sources]) => {
+        if (cancelled) return;
+        setVisitorAggregate({ count, sources });
+      })
+      .catch((err) => {
+        console.error("[Metrics] fetchVisitorCountInRange/fetchVisitorSourcesInRange", err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingVisitorAggregate(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [periodRange, currentUser.organizationId]);
+
   const overviewMetrics = useMemo(() => resolvedMetrics.filter((m) => {
     return isInDateRange(`${m.date || todayIso()}T12:00:00-03:00`, periodRange);
   }), [resolvedMetrics, periodRange]);
-
-  const overviewSessions = useMemo(() =>
-    trackingSessions.filter((session) => isInDateRange(session.startedAt, periodRange)),
-  [trackingSessions, periodRange]);
-
-  const overviewVisitorIds = useMemo(() =>
-    new Set(overviewSessions.map((session) => session.visitorId).filter(Boolean)),
-  [overviewSessions]);
-
-  const overviewVisitors = useMemo(() => {
-    if (!periodRange) return visitors;
-    return visitors.filter((visitor) => overviewVisitorIds.has(visitor.id));
-  }, [visitors, periodRange, overviewVisitorIds]);
 
   const overviewPersons = useMemo(() => persons.filter((p) => {
     return isInDateRange(p.createdAt, periodRange);
@@ -10122,36 +10150,6 @@ function Metrics({
   const overviewInsights = useMemo(() => adInsightsDaily.filter((ins) => {
     return isInDateRange(`${ins.date}T12:00:00-03:00`, periodRange);
   }), [adInsightsDaily, periodRange]);
-
-  const overviewVisitorsBySource = useMemo(() => {
-    const visitorById = new Map(visitors.map((visitor) => [visitor.id, visitor]));
-    const map: Record<string, { source: string | null; medium: string | null; visitorIds: Set<string> }> = {};
-    const addVisitorSource = (visitorId: string, source: string | null, medium: string | null) => {
-      if (!visitorId) return;
-      const key = `${source ?? ""}|${medium ?? ""}`;
-      if (!map[key]) map[key] = { source, medium, visitorIds: new Set<string>() };
-      map[key].visitorIds.add(visitorId);
-    };
-
-    if (periodRange) {
-      for (const session of overviewSessions) {
-        const visitor = visitorById.get(session.visitorId);
-        addVisitorSource(
-          session.visitorId,
-          session.utmSource ?? visitor?.firstTouchSource ?? null,
-          session.utmMedium ?? visitor?.firstTouchMedium ?? null
-        );
-      }
-    } else {
-      for (const visitor of visitors) {
-        addVisitorSource(visitor.id, visitor.firstTouchSource, visitor.firstTouchMedium);
-      }
-    }
-    return Object.values(map)
-      .map((item) => ({ source: item.source, medium: item.medium, count: item.visitorIds.size }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-  }, [visitors, periodRange, overviewSessions]);
 
   const overviewLeadsByChannel = useMemo(() => {
     const map: Record<string, number> = {};
@@ -10307,7 +10305,7 @@ function Metrics({
           {/* Bloco 1 — KPIs cross-channel */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {[
-              { label: "Visitantes únicos", value: overviewVisitors.length, fmt: "num", loading: loadingOlderVisitors },
+              { label: "Visitantes únicos", value: visitorAggregate?.count ?? 0, fmt: "num", loading: loadingVisitorAggregate },
               { label: "Leads capturados", value: overviewPersons.length, fmt: "num" },
               { label: "Conversões", value: overviewConversions.length, fmt: "num", helper: `R$ ${overviewConversionValue.toLocaleString("pt-BR", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}` },
               { label: "Taxa de atribuição", value: overviewPersons.length > 0 ? Math.round(overviewPersons.filter((p) => p.visitorId).length / overviewPersons.length * 100) : 0, fmt: "pct" },
@@ -10336,7 +10334,7 @@ function Metrics({
               <h3 className="mb-4 text-sm font-black text-slate-800">Funil de atribuição</h3>
               <div className="grid gap-3 sm:grid-cols-3">
                 {[
-                  { label: "Visitantes", value: overviewVisitors.length, loading: loadingOlderVisitors },
+                  { label: "Visitantes", value: visitorAggregate?.count ?? 0, loading: loadingVisitorAggregate },
                   { label: "Leads", value: overviewPersons.length },
                   { label: "Conversões", value: overviewConversions.length }
                 ].map((item, index) => (
@@ -10357,15 +10355,15 @@ function Metrics({
               {/* Origem dos visitantes */}
               <div className="rounded-2xl border border-slate-200 bg-white p-5">
                 <h3 className="mb-4 text-sm font-black text-slate-800">Origem dos visitantes</h3>
-                {loadingOlderVisitors ? (
+                {loadingVisitorAggregate ? (
                   <div className="flex justify-center py-4"><MetricLoadingDots /></div>
-                ) : overviewVisitorsBySource.length === 0 ? (
+                ) : !visitorAggregate?.sources.length ? (
                   <p className="text-sm text-slate-400">Nenhum dado ainda</p>
                 ) : (
                   <div className="space-y-3">
-                    {overviewVisitorsBySource.map(({ source, medium, count }) => {
+                    {visitorAggregate.sources.map(({ source, medium, count }) => {
                       const { label, description } = labelVisitorSource(source, medium);
-                      const pct = overviewVisitors.length > 0 ? Math.round(count / overviewVisitors.length * 100) : 0;
+                      const pct = visitorAggregate.count > 0 ? Math.round(count / visitorAggregate.count * 100) : 0;
                       return (
                         <div key={`${source ?? ""}|${medium ?? ""}`}>
                           <div className="mb-0.5 flex items-center justify-between">
@@ -10506,6 +10504,7 @@ function Metrics({
           profiles={profiles}
           periodRange={periodRange}
           loadingOlderVisitors={loadingOlderVisitors}
+          organizationId={currentUser.organizationId}
           subTab={origemSubTab}
           setSubTab={setOrigemSubTab}
         />
@@ -12305,6 +12304,7 @@ function OrigemSection({
   profiles,
   periodRange,
   loadingOlderVisitors,
+  organizationId,
   subTab,
   setSubTab
 }: {
@@ -12319,18 +12319,41 @@ function OrigemSection({
   profiles: Profile[];
   periodRange: { start: Date; end: Date } | null;
   loadingOlderVisitors?: boolean;
+  organizationId: string;
   subTab: "links" | "eventos" | "visitantes" | "leads";
   setSubTab: Dispatch<SetStateAction<"links" | "eventos" | "visitantes" | "leads">>;
 }) {
-  const sourceEntries = useMemo(() => {
-    const map: Record<string, { source: string | null; medium: string | null; count: number }> = {};
-    for (const v of visitors) {
-      const key = `${v.firstTouchSource ?? ""}|${v.firstTouchMedium ?? ""}`;
-      if (!map[key]) map[key] = { source: v.firstTouchSource, medium: v.firstTouchMedium, count: 0 };
-      map[key].count++;
-    }
-    return Object.values(map).sort((a, b) => b.count - a.count);
-  }, [visitors]);
+  // Total de visitantes unicos + quebra por origem (aba "Visitantes") via RPC
+  // agregado no Postgres, em vez de contar/agrupar o array `visitors`
+  // completo no navegador — sempre "todo periodo" (since/until null), igual
+  // ao comportamento que esse bloco ja tinha antes.
+  const [visitorAggregate, setVisitorAggregate] = useState<{ count: number; sources: { source: string | null; medium: string | null; count: number }[] } | null>(null);
+  const [loadingVisitorAggregate, setLoadingVisitorAggregate] = useState(true);
+
+  useEffect(() => {
+    if (!supabase) return;
+    let cancelled = false;
+    setLoadingVisitorAggregate(true);
+    Promise.all([
+      fetchVisitorCountInRange(supabase, organizationId, null, null),
+      // sem limite de 5 aqui (diferente da Visao Geral) — esta aba sempre
+      // mostrou todas as origens distintas, nao so o top 5.
+      fetchVisitorSourcesInRange(supabase, organizationId, null, null, 1000)
+    ])
+      .then(([count, sources]) => {
+        if (cancelled) return;
+        setVisitorAggregate({ count, sources });
+      })
+      .catch((err) => {
+        console.error("[OrigemSection] fetchVisitorCountInRange/fetchVisitorSourcesInRange", err);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingVisitorAggregate(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
 
   const channelColors: Record<string, string> = {
     whatsapp: "green",
@@ -12621,15 +12644,15 @@ function OrigemSection({
         <div>
           <div className="mb-3 flex items-center gap-3">
             <p className="text-sm font-black text-slate-700">Total de visitantes únicos</p>
-            <Badge tone="blue"><MetricValue loading={Boolean(loadingOlderVisitors)}>{visitors.length}</MetricValue></Badge>
+            <Badge tone="blue"><MetricValue loading={loadingVisitorAggregate}>{visitorAggregate?.count ?? 0}</MetricValue></Badge>
           </div>
-          {loadingOlderVisitors ? (
+          {loadingVisitorAggregate ? (
             <div className="flex justify-center py-8"><MetricLoadingDots /></div>
-          ) : sourceEntries.length > 0 ? (
+          ) : visitorAggregate && visitorAggregate.sources.length > 0 ? (
             <div className="space-y-2">
-              {sourceEntries.map(({ source, medium, count }) => {
+              {visitorAggregate.sources.map(({ source, medium, count }) => {
                 const { label, description } = labelVisitorSource(source, medium);
-                const pct = visitors.length > 0 ? Math.round((count / visitors.length) * 100) : 0;
+                const pct = visitorAggregate.count > 0 ? Math.round((count / visitorAggregate.count) * 100) : 0;
                 return (
                   <div key={`${source ?? ""}|${medium ?? ""}`} className="rounded-2xl bg-slate-50 px-4 py-3">
                     <div className="flex items-center justify-between mb-0.5">
