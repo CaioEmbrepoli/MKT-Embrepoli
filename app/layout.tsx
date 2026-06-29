@@ -4,7 +4,7 @@ import { PwaRegistrar } from "./PwaRegistrar";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://mkt-embrepoli.vercel.app"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL || "https://app.embrepoli.com.br"),
   title: "Gestão Embrepoli",
   description: "Gestão interna de marketing e vendas da Embrepoli",
   applicationName: "Gestão Embrepoli",

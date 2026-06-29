@@ -210,7 +210,7 @@ async function preparePublicAsset(context: MetaRequestContext, payload: Instagra
       // app/api/meta/instagram/drive-proxy/route.ts). Sem limite de tamanho,
       // sem depender de storage nenhum.
       const token = signDriveProxyToken(fileId, context.organizationId);
-      const proxyBase = (process.env.NEXT_PUBLIC_SITE_URL || "https://mkt-embrepoli.vercel.app").replace(/\/$/, "");
+      const proxyBase = (process.env.NEXT_PUBLIC_SITE_URL || "https://app.embrepoli.com.br").replace(/\/$/, "");
       const publicUrl = `${proxyBase}/api/meta/instagram/drive-proxy?token=${encodeURIComponent(token)}`;
       return { publicUrl, contentType, buffer: Buffer.alloc(0) };
     }
