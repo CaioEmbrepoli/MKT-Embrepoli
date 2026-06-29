@@ -245,6 +245,12 @@ function defaultVisitorsWindowStartIso(): string {
   return new Date(Date.now() - VISITORS_DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
+// ad_insights_daily.date e uma coluna "date" (sem hora) — usa so a parte de
+// data da mesma janela padrao, pra comparar certo no Postgres.
+function defaultVisitorsWindowStartDate(): string {
+  return defaultVisitorsWindowStartIso().slice(0, 10);
+}
+
 export async function loadAppData(client: SupabaseClient): Promise<AppData> {
   const profile = await ensureCurrentProfile(client);
   const organizationId = profile?.id ? await getOrganizationId(client, profile.id) : EMBREPOLI_ORG_ID;
@@ -258,6 +264,20 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
   );
   const metricsPromise = fetchAllRows<Record<string, unknown>>(
     () => client.from("post_metrics").select("*").eq("organization_id", organizationId)
+  );
+  const visitorsWindowStartDate = defaultVisitorsWindowStartDate();
+  const adInsightsDailyPromise = fetchAllRows<Record<string, unknown>>(
+    () => client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).gte("date", visitorsWindowStartDate).order("date", { ascending: false })
+  );
+  const trackingTouchpointsPromise = fetchAllRows<Record<string, unknown>>(
+    () => client.from("tracking_touchpoints").select("*").eq("organization_id", organizationId).gte("occurred_at", visitorsWindowStartIso).order("occurred_at", { ascending: false })
+  );
+  // Comentarios pendentes ("novo") entram sem limite de data — sao a fila de
+  // moderacao e precisam aparecer mesmo se antigos. Respondidos/ignorados so
+  // entram dentro da janela padrao; historico mais antigo busca incremental
+  // via fetchCommentsInRange quando o usuario muda o filtro de periodo.
+  const ytCommentsPromise = fetchAllRows<Record<string, unknown>>(
+    () => client.from("comments").select("*").eq("organization_id", organizationId).or(`status.eq.novo,created_at.gte.${visitorsWindowStartIso}`).order("created_at", { ascending: false })
   );
 
   const [
@@ -289,7 +309,6 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     calendarDates,
     ideaAttachments,
     customerQuestions,
-    ytCommentsData,
     autoFiltersData,
     salesClientsData,
     salesFunnelStagesData,
@@ -300,12 +319,10 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adCampaignsData,
     adSetsData,
     adsData,
-    adInsightsDailyData,
     adAlertsData,
     integrationHealthData,
     errorLogsData,
     trackableLinksData,
-    trackingTouchpointsData,
     personsData,
     conversionsData
   ] = await Promise.all([
@@ -337,7 +354,6 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("calendar_dates").select("*").eq("organization_id", organizationId).limit(100000),
     client.from("idea_attachments").select("*").eq("organization_id", organizationId).limit(100000),
     client.from("customer_questions").select("*").eq("organization_id", organizationId).limit(100000),
-    client.from("comments").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
     client.from("auto_filters").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
     client.from("sales_clients").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
     client.from("sales_funnel_stages").select("*").eq("organization_id", organizationId).order("sort_order", { ascending: true }).limit(100000),
@@ -348,12 +364,10 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     client.from("ad_campaigns").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
     client.from("ad_sets").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
     client.from("ads").select("*").eq("organization_id", organizationId).order("created_at", { ascending: true }).limit(100000),
-    client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).order("date", { ascending: false }).limit(100000),
     client.from("ad_alerts").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
     client.from("integration_health").select("*").eq("organization_id", organizationId).order("updated_at", { ascending: false }).limit(100000),
     client.from("error_logs").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(200),
     client.from("trackable_links").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
-    client.from("tracking_touchpoints").select("*").eq("organization_id", organizationId).order("occurred_at", { ascending: false }).limit(100000),
     client.from("persons").select("*, person_identifiers(*)").eq("organization_id", organizationId).order("created_at", { ascending: false }).limit(100000),
     client.from("conversions").select("*").eq("organization_id", organizationId).order("sale_date", { ascending: false }).limit(100000)
   ]);
@@ -367,7 +381,14 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     throw new Error(`Falha ao recarregar dados do Supabase: ${failedQuery.error?.message ?? "erro desconhecido"}`);
   }
 
-  const [visitorsRaw, trackingSessionsRaw, metricsRaw] = await Promise.all([visitorsPromise, trackingSessionsPromise, metricsPromise]);
+  const [visitorsRaw, trackingSessionsRaw, metricsRaw, adInsightsDailyRaw, trackingTouchpointsRaw, ytCommentsRaw] = await Promise.all([
+    visitorsPromise,
+    trackingSessionsPromise,
+    metricsPromise,
+    adInsightsDailyPromise,
+    trackingTouchpointsPromise,
+    ytCommentsPromise
+  ]);
 
   const campaignAssigneeMap = groupByParent(campaignAssignees.data ?? [], "campaign_id");
   const postAssigneeMap = groupByParent(postAssignees.data ?? [], "post_id");
@@ -401,14 +422,14 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     adCampaigns: (adCampaignsData.data ?? []).map(mapAdCampaign),
     adSets: (adSetsData.data ?? []).map(mapAdSet),
     ads: (adsData.data ?? []).map(mapAd),
-    adInsightsDaily: (adInsightsDailyData.data ?? []).map(mapAdInsightDaily),
+    adInsightsDaily: adInsightsDailyRaw.map(mapAdInsightDaily),
     adAlerts: (adAlertsData.data ?? []).map(mapAdAlert),
     integrationHealth: (integrationHealthData.data ?? []).map(mapIntegrationHealth),
     errorLogs: (errorLogsData.data ?? []).map(mapErrorLog),
     notifications: (notifications.data ?? []).map(mapNotification),
     calendarDates: (calendarDates.data ?? []).map(mapCalendarDate),
     customerQuestions: (customerQuestions.data ?? []).map(mapCustomerQuestion),
-    ytComments: (ytCommentsData.data ?? []).map(mapYtComment),
+    ytComments: ytCommentsRaw.map(mapYtComment),
     autoFilters: (autoFiltersData.data ?? []).map(mapAutoFilter),
     salesClients: (salesClientsData.data ?? []).map(mapSalesClient),
     salesFunnelStages: (salesFunnelStagesData.data ?? []).map(mapSalesFunnelStage),
@@ -418,7 +439,7 @@ export async function loadAppData(client: SupabaseClient): Promise<AppData> {
     trackableLinks: (trackableLinksData.data ?? []).map(mapTrackableLink),
     visitors: visitorsRaw.map(mapVisitor),
     trackingSessions: trackingSessionsRaw.map(mapTrackingSession),
-    trackingTouchpoints: (trackingTouchpointsData.data ?? []).map(mapTrackingTouchpoint),
+    trackingTouchpoints: trackingTouchpointsRaw.map(mapTrackingTouchpoint),
     persons: (personsData.data ?? []).map(mapPerson),
     conversions: (conversionsData.data ?? []).map(mapConversion)
   };
@@ -451,6 +472,56 @@ export async function fetchVisitorsAndSessionsInRange(
     visitors: visitorsRaw.map(mapVisitor),
     trackingSessions: trackingSessionsRaw.map(mapTrackingSession)
   };
+}
+
+// Busca ad_insights_daily no intervalo [sinceIso, beforeIso) ainda nao
+// carregado pela janela padrao — mesmo padrao de fetchVisitorsAndSessionsInRange.
+export async function fetchAdInsightsInRange(
+  client: SupabaseClient,
+  organizationId: string,
+  beforeDate: string,
+  sinceDate?: string
+): Promise<AdInsightDaily[]> {
+  const raw = await fetchAllRows<Record<string, unknown>>(() => {
+    let query = client.from("ad_insights_daily").select("*").eq("organization_id", organizationId).lt("date", beforeDate);
+    if (sinceDate) query = query.gte("date", sinceDate);
+    return query.order("date", { ascending: false });
+  });
+  return raw.map(mapAdInsightDaily);
+}
+
+// Busca tracking_touchpoints no intervalo [sinceIso, beforeIso) ainda nao
+// carregado pela janela padrao — mesmo padrao de fetchVisitorsAndSessionsInRange.
+export async function fetchTouchpointsInRange(
+  client: SupabaseClient,
+  organizationId: string,
+  beforeIso: string,
+  sinceIso?: string
+): Promise<TrackingTouchpoint[]> {
+  const raw = await fetchAllRows<Record<string, unknown>>(() => {
+    let query = client.from("tracking_touchpoints").select("*").eq("organization_id", organizationId).lt("occurred_at", beforeIso);
+    if (sinceIso) query = query.gte("occurred_at", sinceIso);
+    return query.order("occurred_at", { ascending: false });
+  });
+  return raw.map(mapTrackingTouchpoint);
+}
+
+// Busca comentarios mais antigos que a janela padrao, ja respondidos/ignorados
+// (status "novo" sempre veio inteiro no load inicial, nao precisa buscar de
+// novo aqui — evita duplicar). Usado quando o usuario amplia o periodo na aba
+// de Comentarios alem da janela padrao.
+export async function fetchCommentsInRange(
+  client: SupabaseClient,
+  organizationId: string,
+  beforeIso: string,
+  sinceIso?: string
+): Promise<Comment[]> {
+  const raw = await fetchAllRows<Record<string, unknown>>(() => {
+    let query = client.from("comments").select("*").eq("organization_id", organizationId).neq("status", "novo").lt("created_at", beforeIso);
+    if (sinceIso) query = query.gte("created_at", sinceIso);
+    return query.order("created_at", { ascending: false });
+  });
+  return raw.map(mapYtComment);
 }
 
 // Conta visitantes unicos no periodo calculada no Postgres (RPC) em vez de
