@@ -1,5 +1,5 @@
 // Classificação local de comentários — sem IA, sem custo, instantâneo.
-// Retorna "duvida" ou "normal" para casos óbvios, "incerto" para o resto (vai para Gemini).
+// Retorna "duvida" ou "normal" para casos obvios, "incerto" para o resto (vai para IA local).
 
 export type LocalClassification = "duvida" | "normal" | "incerto";
 

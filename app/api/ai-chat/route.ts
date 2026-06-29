@@ -1,19 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ollamaHeaders } from "@/lib/ollama-auth";
 
 /**
- * POST /api/gemini-chat
+ * POST /api/ai-chat
  *
- * Chat de dúvidas com contexto do banco de perguntas.
+ * Chat de duvidas com contexto do banco de perguntas.
  * Retorna { answer, matchedQuestionIds, unknown, provider }.
- *
- * Variáveis de ambiente:
- *   OLLAMA_HOST  = URL do Ollama (ex: https://seu-tunel.trycloudflare.com)
- *   OLLAMA_MODEL = modelo a usar (padrão: llama3.2)
- *   GEMINI_API_KEY = chave do Gemini (fallback)
  */
 
 const OLLAMA_HOST = process.env.OLLAMA_HOST?.replace(/\/$/, "");
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.2";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.1:8b";
 
 type BankItem = { id: string; questionText: string; answerText: string };
 type AiResult = { found: boolean; answer: string | null; matchedIds: string[] };
@@ -41,9 +37,11 @@ Retorne SOMENTE o JSON, sem texto adicional.`;
 }
 
 async function callOllama(prompt: string): Promise<string> {
+  if (!OLLAMA_HOST) throw new Error("OLLAMA_HOST nao configurado.");
+
   const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: ollamaHeaders(),
     body: JSON.stringify({
       model: OLLAMA_MODEL,
       prompt,
@@ -57,17 +55,6 @@ async function callOllama(prompt: string): Promise<string> {
   }
   const data = await res.json() as { response?: string };
   return data.response?.trim() ?? "{}";
-}
-
-async function callGemini(prompt: string): Promise<string> {
-  const { GoogleGenerativeAI } = await import("@google/generative-ai");
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY ?? "");
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    generationConfig: { responseMimeType: "application/json" },
-  });
-  const result = await model.generateContent(prompt);
-  return result.response.text().trim();
 }
 
 function parseResult(text: string): AiResult {
@@ -98,21 +85,19 @@ export async function POST(req: NextRequest) {
     }
 
     const prompt = buildPrompt(question, bank ?? []);
+    console.log(`[ai-chat] usando ollama (model: ${OLLAMA_MODEL})`);
 
-    const provider = OLLAMA_HOST ? "ollama" : "gemini";
-    console.log(`[ai-chat] usando ${provider} (model: ${OLLAMA_HOST ? OLLAMA_MODEL : "gemini-2.0-flash"})`);
-
-    const text = OLLAMA_HOST ? await callOllama(prompt) : await callGemini(prompt);
+    const text = await callOllama(prompt);
     const result = parseResult(text);
 
     return NextResponse.json({
       answer: result.answer,
       matchedQuestionIds: result.matchedIds,
       unknown: !result.found,
-      provider,
+      provider: "ollama",
     });
   } catch (err) {
     console.error("[ai-chat]", err);
-    return NextResponse.json({ error: "Erro ao consultar a IA." }, { status: 500 });
+    return NextResponse.json({ error: "Erro ao consultar a IA local." }, { status: 500 });
   }
 }

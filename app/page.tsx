@@ -125,6 +125,9 @@ import {
   deleteTrackableLink,
   deleteVehicleType,
   ensureCurrentProfile,
+  fetchAdInsightsInRange,
+  fetchCommentsInRange,
+  fetchTouchpointsInRange,
   fetchVisitorCountInRange,
   fetchVisitorSourcesInRange,
   fetchVisitorsAndSessionsInRange,
@@ -571,7 +574,7 @@ function saoPauloPeriodRange(period: string, from = new Date(), custom?: CustomD
   };
 }
 
-function mergeById<T extends { id: string }>(existing: T[], incoming: T[]): T[] {
+function mergeById<T extends { id: string | number }>(existing: T[], incoming: T[]): T[] {
   if (!incoming.length) return existing;
   const map = new Map(existing.map((item) => [item.id, item]));
   for (const item of incoming) map.set(item.id, item);
@@ -2944,6 +2947,7 @@ export default function Home() {
               trackingSessions={trackingSessions}
               setTrackingSessions={setTrackingSessions}
               trackingTouchpoints={trackingTouchpoints}
+              setTrackingTouchpoints={setTrackingTouchpoints}
               persons={persons}
               conversions={conversions}
               salesClients={salesClients}
@@ -2957,6 +2961,7 @@ export default function Home() {
               adSets={adSets}
               ads={ads}
               adInsightsDaily={adInsightsDaily}
+              setAdInsightsDaily={setAdInsightsDaily}
               adAlerts={adAlerts}
               currentUser={currentUser}
               taskColumns={taskColumns}
@@ -9701,6 +9706,7 @@ function Metrics({
   trackingSessions,
   setTrackingSessions,
   trackingTouchpoints,
+  setTrackingTouchpoints,
   persons,
   conversions,
   salesClients,
@@ -9714,6 +9720,7 @@ function Metrics({
   adSets,
   ads,
   adInsightsDaily,
+  setAdInsightsDaily,
   adAlerts,
   currentUser,
   taskColumns,
@@ -9739,6 +9746,7 @@ function Metrics({
   trackingSessions: TrackingSession[];
   setTrackingSessions: Dispatch<SetStateAction<TrackingSession[]>>;
   trackingTouchpoints: TrackingTouchpoint[];
+  setTrackingTouchpoints: Dispatch<SetStateAction<TrackingTouchpoint[]>>;
   persons: Person[];
   conversions: Conversion[];
   salesClients: SalesClient[];
@@ -9752,6 +9760,7 @@ function Metrics({
   adSets: AdSet[];
   ads: Ad[];
   adInsightsDaily: AdInsightDaily[];
+  setAdInsightsDaily: Dispatch<SetStateAction<AdInsightDaily[]>>;
   adAlerts: AdAlert[];
   currentUser: Profile;
   taskColumns: TaskColumn[];
@@ -10072,11 +10081,12 @@ function Metrics({
   }, [resolvedMetrics]);
   const activeChannelName = activeChannel === "all" ? "Geral" : (channelById.get(activeChannel)?.name ?? activeChannel);
 
-  // Carregamento inicial so traz visitors/tracking_sessions de hoje (ver
-  // loadAppData). Se o periodo selecionado pedir dado mais antigo que o ja
+  // Carregamento inicial so traz visitors/tracking_sessions/ad_insights_daily/
+  // tracking_touchpoints de hoje (ver loadAppData, mesma janela padrao pras
+  // quatro). Se o periodo selecionado pedir dado mais antigo que o ja
   // carregado, busca sob demanda so o intervalo que falta (entre o que tem e
-  // o que precisa) e mescla no estado — cada troca de filtro carrega so o
-  // pedaco novo, nao tudo de novo.
+  // o que precisa) pras quatro em paralelo e mescla no estado — cada troca de
+  // filtro carrega so o pedaco novo, nao tudo de novo.
   useEffect(() => {
     if (loadedSinceIso === null || !supabase) return;
     const neededStart = period === "all" ? null : periodRange?.start ?? null;
@@ -10084,15 +10094,23 @@ function Metrics({
     if (!needsOlderData) return;
     let cancelled = false;
     setLoadingOlderVisitors(true);
-    fetchVisitorsAndSessionsInRange(supabase, currentUser.organizationId, loadedSinceIso, neededStart?.toISOString())
-      .then(({ visitors: olderVisitors, trackingSessions: olderSessions }) => {
+    const beforeIso = loadedSinceIso;
+    const sinceIso = neededStart?.toISOString();
+    Promise.all([
+      fetchVisitorsAndSessionsInRange(supabase, currentUser.organizationId, beforeIso, sinceIso),
+      fetchAdInsightsInRange(supabase, currentUser.organizationId, beforeIso.slice(0, 10), sinceIso?.slice(0, 10)),
+      fetchTouchpointsInRange(supabase, currentUser.organizationId, beforeIso, sinceIso)
+    ])
+      .then(([{ visitors: olderVisitors, trackingSessions: olderSessions }, olderInsights, olderTouchpoints]) => {
         if (cancelled) return;
         setVisitors((prev) => mergeById(prev, olderVisitors));
         setTrackingSessions((prev) => mergeById(prev, olderSessions));
+        setAdInsightsDaily((prev) => mergeById(prev, olderInsights));
+        setTrackingTouchpoints((prev) => mergeById(prev, olderTouchpoints));
         setLoadedSinceIso(neededStart === null ? null : neededStart.toISOString());
       })
       .catch((err) => {
-        console.error("[Metrics] fetchVisitorsAndSessionsInRange", err);
+        console.error("[Metrics] fetchVisitorsAndSessionsInRange/fetchAdInsightsInRange/fetchTouchpointsInRange", err);
       })
       .finally(() => {
         if (!cancelled) setLoadingOlderVisitors(false);
@@ -10100,7 +10118,7 @@ function Metrics({
     return () => {
       cancelled = true;
     };
-  }, [period, periodRange, loadedSinceIso, currentUser.organizationId, setVisitors, setTrackingSessions]);
+  }, [period, periodRange, loadedSinceIso, currentUser.organizationId, setVisitors, setTrackingSessions, setAdInsightsDaily, setTrackingTouchpoints]);
 
   // Visitantes unicos + origem do periodo selecionado — busca agregada via
   // RPC (count_visitors_in_range/visitor_sources_in_range), independente do
@@ -10489,7 +10507,9 @@ function Metrics({
           adSets={adSets}
           ads={ads}
           adInsightsDaily={adInsightsDaily}
+          setAdInsightsDaily={setAdInsightsDaily}
           adAlerts={adAlerts}
+          organizationId={currentUser.organizationId}
         />
       ) : metricsMode === "links" ? (
         <OrigemSection
@@ -11037,14 +11057,18 @@ function AdsMetricsDashboard({
   adSets,
   ads,
   adInsightsDaily,
-  adAlerts
+  setAdInsightsDaily,
+  adAlerts,
+  organizationId
 }: {
   adAccounts: AdAccount[];
   adCampaigns: AdCampaign[];
   adSets: AdSet[];
   ads: Ad[];
   adInsightsDaily: AdInsightDaily[];
+  setAdInsightsDaily: Dispatch<SetStateAction<AdInsightDaily[]>>;
   adAlerts: AdAlert[];
+  organizationId: string;
 }) {
   const [period, setPeriod] = useState("1");
   const [customRange, setCustomRange] = useState<CustomDateRange>({ start: "", end: "" });
@@ -11052,9 +11076,45 @@ function AdsMetricsDashboard({
   const [accountFilter, setAccountFilter] = useState("all");
   const [campaignFilter, setCampaignFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
+  // Janela padrao (1 dia) ja carregada por loadAppData — este painel tem
+  // periodo proprio (independente do periodo global de Metricas), entao
+  // precisa da sua propria busca incremental quando o usuario escolhe um
+  // periodo mais antigo que a janela padrao.
+  const adInsightsWindowStartIso = useMemo(
+    () => new Date(Date.now() - VISITORS_DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+    []
+  );
+  const [adInsightsLoadedSinceIso, setAdInsightsLoadedSinceIso] = useState<string | null>(adInsightsWindowStartIso);
 
   const accountById = useMemo(() => new Map(adAccounts.map((account) => [account.id, account])), [adAccounts]);
   const campaignById = useMemo(() => new Map(adCampaigns.map((campaign) => [campaign.id, campaign])), [adCampaigns]);
+
+  useEffect(() => {
+    if (adInsightsLoadedSinceIso === null || !supabase) return;
+    let neededStartIso: string | null;
+    if (period === "all") {
+      neededStartIso = null;
+    } else if (period === "custom") {
+      neededStartIso = customRange.start ? `${customRange.start}T00:00:00` : null;
+    } else {
+      neededStartIso = new Date(Date.now() - Number(period) * 24 * 60 * 60 * 1000).toISOString();
+    }
+    const needsOlderData = neededStartIso === null || new Date(neededStartIso) < new Date(adInsightsLoadedSinceIso);
+    if (!needsOlderData) return;
+    let cancelled = false;
+    fetchAdInsightsInRange(supabase, organizationId, adInsightsLoadedSinceIso.slice(0, 10), neededStartIso?.slice(0, 10))
+      .then((older) => {
+        if (cancelled) return;
+        setAdInsightsDaily((prev) => mergeById(prev, older));
+        setAdInsightsLoadedSinceIso(neededStartIso);
+      })
+      .catch((err) => {
+        console.error("[AdsMetricsDashboard] fetchAdInsightsInRange", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period, customRange, adInsightsLoadedSinceIso, organizationId, setAdInsightsDaily]);
 
   const filteredInsights = useMemo(() => {
     const now = new Date();
@@ -19603,7 +19663,7 @@ function BancoDeDuvidas({
       const bank = questions
         .filter((item) => item.status === "aprovado" && item.answerText?.trim())
         .map((item) => ({ id: item.id, questionText: item.questionText, answerText: item.answerText }));
-      const res = await fetch("/api/gemini-chat", {
+      const res = await fetch("/api/ai-chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: q, bank }),
@@ -20291,6 +20351,43 @@ function ComentariosSection({
   const [statusFilter, setStatusFilter] = useState<CommentStatus | "todos">("novo");
   const [channelFilter, setChannelFilter] = useState<Comment["source"] | "todos">("todos");
   const [dateRange, setDateRange] = useState<"7d" | "30d" | "month" | "all">("all");
+  // loadAppData ja traz todo comentario "novo" (fila de moderacao, sem limite
+  // de data) + janela padrao de 1 dia pros demais status. statusFilter="novo"
+  // (default) ja esta completo sempre. So precisa buscar incrementalmente
+  // quando o usuario olha pra respondido/ignorado/todos alem dessa janela.
+  const commentsWindowStartIso = useMemo(
+    () => new Date(Date.now() - VISITORS_DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+    []
+  );
+  const [commentsLoadedSinceIso, setCommentsLoadedSinceIso] = useState<string | null>(commentsWindowStartIso);
+
+  useEffect(() => {
+    if (statusFilter === "novo" || commentsLoadedSinceIso === null || !supabase) return;
+    let neededStartIso: string | null;
+    if (dateRange === "all") {
+      neededStartIso = null;
+    } else if (dateRange === "month") {
+      const now = new Date();
+      neededStartIso = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    } else {
+      neededStartIso = new Date(Date.now() - (dateRange === "7d" ? 7 : 30) * 24 * 60 * 60 * 1000).toISOString();
+    }
+    const needsOlderData = neededStartIso === null || new Date(neededStartIso) < new Date(commentsLoadedSinceIso);
+    if (!needsOlderData) return;
+    let cancelled = false;
+    fetchCommentsInRange(supabase, currentUser.organizationId, commentsLoadedSinceIso, neededStartIso ?? undefined)
+      .then((older) => {
+        if (cancelled) return;
+        setComments(mergeById(comments, older));
+        setCommentsLoadedSinceIso(neededStartIso);
+      })
+      .catch((err) => {
+        console.error("[ComentariosSection] fetchCommentsInRange", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [statusFilter, dateRange, commentsLoadedSinceIso, currentUser.organizationId, comments, setComments]);
   const [sortOrder, setSortOrder] = useState<"recent" | "oldest" | "likes">("recent");
   const [search, setSearch] = useState("");
   const [showFilters, setShowFilters] = useState(false);
@@ -20499,7 +20596,7 @@ function ComentariosSection({
       return mergeImportedComment(existingCommentByKey.get(commentStableKey(incoming)), incoming);
     });
 
-    // Classificação híbrida: regras locais primeiro, Gemini só para os casos incertos
+    // Classificação híbrida: regras locais primeiro, IA local só para os casos incertos
     const classifyMap = new Map<string, { confidence: number; reason: string }>();
 
     // 1ª passagem — classificação local (sem custo, instantânea)
@@ -20527,14 +20624,14 @@ function ComentariosSection({
         c.classificationReason = "regra local: comentário normal";
         classifyMap.set(c.id, { confidence: 1, reason: c.classificationReason });
       } else {
-        uncertainForAi.push(c); // incerto → vai para Gemini
+        uncertainForAi.push(c); // incerto → vai para IA local
       }
     }
 
-    // 2ª passagem — Gemini só para os casos incertos
+    // 2ª passagem — IA local só para os casos incertos
     if (uncertainForAi.length > 0) {
       try {
-        const res = await fetch("/api/gemini-classify", {
+        const res = await fetch("/api/ai-classify", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ comments: uncertainForAi.map((c) => ({ id: c.id, text: c.text })) }),
@@ -20565,7 +20662,7 @@ function ComentariosSection({
       } catch {
         for (const c of uncertainForAi) {
           c.classificationStatus = "erro";
-          c.classificationReason = "Gemini falhou durante a classificação";
+          c.classificationReason = "IA local falhou durante a classificação";
         }
       }
     }

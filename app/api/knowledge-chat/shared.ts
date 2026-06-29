@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getTrayToken, searchTrayProduct } from "@/lib/tray-api";
+import { ollamaHeaders } from "@/lib/ollama-auth";
 
 export const CHAT_CONFIDENCE_THRESHOLD = 0.30; // threshold para busca por palavras-chave
 
@@ -17,7 +18,7 @@ export type AiResult = {
   matchedIds: string[];
   confidence: number;
   reason: string;
-  provider: "local" | "ollama" | "gemini";
+  provider: "local" | "ollama";
   model: string;
 };
 
@@ -158,7 +159,7 @@ export async function loadAnswerBank(ctx: AuthContext): Promise<BankItem[]> {
 function normalizeText(text: string): string {
   return text
     .toLowerCase()
-    .normalize("NFD").replace(/[̀-ͯ]/g, "") // remove acentos
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove acentos
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -194,7 +195,7 @@ function extractEntityTokens(text: string): Set<string> {
     const cleaned = word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
     if (cleaned.length < 3) return;
     const hasDigit = /\d/.test(cleaned);
-    const isCapitalized = index > 0 && /^[A-ZÀ-Ý]/.test(cleaned);
+    const isCapitalized = index > 0 && /^\p{Lu}/u.test(cleaned);
     if (hasDigit || isCapitalized) {
       const normalized = normalizeText(cleaned);
       if (normalized && !STOPWORDS.has(normalized) && !GENERIC_TITLE_WORDS.has(normalized)) {
@@ -315,9 +316,11 @@ function ensureContactPhone(answer: string): string {
 }
 
 async function callOllama(prompt: string): Promise<string> {
+  if (!OLLAMA_HOST) throw new Error("OLLAMA_HOST nao configurado.");
+
   const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: ollamaHeaders(),
     body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false, format: "json" })
   });
   if (!res.ok) {
@@ -328,17 +331,6 @@ async function callOllama(prompt: string): Promise<string> {
   return data.response?.trim() ?? "{}";
 }
 
-async function callGemini(prompt: string): Promise<string> {
-  if (!process.env.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY não configurada.");
-  const { GoogleGenerativeAI } = await import("@google/generative-ai");
-  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    generationConfig: { responseMimeType: "application/json" }
-  });
-  const result = await model.generateContent(prompt);
-  return result.response.text().trim();
-}
 
 const PRICE_INTENT_KEYWORDS = new Set(["preco", "precos", "valor", "valores", "quanto", "custa", "custo", "custam"]);
 
@@ -370,10 +362,10 @@ async function askAiWithBank(question: string, bank: BankItem[], context?: { vid
 
   const priceContext = ctx ? await buildTrayPriceContext(question, ctx, context).catch(() => undefined) : undefined;
   const prompt = buildAiPrompt(question, candidates, context, priceContext);
-  const provider = OLLAMA_HOST ? "ollama" : "gemini";
-  const model = OLLAMA_HOST ? OLLAMA_MODEL : "gemini-2.0-flash";
+  const provider = "ollama";
+  const model = OLLAMA_MODEL;
 
-  const text = OLLAMA_HOST ? await callOllama(prompt) : await callGemini(prompt);
+  const text = await callOllama(prompt);
   const parsed = JSON.parse(text) as { found?: boolean; answer?: string | null; matchedIds?: unknown };
 
   const found = parsed.found === true && typeof parsed.answer === "string" && parsed.answer.trim().length > 0;
@@ -451,7 +443,7 @@ Retorne "social" se o comentário é apenas uma reação, elogio, emoji ou comen
 Retorne SOMENTE o JSON: {"type": "pergunta"} ou {"type": "social"}`;
 
   try {
-    const raw = OLLAMA_HOST ? await callOllama(prompt) : await callGemini(prompt);
+    const raw = await callOllama(prompt);
     const parsed = JSON.parse(raw) as { type?: string };
     return parsed.type === "pergunta" ? "question" : "social";
   } catch {
@@ -470,9 +462,9 @@ Escreva uma resposta curta, simpática e natural para esse comentário (1 frase,
 
 Retorne SOMENTE o JSON: {"answer": "sua resposta aqui"}`;
 
-  const provider = OLLAMA_HOST ? "ollama" : "gemini";
-  const model = OLLAMA_HOST ? OLLAMA_MODEL : "gemini-2.0-flash";
-  const raw = OLLAMA_HOST ? await callOllama(prompt) : await callGemini(prompt);
+  const provider = "ollama";
+  const model = OLLAMA_MODEL;
+  const raw = await callOllama(prompt);
   const parsed = JSON.parse(raw) as { answer?: string };
   const answer = (parsed.answer ?? "").trim();
   if (!answer) throw new Error("IA não retornou resposta social.");
