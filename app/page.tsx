@@ -20090,9 +20090,9 @@ const commentSourceBadgeConfig: Record<Comment["source"], { label: string; bgCla
 function CommentChannelIcon({ source, className }: { source: Comment["source"]; className?: string }) {
   const config = commentSourceBadgeConfig[source] ?? commentSourceBadgeConfig.youtube;
   return (
-    <div className={`flex shrink-0 items-center justify-center rounded-full ${config.bgClassName} ${className ?? "h-7 w-7"}`}>
+    <span className={`flex shrink-0 items-center justify-center rounded-full ${config.bgClassName} ${className ?? "h-7 w-7"}`}>
       {config.icon}
-    </div>
+    </span>
   );
 }
 
